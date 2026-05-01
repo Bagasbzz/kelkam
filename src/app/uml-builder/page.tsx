@@ -157,8 +157,8 @@ export default function UMLBuilder() {
 
         const X_START = 500;
         const Y_START = 100;
-        const Y_SPACING = 150;
-        const X_SPACING = 300;
+        const Y_SPACING = 160;
+        const X_SPACING = 280;
         const visited = new Set<string>();
 
         const processNode = (nodeId: string, depth: number, xOffset: number) => {
@@ -182,16 +182,20 @@ export default function UMLBuilder() {
           if (node.type === 'decision') {
             const yesEdge = outgoing.find(e => e.label === 'YES' || e.direction === 'right' || e.toId === node.yes);
             const noEdge  = outgoing.find(e => e.label === 'NO'  || e.direction === 'left'  || e.toId === node.no);
-            const mainEdge = outgoing.find(e => e.direction === 'bottom');
-            if (yesEdge) processNode(yesEdge.toId, depth, xOffset + X_SPACING);
+            const mainEdge = outgoing.find(e => !yesEdge && !noEdge);
+            
+            if (yesEdge) processNode(yesEdge.toId, depth + 1, xOffset + X_SPACING);
             if (noEdge) processNode(noEdge.toId, depth + 1, xOffset - X_SPACING);
             if (mainEdge) processNode(mainEdge.toId, depth + 1, xOffset);
-            const remaining = outgoing.filter(e => e !== yesEdge && e !== noEdge && e !== mainEdge);
-            const remCount = remaining.length;
-            remaining.forEach((e, i) => {
-              const childXOffset = xOffset + (i - (remCount - 1) / 2) * X_SPACING;
+          } else if (node.type === 'fork') {
+            const outCount = outgoing.length;
+            outgoing.forEach((e, i) => {
+              const childXOffset = xOffset + (i - (outCount - 1) / 2) * X_SPACING;
               processNode(e.toId, depth + 1, childXOffset);
             });
+          } else if (node.type === 'join') {
+            const firstOut = outgoing[0];
+            if (firstOut) processNode(firstOut.toId, depth + 1, xOffset);
           } else {
             const outCount = outgoing.length;
             outgoing.forEach((e, i) => {

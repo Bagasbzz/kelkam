@@ -24,11 +24,7 @@ export default function Home() {
 
 
       <main className="flex-1 w-full max-w-5xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
-        {/* Hero Section */}
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-50 border border-blue-100 text-blue-600 font-bold text-sm mb-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-          <Sparkles className="w-4 h-4" />
-          <span>Cara Cerdas Mengerjakan Skripsi & Tugas</span>
-        </div>
+
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
           Tools <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Mahasiswa</span>
           <br/>Lebih Cepat

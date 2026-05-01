@@ -23,7 +23,7 @@ export async function POST(req: Request) {
       typeDesc = 'Usecase Diagram (dengan actor dan usecase)';
       nodeTypes = "'actor', 'usecase'";
     } else if (diagramType === 'activity') {
-      typeDesc = 'Activity Diagram (dengan node start, activity, decision, fork, join, end)';
+      typeDesc = 'Activity Diagram (UML standard, menggunakan: start, activity, decision, fork, join, end)';
       nodeTypes = "'start', 'activity', 'decision', 'fork', 'join', 'end'";
     }
 
@@ -66,7 +66,14 @@ Aturan Penting:
 3. Pastikan setiap 'toId' dan 'fromId' di edges merujuk pada 'id' yang benar di array nodes.
 4. Jika membuat 'decision', pastikan ada edge untuk 'YES' dan 'NO', serta isi property 'yes' dan 'no' pada node tersebut dengan ID tujuan.
 5. Buat logika flow yang komprehensif berdasarkan deskripsi pengguna.
-6. Pastikan urutan proses (khususnya untuk Flowchart dan Activity) dihubungkan dengan rapi sehingga alurnya mengalir lurus ke bawah secara sekuensial.`;
+6. Pastikan alur mengalir dominan secara VERTIKAL (ke bawah). Hindari membuat terlalu banyak cabang menyamping jika alur bisa dibuat berurutan ke bawah.
+7. Untuk Activity Diagram:
+   - Gunakan 'start' untuk Initial Node.
+   - Gunakan 'activity' untuk Action State (rounded rectangle).
+   - Gunakan 'decision' untuk Decision/Merge Node (diamond).
+   - Gunakan 'fork' (pencabangan sejalan) dan 'join' (penggabungan sejalan) jika ada proses paralel.
+   - Gunakan 'end' untuk Final Node.
+8. Berikan label yang jelas pada setiap edge, terutama pada cabang decision (YES/NO).`;
 
     const response = await openai.chat.completions.create({
       model: "llama-3.3-70b-versatile", // Updated to current recommended Groq model
