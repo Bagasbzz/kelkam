@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
+import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
 
 export const maxDuration = 60;
 
-const grokApiKey = process.env.GROK_API_KEY || "";
-const openai = new OpenAI({
-  apiKey: grokApiKey,
-  baseURL: "https://api.groq.com/openai/v1",
-});
-
 export async function POST(req: Request) {
   try {
+    assertAiConfigured();
+
     const { prompt, diagramType, existingNodes = [], existingEdges = [] } = await req.json();
 
     if (!prompt) {
@@ -27,13 +23,30 @@ export async function POST(req: Request) {
       nodeTypes = "'start', 'activity', 'decision', 'fork', 'join', 'end'";
     }
 
-    const systemPrompt = `Anda adalah ahli sistem informasi dan pemodelan UML.
+    const systemPrompt = `Anda adalah arsitek sistem informasi dan ahli pemodelan UML untuk aplikasi diagram berbasis SVG.
 Tugas Anda adalah mengubah deskripsi pengguna menjadi representasi JSON untuk ${typeDesc}.
-Jika pengguna memberikan data diagram yang sudah ada (existing nodes/edges), Anda HARUS menyertakan kembali data tersebut dan memodifikasinya (menambah, mengubah, atau menghapus) sesuai instruksi pengguna. Jangan mulai dari awal jika ada data yang sudah ada, kecuali diminta.
+Jika pengguna memberikan data diagram yang sudah ada (existing nodes/edges), Anda HARUS menyertakan kembali data tersebut dan memodifikasinya sesuai instruksi pengguna. Jangan mulai dari awal jika ada data yang sudah ada, kecuali diminta.
+
+Tujuan kualitas:
+- Hasil harus detail, logis, dan siap ditempel ke diagram skripsi/laporan.
+- Jangan membuat diagram terlalu pendek. Untuk proses nyata, gunakan 6-14 node jika prompt cukup.
+- Pecah aktivitas besar menjadi langkah operasional yang spesifik.
+- Jaga urutan sebab-akibat. Setiap decision harus punya cabang YES dan NO yang jelas.
+- Label node singkat, tetapi bermakna. Hindari label generik seperti "Proses" atau "Validasi" tanpa objek.
+- Jangan membuat node, edge, atau tipe diagram yang belum didukung web.
+
+Mode klarifikasi:
+Jika instruksi pengguna terlalu kabur sehingga diagram berisiko salah total, jangan menebak berlebihan. Balas JSON dengan:
+{
+  "needsClarification": true,
+  "clarification": "Satu pertanyaan singkat dan spesifik dalam Bahasa Indonesia"
+}
+Gunakan mode klarifikasi hanya jika informasi inti hilang, misalnya tidak jelas sistem apa, aktor utama, atau alur bisnis yang dimaksud.
 
 FORMAT OUTPUT HARUS BERUPA JSON VALID TANPA MARKDOWN CODE BLOCKS.
-Struktur JSON yang diharapkan:
+Jika sudah cukup untuk membuat diagram, struktur JSON yang diharapkan:
 {
+  "needsClarification": false,
   "nodes": [
     {
       "id": "String unik (misal: node-1)",
@@ -73,15 +86,18 @@ Aturan Penting:
    - Gunakan 'decision' untuk Decision/Merge Node (diamond).
    - Gunakan 'fork' (pencabangan sejalan) dan 'join' (penggabungan sejalan) jika ada proses paralel.
    - Gunakan 'end' untuk Final Node.
-8. Berikan label yang jelas pada setiap edge, terutama pada cabang decision (YES/NO).`;
+8. Berikan label yang jelas pada setiap edge, terutama pada cabang decision (YES/NO).
+9. Untuk Flowchart, gunakan node 'start', 'process', 'decision', dan 'end'. Jangan gunakan 'activity'.
+10. Untuk Use Case, actor harus memiliki side 'left' atau 'right', usecase harus berupa tujuan/fungsi sistem, dan edge menghubungkan actor ke usecase yang relevan.
+11. Untuk Activity Diagram, gunakan 'activity', bukan 'process', kecuali start/end/decision/fork/join.`;
 
-    const response = await openai.chat.completions.create({
-      model: "llama-3.3-70b-versatile", // Updated to current recommended Groq model
+    const response = await aiClient.chat.completions.create({
+      model: AI_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Data diagram saat ini:\nNodes: ${JSON.stringify(existingNodes)}\nEdges: ${JSON.stringify(existingEdges)}\n\nInstruksi pengguna: Buatkan atau modifikasi representasi JSON untuk diagram ini berdasarkan instruksi berikut: ${prompt}` }
       ],
-      temperature: 0.1,
+      temperature: 0.15,
       max_tokens: 4000,
     });
 
@@ -102,6 +118,14 @@ Aturan Penting:
     }
     
     const parsedData = JSON.parse(jsonString.trim());
+
+    if (parsedData.needsClarification) {
+      return NextResponse.json({
+        success: false,
+        needsClarification: true,
+        clarification: parsedData.clarification || "Bisa jelaskan alur atau aktor utamanya dulu?",
+      });
+    }
 
     return NextResponse.json({ 
       success: true, 

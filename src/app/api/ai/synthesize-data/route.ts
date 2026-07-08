@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
+import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
 
 export const maxDuration = 60;
 
-const grokApiKey = process.env.GROK_API_KEY || "";
-const openai = new OpenAI({
-  apiKey: grokApiKey,
-  baseURL: "https://api.groq.com/openai/v1",
-});
-
 export async function POST(req: Request) {
   try {
+    assertAiConfigured();
+
     const { topic, dataType, rawData, actionType, previousResult } = await req.json();
 
     if (!topic || (!rawData && !previousResult)) {
@@ -62,8 +58,8 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
 
     const inputData = previousResult ? `Draf Saat Ini:\n\n${previousResult}\n\nUbah draf di atas sesuai instruksi.` : `Data Mentah:\n\n${rawData}\n\nBuatkan draf laporannya sekarang.`;
 
-    const response = await openai.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+    const response = await aiClient.chat.completions.create({
+      model: AI_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: inputData }

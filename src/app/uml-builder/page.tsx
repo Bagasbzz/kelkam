@@ -37,6 +37,7 @@ export default function UMLBuilder() {
   const [toast, setToast] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
+  const [aiClarification, setAiClarification] = useState('');
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
 
@@ -82,8 +83,15 @@ export default function UMLBuilder() {
         body: JSON.stringify({ prompt: aiPrompt, diagramType, existingNodes: nodes, existingEdges: edges })
       });
       const data = await res.json();
+      if (data.needsClarification) {
+        setAiClarification(data.clarification || 'Tambahkan detail alur, aktor, dan kondisi penting yang harus masuk diagram.');
+        showToast('AI needs one clarification first.');
+        return;
+      }
+
       if (data.success && data.data) {
         saveToHistory();
+        setAiClarification('');
         const CHARS_PER_LINE = diagramType === 'usecase' ? 18 : 20;
         const LINE_HEIGHT = 24;
         const PADDING_V = 40;
@@ -1104,7 +1112,10 @@ export default function UMLBuilder() {
           Mau gampang? Pake AI aja 👉
         </div>
         <button
-          onClick={() => setIsAiModalOpen(true)}
+          onClick={() => {
+            setAiClarification('');
+            setIsAiModalOpen(true);
+          }}
           style={{
             width: '64px',
             height: '64px',
@@ -1172,6 +1183,22 @@ export default function UMLBuilder() {
               <p style={{ fontSize: '0.85rem', color: '#475569', marginBottom: '1rem', lineHeight: 1.5 }}>
                 Gambarkan alur proses yang Anda inginkan (contoh: "buatkan alur login", atau "tambahkan node lupa password di flow yang ada"), AI akan merancang atau memodifikasi diagram Anda secara otomatis.
               </p>
+
+              {aiClarification && (
+                <div style={{
+                  background: '#fff7ed',
+                  border: '1px solid #fed7aa',
+                  color: '#9a3412',
+                  borderRadius: '10px',
+                  padding: '12px',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  lineHeight: 1.5,
+                  marginBottom: '1rem'
+                }}>
+                  {aiClarification}
+                </div>
+              )}
               
               <textarea
                 value={aiPrompt}
