@@ -77,10 +77,16 @@ export default function UMLBuilder() {
     setIsGeneratingAI(true);
     setToast('AI is thinking...');
     try {
+      const existingSummary = nodes.length > 0 ? {
+        nodeCount: nodes.length,
+        edgeCount: edges.length,
+        nodes: nodes.slice(0, 12).map((n) => ({ id: n.id, type: n.type, text: n.text })),
+      } : null;
+
       const res = await fetch('/api/ai/generate-uml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiPrompt, diagramType, existingNodes: nodes, existingEdges: edges })
+        body: JSON.stringify({ prompt: aiPrompt, diagramType, existingSummary })
       });
       const data = await res.json();
       if (data.needsClarification) {
@@ -126,9 +132,9 @@ export default function UMLBuilder() {
             lines,
             width: finalWidth,
             height: nodeHeight,
-            x: 500,
-            y: 100,
-            pinned: false
+            x: typeof n.x === 'number' ? n.x : 500,
+            y: typeof n.y === 'number' ? n.y : 100,
+            pinned: Boolean(n.pinned)
           };
         });
         setNodes(generatedNodes);
@@ -144,7 +150,7 @@ export default function UMLBuilder() {
     } finally {
       setIsGeneratingAI(false);
     }
-  }, [aiPrompt, diagramType, saveToHistory, showToast]);
+  }, [aiPrompt, diagramType, edges.length, nodes, saveToHistory, showToast]);
 
   const handleNudge = useCallback((id: string, dx: number, dy: number) => {
     setNodes(prev => prev.map(n => n.id === id ? {
