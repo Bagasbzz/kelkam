@@ -91,6 +91,33 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             strokeWidth={borderWidth}
           />
         );
+      case 'lifeline': {
+        const centerX = curX + width / 2;
+        return (
+          <g>
+            <rect
+              x={curX}
+              y={curY}
+              width={width}
+              height={46}
+              rx={4}
+              fill="white"
+              stroke={borderColor}
+              strokeWidth={borderWidth}
+            />
+            <line
+              x1={centerX}
+              y1={curY + 46}
+              x2={centerX}
+              y2={curY + height}
+              stroke="#64748b"
+              strokeWidth={1.8}
+              strokeDasharray="8,6"
+            />
+            <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />
+          </g>
+        );
+      }
       case 'actor': {
         const centerX = curX + width / 2;
         const headR = 12;
@@ -143,6 +170,8 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
   let textY = startY;
   if (type === 'actor' || type === 'fork' || type === 'join') {
     textY = curY + height + 15;
+  } else if (type === 'lifeline') {
+    textY = curY + 23 - totalTextHeight / 2;
   }
 
   const resizeHandles = isSelected && type !== 'actor' ? [

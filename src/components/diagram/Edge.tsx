@@ -31,6 +31,53 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
   let labelX = 0;
   let labelY = 0;
 
+  if (fromNode.type === 'lifeline' && toNode.type === 'lifeline' && typeof edge.y === 'number') {
+    const fromCenterX = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
+    const toCenterX = toNode.x + (toNode.offsetX || 0) + toNode.width / 2;
+    const y = edge.y;
+    pathData = `M ${fromCenterX},${y} H ${toCenterX}`;
+    labelX = (fromCenterX + toCenterX) / 2;
+    labelY = y - 14;
+
+    const strokeColor = edge.dashed ? '#94a3b8' : '#334155';
+    const markerId = edge.dashed ? 'arrowhead-dashed' : 'arrowhead';
+
+    return (
+      <g className="edge-group">
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
+          </marker>
+        </defs>
+        <path d={pathData} fill="none" stroke="transparent" strokeWidth="14" />
+        <path
+          d={pathData}
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="2.2"
+          strokeDasharray={edge.dashed ? '6,5' : 'none'}
+          markerEnd={`url(#${markerId})`}
+        />
+        {edge.label && (
+          <g transform={`translate(${labelX}, ${labelY})`}>
+            <rect x={-90} y={-11} width={180} height={22} fill="white" rx={4} opacity={0.96}
+              stroke="#cbd5e1" strokeWidth="1" />
+            <text
+              textAnchor="middle"
+              dominantBaseline="middle"
+              style={{ fontSize: '11px', fontWeight: 800, fill: '#334155', fontFamily: 'Inter, sans-serif' }}
+            >
+              {edge.label}
+            </text>
+          </g>
+        )}
+      </g>
+    );
+  }
+
   if (isUseCase) {
     const fx = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
     const fy = fromNode.y + (fromNode.offsetY || 0) + fromNode.height / 2;
@@ -113,7 +160,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
         d={pathData}
         fill="none"
         stroke={strokeColor}
-        strokeWidth="1.8"
+        strokeWidth="2.2"
         strokeDasharray={edge.dashed ? '5,5' : 'none'}
         markerEnd={`url(#${markerId})`}
       />

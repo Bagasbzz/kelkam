@@ -115,7 +115,7 @@ export default function UMLBuilder() {
         saveToHistory();
         setAiClarification('');
         const returnedLanes = Array.isArray(data.data.lanes) ? data.data.lanes : Array.isArray(data.spec?.lanes) ? data.spec.lanes : [];
-        const CHARS_PER_LINE = diagramType === 'usecase' ? 18 : 20;
+        const CHARS_PER_LINE = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
         const LINE_HEIGHT = 24;
         const PADDING_V = 40;
         const MAX_WIDTH = 250;
@@ -130,6 +130,10 @@ export default function UMLBuilder() {
             nodeHeight = 80; finalWidth = 60;
           } else if (n.type === 'fork' || n.type === 'join') {
             nodeHeight = 10; finalWidth = 120;
+          } else if (n.type === 'lifeline') {
+            const longestLine = Math.max(...lines.map((l: string) => l.length), 1);
+            finalWidth = Math.max(130, Math.min(210, longestLine * 9 + 52));
+            nodeHeight = Math.max(420, typeof n.height === 'number' ? n.height : 420);
           } else if (n.type === 'usecase') {
             const longestLine = Math.max(...lines.map((l: string) => l.length), 1);
             finalWidth = Math.max(140, longestLine * 9 + 60);
@@ -219,7 +223,7 @@ export default function UMLBuilder() {
           if (node.type === 'decision') {
             const yesEdge = outgoing.find(e => e.label === 'YES' || e.direction === 'right' || e.toId === node.yes);
             const noEdge  = outgoing.find(e => e.label === 'NO'  || e.direction === 'left'  || e.toId === node.no);
-            const mainEdge = outgoing.find(e => !yesEdge && !noEdge);
+            const mainEdge = outgoing.find(e => e !== yesEdge && e !== noEdge);
             
             if (yesEdge) processNode(yesEdge.toId, depth + 1, xOffset + X_SPACING);
             if (noEdge) processNode(noEdge.toId, depth + 1, xOffset - X_SPACING);
@@ -311,7 +315,7 @@ export default function UMLBuilder() {
     try {
       const parsed = JSON.parse(prefill);
       if (parsed.prompt) setAiPrompt(parsed.prompt);
-      if (parsed.diagramType && ['flowchart', 'usecase', 'activity'].includes(parsed.diagramType)) {
+      if (parsed.diagramType && ['flowchart', 'usecase', 'activity', 'sequence'].includes(parsed.diagramType)) {
         setDiagramType(parsed.diagramType);
       }
       loadedPrefillRef.current = true;
@@ -438,6 +442,9 @@ export default function UMLBuilder() {
       setParentId('');
     } else if (diagramType === 'activity') {
       setNewNodeType('activity');
+      setParentId('');
+    } else if (diagramType === 'sequence') {
+      setNewNodeType('lifeline');
       setParentId('');
     }
   }, [diagramType]);
@@ -768,7 +775,7 @@ export default function UMLBuilder() {
     if (!newNodeText.trim()) return;
 
     const MAX_WIDTH = 250;
-    const CHARS_PER_LINE = diagramType === 'usecase' ? 18 : 20;
+    const CHARS_PER_LINE = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
     const LINE_HEIGHT = 24;
     const PADDING_V = 40;
 
@@ -780,6 +787,10 @@ export default function UMLBuilder() {
       nodeHeight = 80; finalWidth = 60;
     } else if (newNodeType === 'fork' || newNodeType === 'join') {
       nodeHeight = 10; finalWidth = 120;
+    } else if (newNodeType === 'lifeline') {
+      const longestLine = Math.max(...lines.map(l => l.length));
+      finalWidth = Math.max(130, Math.min(210, longestLine * 9 + 52));
+      nodeHeight = 520;
     } else if (newNodeType === 'usecase') {
       const longestLine = Math.max(...lines.map(l => l.length));
       finalWidth = Math.max(140, longestLine * 9 + 60);
@@ -798,7 +809,8 @@ export default function UMLBuilder() {
     const newNode: DiagramNode = {
       id: newNodeId, type: newNodeType, text: newNodeText, lines,
       x: 500, y: 100, width: finalWidth, height: nodeHeight,
-      side: diagramType === 'usecase' ? nodeSide : undefined
+      side: diagramType === 'usecase' ? nodeSide : undefined,
+      pinned: diagramType === 'sequence' ? true : undefined
     };
 
     const newNodes = [...nodes, newNode];
@@ -1059,21 +1071,28 @@ export default function UMLBuilder() {
                 <option value="flowchart">Flowchart</option>
                 <option value="usecase">Use Case Diagram</option>
                 <option value="activity">Activity Diagram</option>
+                <option value="sequence">Sequence Diagram</option>
                 <optgroup label="— Coming Soon —">
                   <option value="class" disabled>Class Diagram (soon)</option>
-                  <option value="sequence" disabled>Sequence Diagram (soon)</option>
                   <option value="state" disabled>State Diagram (soon)</option>
                 </optgroup>
               </select>
             </div>
 
             <div className={styles.inputGroup}>
-              <label>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Continue From' : 'Target Actor'}</label>
+              <label>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Continue From' : diagramType === 'sequence' ? 'Participant' : 'Target Actor'}</label>
               {(diagramType === 'flowchart' || diagramType === 'activity') ? (
                 <select value={parentId} onChange={(e) => { saveToHistory(); setParentId(e.target.value); }}>
                   <option value="">(Last Symbol)</option>
                   {nodes.map((n, i) => <option key={n.id} value={n.id}>[{i + 1}] {n.text.substring(0, 30)}</option>)}
                 </select>
+              ) : diagramType === 'sequence' ? (
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', padding: '5px', border: '1px solid #e2e8f0', borderRadius: '4px', background: 'white', minHeight: '36px' }}>
+                  {nodes.filter(n => n.type === 'lifeline').map((participant, i) => (
+                    <span key={participant.id} style={{ padding: '4px 8px', borderRadius: '999px', background: '#f1f5f9', color: '#475569', fontSize: '0.7rem', fontWeight: 800 }}>[{i + 1}] {participant.text}</span>
+                  ))}
+                  {nodes.filter(n => n.type === 'lifeline').length === 0 && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Belum ada participant</span>}
+                </div>
               ) : (
                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', padding: '5px', border: '1px solid #e2e8f0', borderRadius: '4px', background: 'white', minHeight: '36px' }}>
                   {nodes.filter(n => n.type === 'actor').map(actor => (
@@ -1109,6 +1128,10 @@ export default function UMLBuilder() {
                     <option value="join">Join (Merge)</option>
                     <option value="start">Initial Node (Circle)</option>
                     <option value="end">Final Node (Circle)</option>
+                  </>
+                ) : diagramType === 'sequence' ? (
+                  <>
+                    <option value="lifeline">Participant / Lifeline</option>
                   </>
                 ) : (
                   <>

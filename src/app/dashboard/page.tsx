@@ -348,7 +348,7 @@ function buildOutline(project: ReportProject): ReportSection[] {
   return [
     { id: "bab1", title: "BAB 1 Pendahuluan", purpose: "Latar belakang, rumusan masalah, tujuan, manfaat, batasan, dan metode singkat.", requiredDiagrams: [], status: "draft" },
     { id: "bab2", title: "BAB 2 Landasan Teori", purpose: "Teori, konsep sistem, teknologi, dan penelitian/rujukan terkait.", requiredDiagrams: [], status: "draft" },
-    { id: "bab3", title: "BAB 3 Analisis dan Perancangan", purpose: "Analisis kebutuhan, aktor, proses bisnis, rancangan UML, database, dan UI.", requiredDiagrams: hasSystemTopic ? ["usecase-main", "activity-login", "activity-manage", "flow-main"] : ["flow-main"], status: "draft" },
+    { id: "bab3", title: "BAB 3 Analisis dan Perancangan", purpose: "Analisis kebutuhan, aktor, proses bisnis, rancangan UML, database, dan UI.", requiredDiagrams: hasSystemTopic ? ["usecase-main", "activity-login", "sequence-login", "activity-manage", "flow-main"] : ["flow-main"], status: "draft" },
     { id: "bab4", title: "BAB 4 Implementasi dan Pengujian", purpose: "Implementasi fitur, hasil tampilan, pengujian, dan evaluasi.", requiredDiagrams: [], status: "draft" },
     { id: "bab5", title: "BAB 5 Penutup", purpose: "Kesimpulan, saran pengembangan, dan keterbatasan.", requiredDiagrams: [], status: "draft" },
     { id: "ref", title: "Daftar Pustaka", purpose: `Semua referensi dirapikan dengan gaya ${project.citationStyle}.`, requiredDiagrams: [], status: "draft" },
@@ -375,6 +375,14 @@ function buildDiagramPlan(project: ReportProject): DiagramPlan[] {
       type: "activity",
       purpose: "Menjelaskan alur login, validasi kredensial, role, sukses, dan gagal.",
       prompt: `Buat activity diagram login untuk ${topic} dengan swimlane Pengguna/Admin dan Sistem. Sertakan validasi kredensial, role admin/user, pesan gagal, dan dashboard sesuai role.`,
+      status: "planned",
+    },
+    {
+      id: "sequence-login",
+      title: "Sequence Diagram Login",
+      type: "sequence",
+      purpose: "Menjelaskan interaksi pengguna, halaman login, service autentikasi, dan database secara berurutan.",
+      prompt: `Buat sequence diagram login untuk ${topic}. Sertakan partisipan Pengguna, Halaman Login, Auth Service/Controller, dan Database. Alurnya: input kredensial, validasi, cek database, hasil validasi, buat sesi atau pesan gagal, lalu tampilkan dashboard sesuai role.`,
       status: "planned",
     },
     {
@@ -736,7 +744,7 @@ export default function ReportBuilderPage() {
 
     localStorage.setItem("uml-ai-prefill", JSON.stringify({
       prompt: diagram.prompt,
-      diagramType: ["flowchart", "activity", "usecase"].includes(diagram.type) ? diagram.type : "flowchart",
+      diagramType: ["flowchart", "activity", "usecase", "sequence"].includes(diagram.type) ? diagram.type : "flowchart",
       reportDiagramId: diagram.id,
       title: diagram.title,
       reportContext: {

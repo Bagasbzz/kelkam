@@ -1,4 +1,4 @@
-export type NodeType = 'start' | 'end' | 'process' | 'decision' | 'actor' | 'usecase' | 'system' | 'activity' | 'fork' | 'join';
+export type NodeType = 'start' | 'end' | 'process' | 'decision' | 'actor' | 'usecase' | 'system' | 'activity' | 'fork' | 'join' | 'lifeline';
 
 export interface DiagramNode {
   id: string;
@@ -28,6 +28,8 @@ export interface DiagramEdge {
   dashed?: boolean;
   // Direction hint: which side the edge exits from on the source node
   direction?: 'right' | 'left' | 'bottom' | 'straight';
+  // Sequence diagram message height
+  y?: number;
 }
 
 export type DiagramType = 'flowchart' | 'usecase' | 'class' | 'sequence' | 'activity' | 'state';
