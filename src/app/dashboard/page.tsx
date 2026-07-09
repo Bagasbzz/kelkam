@@ -30,6 +30,7 @@ type SectionStatus = "draft" | "review" | "approved";
 type DiagramStatus = "planned" | "draft" | "approved";
 type SourceKind = "brief" | "guide" | "example" | "reference" | "code" | "note";
 type WorkflowStage = "intake" | "planned" | "drafted";
+type BuilderStep = "setup" | "context" | "plan" | "execute" | "draft";
 
 interface ReportSection {
   id: string;
@@ -150,6 +151,22 @@ const defaultProject: ReportProject = {
 };
 
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+
+const builderSteps: { id: BuilderStep; label: string; helper: string }[] = [
+  { id: "setup", label: "Setup", helper: "Judul, jenis laporan, format" },
+  { id: "context", label: "Konteks", helper: "Pedoman, contoh, codingan" },
+  { id: "plan", label: "Rencana", helper: "Outline, tabel, referensi" },
+  { id: "execute", label: "Eksekusi", helper: "Buat dan approve UML" },
+  { id: "draft", label: "Draft", helper: "Generate laporan lengkap" },
+];
+
+const loadingSteps = [
+  "Membaca konteks proyek",
+  "Menyusun struktur laporan",
+  "Menyisipkan tabel dan placeholder gambar",
+  "Merangkai referensi dan daftar pustaka",
+  "Merapikan draft final",
+];
 
 const getProjectContext = (project: ReportProject) => `${project.title} ${project.topic} ${project.course} ${project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ")}`;
 
@@ -301,7 +318,10 @@ export default function ReportBuilderPage() {
   const router = useRouter();
   const [project, setProject] = useState<ReportProject>(defaultProject);
   const [sourceDraft, setSourceDraft] = useState<{ kind: SourceKind; title: string; content: string; fileName?: string }>({ kind: "brief", title: "", content: "" });
+  const [activeStep, setActiveStep] = useState<BuilderStep>("setup");
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [generationLabel, setGenerationLabel] = useState("Menunggu perintah");
   const [reportError, setReportError] = useState("");
 
   useEffect(() => {
@@ -318,6 +338,24 @@ export default function ReportBuilderPage() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
+
+  useEffect(() => {
+    if (!isGeneratingReport) return;
+
+    setGenerationProgress(8);
+    setGenerationLabel(loadingSteps[0]);
+
+    const timer = window.setInterval(() => {
+      setGenerationProgress((prev) => {
+        const next = Math.min(prev + Math.max(2, Math.round((95 - prev) / 8)), 95);
+        const labelIndex = Math.min(Math.floor(next / 20), loadingSteps.length - 1);
+        setGenerationLabel(loadingSteps[labelIndex]);
+        return next;
+      });
+    }, 900);
+
+    return () => window.clearInterval(timer);
+  }, [isGeneratingReport]);
 
   const checks = useMemo(() => qualityChecks(project), [project]);
   const approvedCount = project.diagrams.filter((d) => d.status === "approved" && d.diagramData).length;
@@ -340,6 +378,7 @@ export default function ReportBuilderPage() {
       next.workflowStage = "planned";
       return next;
     });
+    setActiveStep("plan");
   };
 
   const selectTitleIdea = (title: string) => {
@@ -348,6 +387,8 @@ export default function ReportBuilderPage() {
 
   const generateFullReport = async () => {
     setIsGeneratingReport(true);
+    setGenerationProgress(8);
+    setGenerationLabel(loadingSteps[0]);
     setReportError("");
 
     try {
@@ -365,10 +406,13 @@ export default function ReportBuilderPage() {
         workflowStage: "drafted",
         reportDraft: { content: data.data, generatedAt: new Date().toISOString() },
       }));
+      setGenerationProgress(100);
+      setGenerationLabel("Laporan selesai disusun");
+      setActiveStep("draft");
     } catch (error: any) {
       setReportError(error.message || "Gagal generate laporan lengkap.");
     } finally {
-      setIsGeneratingReport(false);
+      window.setTimeout(() => setIsGeneratingReport(false), 500);
     }
   };
 
@@ -461,61 +505,85 @@ export default function ReportBuilderPage() {
           </p>
         </section>
 
-        <section className="mb-6 grid md:grid-cols-3 gap-3">
-          {[
-            { step: "1", title: "Kumpulkan konteks", desc: "Brief tugas, pedoman PDF, contoh laporan, referensi, atau ringkasan codingan." },
-            { step: "2", title: "Brainstorm struktur", desc: "Sistem menyusun outline, asumsi, dan daftar gambar/UML yang dibutuhkan." },
-            { step: "3", title: "Eksekusi & approve", desc: "Buat diagram di UML Builder, cek hasilnya, lalu approve ke laporan." },
-          ].map((item) => (
-            <div key={item.step} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="mb-2 flex items-center gap-3">
-                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-xs font-black text-white">{item.step}</span>
-                <p className="font-black text-slate-900">{item.title}</p>
-              </div>
-              <p className="text-sm text-slate-500 leading-relaxed">{item.desc}</p>
-            </div>
-          ))}
-        </section>
-
         <section className="mb-6 rounded-2xl border border-blue-100 bg-blue-50/40 p-5 md:p-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <h2 className="text-xl font-black text-slate-900">Alur Terpadu Laporan</h2>
-              <p className="text-sm text-slate-600 mt-1">Satu workspace untuk brainstorming judul, format, gambar/UML, tabel, referensi jurnal, lalu generate draft laporan lengkap.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { key: "intake", label: "Intake" },
-                { key: "planned", label: "Rencana" },
-                { key: "drafted", label: "Draft" },
-              ].map((stage) => {
-                const active = project.workflowStage === stage.key;
-                return <span key={stage.key} className={`rounded-full px-3 py-1.5 text-xs font-black ${active ? "bg-blue-600 text-white" : "bg-white text-slate-400 border border-blue-100"}`}>{stage.label}</span>;
-              })}
+              <p className="text-sm text-slate-600 mt-1">Ikuti langkah dari kiri ke kanan. Panel di bawah cuma menampilkan langkah yang sedang aktif.</p>
             </div>
           </div>
 
-          <div className="mt-5 grid md:grid-cols-4 gap-3">
-            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Sumber</p><p className="text-2xl font-black text-slate-900">{project.sources.length}</p></div>
-            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Gambar/UML</p><p className="text-2xl font-black text-slate-900">{approvedCount}/{project.diagrams.length}</p></div>
-            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Tabel</p><p className="text-2xl font-black text-slate-900">{doneTableCount}/{project.tables.length}</p></div>
-            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Referensi</p><p className="text-2xl font-black text-slate-900">{savedReferenceCount}/{project.references.length}</p></div>
+          <div className="mt-5 grid gap-2 md:grid-cols-5">
+            {builderSteps.map((step, index) => {
+              const active = activeStep === step.id;
+              const done =
+                (step.id === "setup" && Boolean(project.title || project.topic)) ||
+                (step.id === "context" && project.sources.length > 0) ||
+                (step.id === "plan" && project.outline.length > 0) ||
+                (step.id === "execute" && (project.diagrams.length === 0 || approvedCount > 0)) ||
+                (step.id === "draft" && Boolean(project.reportDraft));
+              return (
+                <button
+                  key={step.id}
+                  onClick={() => setActiveStep(step.id)}
+                  className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-blue-500 bg-white shadow-sm" : "border-blue-100 bg-white/70 hover:border-blue-300"}`}
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${done ? "bg-green-500 text-white" : active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>{done ? "✓" : index + 1}</span>
+                    {active && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700">AKTIF</span>}
+                  </div>
+                  <p className="font-black text-slate-900">{step.label}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500 leading-snug">{step.helper}</p>
+                </button>
+              );
+            })}
           </div>
 
-          <div className="mt-5 flex flex-col sm:flex-row gap-3">
-            <button onClick={generatePlan} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 transition-colors">
-              <Lightbulb className="w-4 h-4" /> Brainstorm Semua Rencana
-            </button>
-            <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
-              <Sparkles className="w-4 h-4" /> {isGeneratingReport ? "Menyusun Laporan..." : "Generate Laporan Lengkap"}
-            </button>
+          <div className="mt-5 rounded-xl border border-blue-100 bg-white p-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400">Langkah sekarang</p>
+                <p className="text-lg font-black text-slate-900">{builderSteps.find((step) => step.id === activeStep)?.label}</p>
+                <p className="text-sm text-slate-500">{builderSteps.find((step) => step.id === activeStep)?.helper}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {activeStep === "setup" && <button onClick={() => setActiveStep("context")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut isi konteks</button>}
+                {activeStep === "context" && <button onClick={generatePlan} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white"><Lightbulb className="w-4 h-4" /> Brainstorm rencana</button>}
+                {activeStep === "plan" && <button onClick={() => setActiveStep("execute")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut eksekusi UML</button>}
+                {activeStep === "execute" && <button onClick={() => setActiveStep("draft")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut ke draft</button>}
+                {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> Generate laporan</button>}
+              </div>
+            </div>
+            {isGeneratingReport && (
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <div className="mb-2 flex items-center justify-between text-xs font-black text-blue-800">
+                  <span>{generationLabel}</span>
+                  <span>{generationProgress}%</span>
+                </div>
+                <div className="h-3 overflow-hidden rounded-full bg-white">
+                  <div className="h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 transition-all duration-700" style={{ width: `${generationProgress}%` }} />
+                </div>
+                <div className="mt-3 grid gap-2 md:grid-cols-5">
+                  {loadingSteps.map((label, index) => {
+                    const done = generationProgress >= (index + 1) * 20;
+                    return <div key={label} className={`rounded-lg px-2 py-2 text-[10px] font-black ${done ? "bg-white text-blue-700" : "bg-blue-100/60 text-blue-400"}`}>{label}</div>;
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Sumber</p><p className="text-lg font-black">{project.sources.length}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">UML</p><p className="text-lg font-black">{approvedCount}/{project.diagrams.length}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Tabel</p><p className="text-lg font-black">{doneTableCount}/{project.tables.length}</p></div>
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Referensi</p><p className="text-lg font-black">{savedReferenceCount}/{project.references.length}</p></div>
+            </div>
           </div>
           {reportError && <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{reportError}</p>}
         </section>
 
-        <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-6 items-start">
+        <div className="grid gap-6 items-start">
           <div className="space-y-6">
-            <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <section className={`${activeStep === "setup" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><ClipboardList className="w-5 h-5" /></div>
                 <div>
@@ -584,7 +652,7 @@ export default function ReportBuilderPage() {
               </button>
             </section>
 
-            <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <section className={`${activeStep === "context" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><FileCheck2 className="w-5 h-5" /></div>
                 <div>
@@ -656,7 +724,7 @@ export default function ReportBuilderPage() {
           </div>
 
           <aside className="space-y-6">
-            <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <section className={`${activeStep === "plan" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center"><CheckCircle2 className="w-5 h-5" /></div>
@@ -674,7 +742,7 @@ export default function ReportBuilderPage() {
               </div>
             </section>
 
-            <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <section className={`${activeStep === "execute" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><GitBranch className="w-5 h-5" /></div>
                 <div>
@@ -716,7 +784,7 @@ export default function ReportBuilderPage() {
           </aside>
         </div>
 
-        <section className="mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+        <section className={`${activeStep === "plan" ? "" : "hidden"} mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
           <div className="flex items-center justify-between gap-4 mb-5">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><FileText className="w-5 h-5" /></div>
@@ -752,7 +820,7 @@ export default function ReportBuilderPage() {
           )}
         </section>
 
-        <section className="mt-6 grid xl:grid-cols-2 gap-6">
+        <section className={`${activeStep === "plan" ? "" : "hidden"} mt-6 grid xl:grid-cols-2 gap-6`}>
           <div className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
             <div className="flex items-center gap-3 mb-5">
               <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center"><Table2 className="w-5 h-5" /></div>
@@ -815,7 +883,7 @@ export default function ReportBuilderPage() {
           </div>
         </section>
 
-        <section className="mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+        <section className={`${activeStep === "draft" ? "" : "hidden"} mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center"><Sparkles className="w-5 h-5" /></div>
@@ -841,7 +909,7 @@ export default function ReportBuilderPage() {
           )}
         </section>
 
-        <section className="mt-6 grid md:grid-cols-3 gap-4">
+        <section className="hidden mt-6 grid md:grid-cols-3 gap-4">
           <Link href="/ai-tools" className="rounded-2xl border border-slate-200 p-5 hover:border-blue-300 hover:shadow-sm transition-all">
             <PenLine className="w-6 h-6 text-blue-600 mb-3" />
             <p className="font-black text-slate-900">Benerin Bahasa & Sitasi</p>
