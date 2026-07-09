@@ -13,10 +13,12 @@ import {
   FileText,
   GitBranch,
   Lightbulb,
+  Search,
   PenLine,
   Plus,
   Save,
   Sparkles,
+  Table2,
   Trash2,
   Upload,
   Workflow,
@@ -27,6 +29,7 @@ type Formality = "ringkas" | "formal" | "akademik";
 type SectionStatus = "draft" | "review" | "approved";
 type DiagramStatus = "planned" | "draft" | "approved";
 type SourceKind = "brief" | "guide" | "example" | "reference" | "code" | "note";
+type WorkflowStage = "intake" | "planned" | "drafted";
 
 interface ReportSection {
   id: string;
@@ -60,6 +63,28 @@ interface SourceNote {
   fileName?: string;
 }
 
+interface TablePlan {
+  id: string;
+  title: string;
+  purpose: string;
+  columns: string[];
+  status: "planned" | "draft" | "done";
+}
+
+interface ReferenceItem {
+  id: string;
+  query: string;
+  purpose: string;
+  status: "planned" | "saved";
+  citation?: string;
+  url?: string;
+}
+
+interface ReportDraft {
+  content: string;
+  generatedAt: string;
+}
+
 interface ReportProject {
   projectType: ProjectType;
   title: string;
@@ -71,6 +96,11 @@ interface ReportProject {
   sources: SourceNote[];
   outline: ReportSection[];
   diagrams: DiagramPlan[];
+  tables: TablePlan[];
+  references: ReferenceItem[];
+  titleIdeas: string[];
+  workflowStage: WorkflowStage;
+  reportDraft?: ReportDraft;
 }
 
 const STORAGE_KEY = "report_builder_project_v1";
@@ -113,13 +143,70 @@ const defaultProject: ReportProject = {
   sources: [],
   outline: [],
   diagrams: [],
+  tables: [],
+  references: [],
+  titleIdeas: [],
+  workflowStage: "intake",
 };
 
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 
+const getProjectContext = (project: ReportProject) => `${project.title} ${project.topic} ${project.course} ${project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ")}`;
+
+const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(getProjectContext(project));
+
+function buildTitleIdeas(project: ReportProject): string[] {
+  const base = (project.title || project.topic || "Sistem Informasi").replace(/\s+/g, " ").trim();
+  const object = base.length > 90 ? `${base.slice(0, 90)}...` : base;
+  const context = project.course || projectTypeLabel[project.projectType];
+
+  if (isSystemProject(project)) {
+    return [
+      `Rancang Bangun ${object}`,
+      `Analisis dan Perancangan ${object} Berbasis Web`,
+      `Implementasi ${object} untuk Mendukung Proses ${context}`,
+    ];
+  }
+
+  return [
+    `Analisis ${object}`,
+    `Kajian ${object} pada Konteks ${context}`,
+    `Penyusunan Laporan ${object} Berdasarkan Data dan Referensi Terkait`,
+  ];
+}
+
+function buildTablePlan(project: ReportProject): TablePlan[] {
+  if (isSystemProject(project)) {
+    return [
+      { id: "tbl-actor", title: "Tabel Aktor dan Hak Akses", purpose: "Menjelaskan siapa saja pengguna sistem dan batas aksesnya.", columns: ["Aktor", "Hak Akses", "Keterangan"], status: "planned" },
+      { id: "tbl-functional", title: "Tabel Kebutuhan Fungsional", purpose: "Merinci fitur utama yang harus tersedia di aplikasi.", columns: ["Kode", "Kebutuhan", "Aktor", "Prioritas"], status: "planned" },
+      { id: "tbl-nonfunctional", title: "Tabel Kebutuhan Non-Fungsional", purpose: "Menjelaskan kebutuhan performa, keamanan, usability, dan kompatibilitas.", columns: ["Aspek", "Kebutuhan", "Ukuran Keberhasilan"], status: "planned" },
+      { id: "tbl-test", title: "Tabel Pengujian Black Box", purpose: "Menguji fitur berdasarkan input, proses, dan output yang diharapkan.", columns: ["Fitur", "Skenario", "Hasil Diharapkan", "Status"], status: "planned" },
+    ];
+  }
+
+  return [
+    { id: "tbl-source", title: "Tabel Ringkasan Sumber", purpose: "Merangkum referensi, pedoman, dan bahan utama yang dipakai.", columns: ["Sumber", "Isi Penting", "Pemakaian di Laporan"], status: "planned" },
+    { id: "tbl-analysis", title: "Tabel Hasil Analisis", purpose: "Menyusun temuan atau pembahasan utama secara ringkas.", columns: ["Aspek", "Temuan", "Interpretasi"], status: "planned" },
+  ];
+}
+
+function buildReferencePlan(project: ReportProject): ReferenceItem[] {
+  const topic = project.title || project.topic || "laporan akademik";
+  const systemExtra = isSystemProject(project) ? [
+    { query: `${topic} system design UML web application journal`, purpose: "Rujukan perancangan sistem dan UML." },
+    { query: `${topic} black box testing web application journal`, purpose: "Rujukan metode pengujian aplikasi." },
+  ] : [];
+
+  return [
+    { id: "ref-main", query: `${topic} jurnal penelitian terbaru`, purpose: "Referensi utama sesuai topik.", status: "planned" },
+    { id: "ref-method", query: `${topic} metode penelitian laporan akademik`, purpose: "Dasar metode dan penyusunan laporan.", status: "planned" },
+    ...systemExtra.map((item, index) => ({ id: `ref-system-${index + 1}`, ...item, status: "planned" as const })),
+  ];
+}
+
 function buildOutline(project: ReportProject): ReportSection[] {
-  const sourceContext = project.sources.map((source) => `${source.title} ${source.content}`).join(" ").slice(0, 2500);
-  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(`${project.title} ${project.topic} ${sourceContext}`);
+  const hasSystemTopic = isSystemProject(project);
 
   if (project.projectType === "practicum") {
     return [
@@ -155,8 +242,7 @@ function buildOutline(project: ReportProject): ReportSection[] {
 
 function buildDiagramPlan(project: ReportProject): DiagramPlan[] {
   const topic = project.title || project.topic || "Sistem";
-  const sourceContext = project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ").slice(0, 2500);
-  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(`${project.title} ${project.topic} ${sourceContext}`);
+  const hasSystemTopic = isSystemProject(project);
   if (!hasSystemTopic) return [];
 
   return [
@@ -199,10 +285,14 @@ function qualityChecks(project: ReportProject) {
   return [
     { label: "Judul/topik sudah jelas", ok: Boolean(project.title.trim() || project.topic.trim()) },
     { label: "Jenis laporan sudah dipilih", ok: Boolean(project.projectType) },
+    { label: "Brainstorm judul sudah dibuat", ok: project.titleIdeas.length > 0 },
     { label: "Outline sudah dibuat", ok: project.outline.length > 0 },
     { label: "Sumber/konteks proyek sudah masuk", ok: project.sources.length > 0 },
     { label: "Daftar gambar & UML sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
+    { label: "Tabel laporan sudah direncanakan", ok: project.tables.length > 0 },
+    { label: "Query jurnal/referensi sudah disiapkan", ok: project.references.length > 0 },
     { label: "Semua diagram penting sudah approved", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
+    { label: "Draft laporan lengkap sudah dibuat", ok: Boolean(project.reportDraft?.content) },
     { label: "Gaya sitasi dipilih", ok: Boolean(project.citationStyle) },
   ];
 }
@@ -211,6 +301,8 @@ export default function ReportBuilderPage() {
   const router = useRouter();
   const [project, setProject] = useState<ReportProject>(defaultProject);
   const [sourceDraft, setSourceDraft] = useState<{ kind: SourceKind; title: string; content: string; fileName?: string }>({ kind: "brief", title: "", content: "" });
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportError, setReportError] = useState("");
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -229,6 +321,8 @@ export default function ReportBuilderPage() {
 
   const checks = useMemo(() => qualityChecks(project), [project]);
   const approvedCount = project.diagrams.filter((d) => d.status === "approved" && d.diagramData).length;
+  const doneTableCount = project.tables.filter((table) => table.status === "done").length;
+  const savedReferenceCount = project.references.filter((reference) => reference.status === "saved").length;
 
   const updateProject = <K extends keyof ReportProject>(key: K, value: ReportProject[K]) => {
     setProject((prev) => ({ ...prev, [key]: value }));
@@ -237,10 +331,45 @@ export default function ReportBuilderPage() {
   const generatePlan = () => {
     setProject((prev) => {
       const next = { ...prev };
+      next.titleIdeas = buildTitleIdeas(prev);
+      next.title = prev.title || next.titleIdeas[0] || prev.title;
       next.outline = buildOutline(prev);
       next.diagrams = buildDiagramPlan(prev);
+      next.tables = buildTablePlan(prev);
+      next.references = buildReferencePlan(prev);
+      next.workflowStage = "planned";
       return next;
     });
+  };
+
+  const selectTitleIdea = (title: string) => {
+    setProject((prev) => ({ ...prev, title }));
+  };
+
+  const generateFullReport = async () => {
+    setIsGeneratingReport(true);
+    setReportError("");
+
+    try {
+      const response = await fetch("/api/ai/generate-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "Gagal generate laporan lengkap.");
+
+      setProject((prev) => ({
+        ...prev,
+        workflowStage: "drafted",
+        reportDraft: { content: data.data, generatedAt: new Date().toISOString() },
+      }));
+    } catch (error: any) {
+      setReportError(error.message || "Gagal generate laporan lengkap.");
+    } finally {
+      setIsGeneratingReport(false);
+    }
   };
 
   const addSource = () => {
@@ -348,6 +477,42 @@ export default function ReportBuilderPage() {
           ))}
         </section>
 
+        <section className="mb-6 rounded-2xl border border-blue-100 bg-blue-50/40 p-5 md:p-6">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <h2 className="text-xl font-black text-slate-900">Alur Terpadu Laporan</h2>
+              <p className="text-sm text-slate-600 mt-1">Satu workspace untuk brainstorming judul, format, gambar/UML, tabel, referensi jurnal, lalu generate draft laporan lengkap.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: "intake", label: "Intake" },
+                { key: "planned", label: "Rencana" },
+                { key: "drafted", label: "Draft" },
+              ].map((stage) => {
+                const active = project.workflowStage === stage.key;
+                return <span key={stage.key} className={`rounded-full px-3 py-1.5 text-xs font-black ${active ? "bg-blue-600 text-white" : "bg-white text-slate-400 border border-blue-100"}`}>{stage.label}</span>;
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 grid md:grid-cols-4 gap-3">
+            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Sumber</p><p className="text-2xl font-black text-slate-900">{project.sources.length}</p></div>
+            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Gambar/UML</p><p className="text-2xl font-black text-slate-900">{approvedCount}/{project.diagrams.length}</p></div>
+            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Tabel</p><p className="text-2xl font-black text-slate-900">{doneTableCount}/{project.tables.length}</p></div>
+            <div className="rounded-xl bg-white p-4 border border-blue-100"><p className="text-xs font-black uppercase text-slate-400">Referensi</p><p className="text-2xl font-black text-slate-900">{savedReferenceCount}/{project.references.length}</p></div>
+          </div>
+
+          <div className="mt-5 flex flex-col sm:flex-row gap-3">
+            <button onClick={generatePlan} className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 transition-colors">
+              <Lightbulb className="w-4 h-4" /> Brainstorm Semua Rencana
+            </button>
+            <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40 transition-colors">
+              <Sparkles className="w-4 h-4" /> {isGeneratingReport ? "Menyusun Laporan..." : "Generate Laporan Lengkap"}
+            </button>
+          </div>
+          {reportError && <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{reportError}</p>}
+        </section>
+
         <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-6 items-start">
           <div className="space-y-6">
             <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
@@ -401,8 +566,21 @@ export default function ReportBuilderPage() {
                 </label>
               </div>
 
+              {project.titleIdeas.length > 0 && (
+                <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                  <p className="mb-3 text-xs font-black uppercase tracking-widest text-blue-700">Ide judul hasil brainstorming</p>
+                  <div className="space-y-2">
+                    {project.titleIdeas.map((title) => (
+                      <button key={title} onClick={() => selectTitleIdea(title)} className={`w-full rounded-xl border px-3 py-2 text-left text-sm font-bold transition-colors ${project.title === title ? "border-blue-500 bg-white text-blue-700" : "border-blue-100 bg-white/70 text-slate-600 hover:border-blue-300"}`}>
+                        {title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <button onClick={generatePlan} className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 transition-colors">
-                <Lightbulb className="w-4 h-4" /> Brainstorm Outline & Daftar Gambar/UML
+                <Lightbulb className="w-4 h-4" /> Brainstorm Ulang Semua Rencana
               </button>
             </section>
 
@@ -570,6 +748,95 @@ export default function ReportBuilderPage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+        </section>
+
+        <section className="mt-6 grid xl:grid-cols-2 gap-6">
+          <div className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center"><Table2 className="w-5 h-5" /></div>
+              <div>
+                <h2 className="text-xl font-black">Rencana Tabel</h2>
+                <p className="text-sm text-slate-500">Tabel yang perlu dibuat otomatis masuk konteks draft laporan.</p>
+              </div>
+            </div>
+            {project.tables.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada rencana tabel. Klik Brainstorm Semua Rencana dulu.</div>
+            ) : (
+              <div className="space-y-3">
+                {project.tables.map((table) => (
+                  <div key={table.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-slate-900">{table.title}</p>
+                        <p className="text-xs text-slate-500 mt-1">{table.purpose}</p>
+                      </div>
+                      <select value={table.status} onChange={(e) => setProject((prev) => ({ ...prev, tables: prev.tables.map((item) => item.id === table.id ? { ...item, status: e.target.value as TablePlan["status"] } : item) }))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
+                        <option value="planned">planned</option>
+                        <option value="draft">draft</option>
+                        <option value="done">done</option>
+                      </select>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {table.columns.map((column) => <span key={column} className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-cyan-700 border border-cyan-100">{column}</span>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center"><Search className="w-5 h-5" /></div>
+              <div>
+                <h2 className="text-xl font-black">Pencarian Jurnal & Referensi</h2>
+                <p className="text-sm text-slate-500">Query disiapkan dulu, lalu hasil yang cocok bisa disimpan sebagai konteks.</p>
+              </div>
+            </div>
+            {project.references.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada query jurnal. Klik Brainstorm Semua Rencana dulu.</div>
+            ) : (
+              <div className="space-y-3">
+                {project.references.map((reference) => (
+                  <div key={reference.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <p className="font-black text-slate-900">{reference.query}</p>
+                    <p className="mt-1 text-xs text-slate-500">{reference.purpose}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <a href={`https://scholar.google.com/scholar?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-black text-white hover:bg-purple-700"><Search className="w-3.5 h-3.5" /> Google Scholar</a>
+                      <a href={`https://www.semanticscholar.org/search?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-xs font-black text-purple-700 border border-purple-100 hover:border-purple-300"><Search className="w-3.5 h-3.5" /> Semantic Scholar</a>
+                      <button onClick={() => setProject((prev) => ({ ...prev, references: prev.references.map((item) => item.id === reference.id ? { ...item, status: item.status === "saved" ? "planned" : "saved" } : item) }))} className={`rounded-lg px-3 py-2 text-xs font-black border ${reference.status === "saved" ? "bg-green-50 text-green-700 border-green-100" : "bg-white text-slate-500 border-slate-200"}`}>{reference.status === "saved" ? "Tersimpan" : "Tandai cocok"}</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center"><Sparkles className="w-5 h-5" /></div>
+              <div>
+                <h2 className="text-xl font-black">Draft Laporan Lengkap</h2>
+                <p className="text-sm text-slate-500">Hasil akhir disusun dari konteks, outline, tabel, daftar UML, dan referensi yang sudah disimpan.</p>
+              </div>
+            </div>
+            <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40">
+              <Sparkles className="w-4 h-4" /> {project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
+            </button>
+          </div>
+          {!project.reportDraft ? (
+            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Belum ada draft lengkap. Jalankan brainstorm, lengkapi konteks penting, lalu klik Generate Laporan Lengkap.</div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-xs font-black uppercase tracking-widest text-slate-400">Generated {new Date(project.reportDraft.generatedAt).toLocaleString("id-ID")}</p>
+                <button onClick={() => navigator.clipboard.writeText(project.reportDraft?.content || "")} className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 border border-slate-200 hover:border-blue-300">Copy Draft</button>
+              </div>
+              <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg bg-white p-4 text-sm leading-relaxed text-slate-700 border border-slate-100">{project.reportDraft.content}</pre>
             </div>
           )}
         </section>
