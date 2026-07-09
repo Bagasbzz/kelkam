@@ -11,7 +11,6 @@ import {
   Trophy,
   LayoutDashboard
 } from "lucide-react";
-import Navbar from "@/components/Navbar";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
@@ -38,12 +37,12 @@ interface Revision {
 }
 
 const INITIAL_CHAPTERS: ChapterProgress[] = [
-  { id: "1", name: "Judul Disetujui", status: "Belum mulai" },
-  { id: "2", name: "BAB 1 Pendahuluan", status: "Belum mulai" },
-  { id: "3", name: "BAB 2 Tinjauan Pustaka", status: "Belum mulai" },
-  { id: "4", name: "BAB 3 Metodologi", status: "Belum mulai" },
-  { id: "5", name: "BAB 4 Hasil dan Pembahasan", status: "Belum mulai" },
-  { id: "6", name: "BAB 5 Kesimpulan", status: "Belum mulai" },
+  { id: "1", name: "Judul / Topik Disetujui", status: "Belum mulai" },
+  { id: "2", name: "Pendahuluan", status: "Belum mulai" },
+  { id: "3", name: "Dasar Teori / Referensi", status: "Belum mulai" },
+  { id: "4", name: "Metode / Rancangan", status: "Belum mulai" },
+  { id: "5", name: "Hasil dan Pembahasan", status: "Belum mulai" },
+  { id: "6", name: "Kesimpulan / Finalisasi", status: "Belum mulai" },
 ];
 
 export default function TrackerPage() {
@@ -110,18 +109,17 @@ export default function TrackerPage() {
   const progressPercentage = Math.round((completedChaptersCount / chapters.length) * 100);
 
   const getMotivation = () => {
-    if (progressPercentage === 100) return "Luar biasa! Skripsi Anda telah selesai. Siap Sidang!";
+    if (progressPercentage === 100) return "Luar biasa! Dokumen Anda sudah siap difinalkan.";
     if (progressPercentage >= 80) return "Hampir sampai! Selesaikan bagian terakhir dengan semangat.";
-    if (progressPercentage >= 50) return "Bagus! Anda sudah melewati setengah perjalanan skripsi.";
-    if (progressPercentage > 0) return "Awal yang baik! Teruslah konsisten mengerjakan bab demi bab.";
-    return "Mulai langkah pertama Anda hari ini. Semangat menabung data!";
+    if (progressPercentage >= 50) return "Bagus! Anda sudah melewati setengah pekerjaan utama.";
+    if (progressPercentage > 0) return "Awal yang baik! Terus konsisten menyelesaikan bagian demi bagian.";
+    return "Mulai langkah pertama hari ini. Pecah tugas besar jadi checklist kecil.";
   };
 
   if (!isMounted) return null;
 
   return (
     <div className="min-h-screen bg-white text-slate-800 font-sans">
-      <Navbar />
       <div className="max-w-6xl mx-auto px-6 py-24">
         {/* Header */}
         <div className="mb-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -153,7 +151,7 @@ export default function TrackerPage() {
               {getMotivation()}
             </h2>
             <p className="text-slate-500 font-medium text-sm md:text-base leading-relaxed">
-              Setiap kata yang Anda tulis hari ini membawa Anda lebih dekat ke meja hijau. Jangan menyerah!
+              Setiap bagian yang diselesaikan hari ini membuat laporan atau proyek Anda makin dekat ke final.
             </p>
           </div>
           
@@ -175,7 +173,7 @@ export default function TrackerPage() {
               <div className="p-8 border-b border-slate-100 flex items-center justify-between">
                 <h3 className="font-bold flex items-center gap-2 uppercase text-sm tracking-widest text-slate-700">
                   <BarChart3 className="w-5 h-5 text-blue-500" />
-                  Alur Skripsi
+                  Alur Dokumen
                 </h3>
               </div>
               <div className="p-8 space-y-6">

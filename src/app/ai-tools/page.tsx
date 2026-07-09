@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Loader2, FileSearch, Type, Copy, Check, RotateCcw } from "lucide-react";
-import Navbar from "@/components/Navbar";
+import { Sparkles, FileSearch, Type, Copy, Check } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Textarea from "@/components/ui/Textarea";
@@ -54,12 +53,10 @@ export default function AIToolsPage() {
     <div className="min-h-screen bg-white text-gray-900 font-sans p-6">
       <div className="max-w-5xl mx-auto py-12">
         
-        <Navbar />
-
         <div className="text-center mb-16">
           <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">AI Academic Tools</h1>
           <p className="text-lg text-gray-500 max-w-lg mx-auto leading-relaxed">
-            Asisten cerdas untuk mengecek struktur dan memperbaiki gaya bahasa skripsi Anda.
+            Asisten cerdas untuk mengecek struktur dan memperbaiki gaya bahasa laporan, makalah, proposal, atau skripsi Anda.
           </p>
         </div>
 
@@ -107,7 +104,9 @@ export default function AIToolsPage() {
                   variant={activeTab === "checker" ? "primary" : "secondary"}
                   isLoading={isLoading}
                   icon={Sparkles}
-                />
+                >
+                  {activeTab === "checker" ? "Cek Struktur" : "Rewrite"}
+                </Button>
               </div>
             </Card>
           </div>

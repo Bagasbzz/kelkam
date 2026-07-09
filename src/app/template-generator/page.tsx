@@ -1,10 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, Loader2, User, BookOpen, CheckCircle2, ArrowRight, Settings2, ShieldCheck, Layout } from "lucide-react";
+import { Sparkles, User, CheckCircle2, ArrowRight, Settings2, ShieldCheck, Layout } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import Navbar from "@/components/Navbar";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
@@ -105,12 +104,10 @@ export default function SmartTemplatePage() {
     <div className="min-h-screen bg-white text-gray-900 font-sans p-6">
       <div className="max-w-3xl mx-auto py-12">
         
-        <Navbar />
-
         <div className="text-center mb-16">
           <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">Template Generator</h1>
           <p className="text-lg text-gray-500 max-w-lg mx-auto leading-relaxed">
-            Hasilkan struktur skripsi lengkap yang sudah terformat rapi sesuai aturan akademik.
+            Hasilkan struktur dokumen akademik yang rapi untuk skripsi, laporan proyek, capstone, atau tugas kuliah formal.
           </p>
         </div>
 
@@ -158,7 +155,7 @@ export default function SmartTemplatePage() {
                 Parameter Penelitian
               </h3>
               <div className="space-y-6">
-                <Textarea label="Judul Skripsi" name="title" value={formData.title} onChange={handleChange} placeholder="Tulis judul lengkap Anda di sini..." className="h-24" />
+                <Textarea label="Judul Dokumen" name="title" value={formData.title} onChange={handleChange} placeholder="Tulis judul lengkap Anda di sini..." className="h-24" />
                 <div className="grid md:grid-cols-2 gap-6">
                   <Input label="Metode" name="method" value={formData.method} onChange={handleChange} placeholder="Kuantitatif / Kualitatif" />
                   <Input label="Objek" name="object" value={formData.object} onChange={handleChange} placeholder="UMKM / Startup / Sekolah" />
@@ -233,7 +230,7 @@ export default function SmartTemplatePage() {
                   className="flex-1"
                   icon={Sparkles}
                 >
-                  BUKA EDITOR SKRIPSI
+                  BUKA EDITOR DOKUMEN
                 </Button>
               </div>
             </div>

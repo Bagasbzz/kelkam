@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GraduationCap, Workflow, BookOpen, FileText } from "lucide-react";
+import { GraduationCap, Workflow, BookOpen, FileText, LayoutDashboard, LayoutTemplate, Sparkles, BarChart3 } from "lucide-react";
 import { useState, useEffect } from "react";
 
 export default function Navbar() {
@@ -19,9 +19,13 @@ export default function Navbar() {
   }, []);
 
   const navLinks = [
-    { href: "/uml-builder", label: "UML Builder", icon: Workflow },
-    { href: "/data-synthesizer", label: "Auto-Bab 4", icon: BookOpen },
-    { href: "/dashboard", label: "Skripsi Build", icon: FileText },
+    { href: "/dashboard", label: "Laporan", icon: LayoutDashboard },
+    { href: "/uml-builder", label: "UML", icon: Workflow },
+    { href: "/data-synthesizer", label: "Data", icon: BookOpen },
+    { href: "/ai-tools", label: "AI Tools", icon: Sparkles },
+    { href: "/fix-format", label: "Format", icon: FileText },
+    { href: "/template-generator", label: "Editor", icon: LayoutTemplate },
+    { href: "/tracker", label: "Tracker", icon: BarChart3 },
   ];
 
   return (
@@ -44,7 +48,7 @@ export default function Navbar() {
           </Link>
 
           {/* Desktop Nav */}
-          <div className="hidden md:flex items-center gap-1 bg-slate-100/50 p-1.5 rounded-2xl border border-slate-200/50 backdrop-blur-sm">
+          <div className="hidden xl:flex items-center gap-1 bg-slate-100/50 p-1.5 rounded-2xl border border-slate-200/50 backdrop-blur-sm">
             {navLinks.map((link) => {
               const isActive = pathname.startsWith(link.href);
               const Icon = link.icon;
@@ -52,7 +56,7 @@ export default function Navbar() {
                 <Link
                   key={link.href}
                   href={link.href}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
                     isActive
                       ? "bg-white text-blue-600 shadow-sm border border-slate-200/50"
                       : "text-slate-500 hover:text-slate-900 hover:bg-slate-200/50"
@@ -65,7 +69,7 @@ export default function Navbar() {
             })}
           </div>
 
-          <div className="hidden md:flex items-center">
+          <div className="hidden xl:flex items-center">
              <a
               href="https://bazzcreate.vercel.app"
               target="_blank"
@@ -79,7 +83,7 @@ export default function Navbar() {
 
           {/* Mobile Menu Toggle */}
           <button
-            className="md:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            className="xl:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
           >
             <div className="w-6 flex flex-col gap-1.5">
@@ -93,7 +97,7 @@ export default function Navbar() {
 
       {/* Mobile Menu Dropdown */}
       <div 
-        className={`fixed inset-0 z-[90] bg-slate-900/20 backdrop-blur-sm transition-opacity md:hidden ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 z-[90] bg-slate-900/20 backdrop-blur-sm transition-opacity xl:hidden ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={() => setMobileMenuOpen(false)}
       >
         <div 

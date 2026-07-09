@@ -13,8 +13,11 @@ interface DiagramMeta {
   reportDiagramId?: string;
   reportContext?: {
     reportTitle?: string;
+    topic?: string;
     projectType?: string;
+    course?: string;
     citationStyle?: string;
+    sources?: { title: string; preview: string }[];
   };
 }
 

@@ -282,7 +282,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
 
         <rect width="5000" height="5000" fill="url(#grid)" />
 
-        <g transform={`scale(${scale})`}>
+        <g>
           {visibleLanes.length > 0 && (
             <g className="swimlanes" style={{ pointerEvents: 'none' }}>
               {visibleLanes.map((lane, index) => {

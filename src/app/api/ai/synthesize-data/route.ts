@@ -13,7 +13,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Data tidak lengkap." }, { status: 400 });
     }
 
-    let systemPrompt = `Anda adalah asisten peneliti dan penulis akademik tingkat lanjut. Tugas Anda adalah membantu mahasiswa menyusun draf bagian "Hasil dan Pembahasan" (Bab 4) untuk skripsi/laporan mereka berdasarkan data mentah yang diinputkan. Gunakan bahasa Indonesia baku, formal, dan akademis.
+    let systemPrompt = `Anda adalah asisten peneliti dan penulis akademik tingkat lanjut. Tugas Anda adalah membantu mahasiswa menyusun draf bagian hasil, analisis, atau pembahasan untuk laporan, makalah, capstone, proposal, atau skripsi berdasarkan data mentah yang diinputkan. Gunakan bahasa Indonesia baku, formal, dan akademis.
 
 Aturan Format Output:
 1. Gunakan format Markdown standar. Gunakan ### untuk sub-judul, **tebal** untuk penekanan, dan - untuk daftar/bullet points.

@@ -1,8 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import Link from 'next/link';
-import { ArrowLeft, BookOpen, CheckCircle2, ClipboardCopy, Loader2, Sparkles, MessageSquare, ListTree, FileText } from 'lucide-react';
+import { BookOpen, CheckCircle2, ClipboardCopy, Loader2, Sparkles, MessageSquare, ListTree, FileText } from 'lucide-react';
 import styles from './synthesizer.module.css';
 
 type DataType = 'kuesioner' | 'wawancara' | 'observasi';
@@ -133,11 +132,10 @@ export default function DataSynthesizerPage() {
 
   return (
     <div className={styles.pageContainer}>
-
       <main className={styles.mainContent}>
         <div className={styles.hero}>
-          <h1>Auto-Bab 4 Synthesizer</h1>
-          <p>Olah data mentah kuesioner, transkrip wawancara, atau catatan observasi menjadi draf narasi akademis yang siap pakai.</p>
+          <h1>Data Synthesizer</h1>
+          <p>Olah data mentah kuesioner, transkrip wawancara, atau catatan observasi menjadi draf narasi laporan yang siap dipakai.</p>
         </div>
 
         <div className={styles.card}>

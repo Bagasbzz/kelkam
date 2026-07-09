@@ -1,8 +1,7 @@
 "use client";
 
 import FileUpload from "@/components/FileUpload";
-import { Info, Sparkles, ArrowRight, FileText, Search, AlertCircle } from "lucide-react";
-import Navbar from "@/components/Navbar";
+import { Sparkles, ArrowRight, FileText, Search, AlertCircle } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { useRouter } from "next/navigation";
@@ -87,17 +86,15 @@ export default function FixFormatPage() {
   return (
     <div className="min-h-screen bg-white text-gray-900 font-sans">
       
-      <Navbar />
-
       <main className="w-full max-w-4xl mx-auto px-6 py-12 flex flex-col items-center">
         
         <div className="text-center mb-10 md:mb-16 animate-in fade-in slide-in-from-top duration-700">
           <div className="inline-flex p-3 bg-blue-100 text-blue-600 rounded-2xl mb-6">
             <FileText className="w-7 h-7 md:w-8 md:h-8" />
           </div>
-          <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4 leading-tight">Import Skripsi</h1>
+          <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4 leading-tight">Import Dokumen</h1>
           <p className="text-gray-500 max-w-xl mx-auto leading-relaxed text-sm md:text-base px-2">
-            Upload file .docx Anda. Sistem akan mengekstrak struktur BAB secara otomatis dan membukanya di editor terpadu.
+            Upload file .docx Anda. Sistem akan mengekstrak struktur bagian secara otomatis dan membukanya di editor terpadu.
           </p>
         </div>
 

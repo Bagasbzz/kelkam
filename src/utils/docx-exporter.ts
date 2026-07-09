@@ -115,5 +115,5 @@ export async function exportToDocx(content: any, settings: ThesisSettings) {
   });
 
   const blob = await Packer.toBlob(doc);
-  saveAs(blob, `skripsi-${new Date().getTime()}.docx`);
+  saveAs(blob, `dokumen-akademik-${new Date().getTime()}.docx`);
 }

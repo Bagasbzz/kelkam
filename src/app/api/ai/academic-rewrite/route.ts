@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendToGrok } from "@/lib/ai/grokClient";
+import { sendToAI } from "@/lib/ai/client";
 
 export async function POST(req: Request) {
   try {
@@ -23,7 +23,7 @@ Teks yang akan diperbaiki:
 
 Tuliskan hasilnya langsung dalam bahasa akademik yang formal.`;
     
-    const aiResponse = await sendToGrok(prompt);
+    const aiResponse = await sendToAI(prompt, "Anda adalah editor akademik keluhkampus. Jawab langsung dengan hasil revisi bahasa Indonesia yang formal, jelas, dan tetap mempertahankan makna asli.");
 
     return NextResponse.json({ 
       success: true, 

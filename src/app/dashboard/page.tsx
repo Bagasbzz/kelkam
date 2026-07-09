@@ -17,7 +17,6 @@ import {
   Sparkles,
   Workflow,
 } from "lucide-react";
-import Navbar from "@/components/Navbar";
 
 type ProjectType = "capstone" | "course" | "practicum" | "paper" | "formal" | "thesis";
 type Formality = "ringkas" | "formal" | "akademik";
@@ -263,8 +262,6 @@ export default function ReportBuilderPage() {
 
   return (
     <div className="min-h-screen bg-white text-slate-900 font-sans">
-      <Navbar />
-
       <main className="max-w-7xl mx-auto px-6 py-10 md:py-16">
         <Link href="/" className="inline-flex items-center text-sm font-semibold text-slate-500 hover:text-blue-600 mb-6 transition-colors">
           <ArrowLeft className="w-4 h-4 mr-2" /> Kembali ke Beranda

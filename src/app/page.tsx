@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Workflow, FileText, ArrowRight, BookOpen, X, Sparkles, GraduationCap } from "lucide-react";
+import { Workflow, FileText, ArrowRight, BookOpen, X, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -30,7 +30,7 @@ export default function Home() {
           <br/>Lebih Cepat
         </h1>
         <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          Keluhkampus dirancang khusus agar pengerjaan diagram, laporan, dan skripsimu bisa selesai jauh lebih gampang dan cepat. Tidak perlu keahlian khusus, tinggal klik!
+          Keluhkampus dirancang khusus agar pengerjaan diagram, laporan, laprak, capstone, dan tugas kuliah bisa selesai jauh lebih gampang dan cepat. Tidak perlu keahlian khusus, tinggal klik.
         </p>
 
         {/* Feature Cards */}
@@ -48,7 +48,7 @@ export default function Home() {
             </div>
             <h2 className="text-xl md:text-2xl font-black mb-3 text-slate-900 group-hover:text-blue-700 transition-colors">UML Auto Build</h2>
             <p className="text-slate-500 text-sm md:text-base leading-relaxed mb-8 flex-1 font-medium group-hover:text-slate-600 transition-colors">
-              Pusing bikin Flowchart atau Use Case? Biar AI yang bikinin secara otomatis. Tinggal ketik, langsung jadi diagram profesional!
+              Bikin flowchart, use case, dan activity diagram lebih cepat dengan struktur yang bisa diedit, disetujui, lalu dipakai di laporan.
             </p>
             <div className="inline-flex items-center justify-center w-full py-3.5 rounded-xl bg-slate-50 text-blue-600 font-bold text-sm md:text-base group-hover:bg-blue-600 group-hover:text-white transition-all duration-300 shadow-sm border border-slate-100 group-hover:border-transparent">
               Coba UML Builder <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
@@ -64,9 +64,9 @@ export default function Home() {
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-50 to-indigo-100 text-indigo-600 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:-rotate-3 transition-transform duration-500 shadow-sm">
               <BookOpen className="w-8 h-8" />
             </div>
-            <h2 className="text-xl md:text-2xl font-black mb-3 text-slate-900 group-hover:text-indigo-700 transition-colors">Auto-Bab 4</h2>
+            <h2 className="text-xl md:text-2xl font-black mb-3 text-slate-900 group-hover:text-indigo-700 transition-colors">Data Synthesizer</h2>
             <p className="text-slate-500 text-sm md:text-base leading-relaxed mb-8 flex-1 font-medium group-hover:text-slate-600 transition-colors">
-              Punya data kuesioner atau wawancara yang masih acak-acakan? Ubah jadi narasi Skripsi Bab 4 yang rapi dan ilmiah dalam hitungan detik.
+              Punya kuesioner, wawancara, atau observasi yang masih acak? Ubah jadi narasi hasil dan pembahasan yang rapi.
             </p>
             <div className="inline-flex items-center justify-center w-full py-3.5 rounded-xl bg-slate-50 text-indigo-600 font-bold text-sm md:text-base group-hover:bg-indigo-600 group-hover:text-white transition-all duration-300 shadow-sm border border-slate-100 group-hover:border-transparent">
               Olah Data Sekarang <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />

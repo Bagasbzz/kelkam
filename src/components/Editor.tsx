@@ -82,7 +82,7 @@ export default function SkripsiEditor({ content, onChange }: SkripsiEditorProps)
         allowBase64: true,
       }),
       Placeholder.configure({
-        placeholder: 'Mulai menulis skripsi Anda di sini atau ketik "/" untuk bantuan...',
+        placeholder: 'Mulai menulis dokumen Anda di sini atau ketik "/" untuk bantuan...',
       }),
       SlashCommand.configure({
         suggestion,

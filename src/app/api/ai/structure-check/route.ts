@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendToGrok } from "@/lib/ai/grokClient";
+import { sendToAI } from "@/lib/ai/client";
 
 export async function POST(req: Request) {
   try {
@@ -9,36 +9,42 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Teks tidak boleh kosong" }, { status: 400 });
     }
 
-    const prompt = `Anda adalah asisten akademik yang bertugas menganalisis struktur skripsi mahasiswa.
-Tugas Anda adalah memeriksa apakah teks berikut memiliki komponen penting skripsi.
+    const prompt = `Anda adalah asisten akademik yang bertugas menganalisis struktur laporan mahasiswa.
+Tugas Anda adalah memeriksa apakah teks berikut memiliki komponen penting untuk laporan, makalah, capstone, proposal, atau skripsi.
 
 Periksa apakah terdapat:
-1. Latar Belakang
-2. Rumusan Masalah
-3. Tujuan Penelitian
-4. Metodologi Penelitian
-5. Referensi atau sitasi
+1. Latar belakang atau konteks masalah
+2. Rumusan masalah / tujuan / pertanyaan utama
+3. Metode, alur pengerjaan, atau rancangan solusi
+4. Hasil, pembahasan, atau rencana analisis
+5. Referensi, sitasi, atau dasar teori
 
 Untuk setiap komponen:
-Jika ditemukan → beri tanda ✓
-Jika tidak ditemukan atau tidak jelas → beri tanda ⚠
+- Jika ditemukan, beri tanda [OK]
+- Jika tidak ditemukan atau tidak jelas, beri tanda [PERLU CEK]
 
 Berikan jawaban dalam format berikut:
 
-Analisis Struktur Skripsi:
-✓ Latar Belakang ditemukan/tidak...
-... dan seterusnya ...
+Analisis Struktur Laporan:
+[OK] Latar belakang: ...
+[PERLU CEK] Rumusan masalah / tujuan: ...
 
-Serta berikan saran perbaikan singkat di bagian akhir.
+Saran Perbaikan Prioritas:
+1. ...
+2. ...
+3. ...
 
 Teks yang dianalisis:
 "${text}"`;
-    
-    const aiResponse = await sendToGrok(prompt);
 
-    return NextResponse.json({ 
-      success: true, 
-      data: aiResponse 
+    const aiResponse = await sendToAI(
+      prompt,
+      "Anda adalah pemeriksa struktur akademik keluhkampus. Berikan audit singkat, tegas, actionable, dan berbahasa Indonesia."
+    );
+
+    return NextResponse.json({
+      success: true,
+      data: aiResponse,
     });
   } catch (error: any) {
     console.error("API /api/ai/structure-check Error:", error);

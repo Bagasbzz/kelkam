@@ -107,7 +107,7 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
                 <div className="w-20 h-20 bg-white shadow-xl rounded-3xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
                   <Upload className="w-8 h-8 text-blue-600" />
                 </div>
-                <h3 className="text-xl font-bold text-gray-900 mb-2">Pilih File Skripsi</h3>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">Pilih File Dokumen</h3>
                 <p className="text-gray-400 text-sm font-medium">Seret file .docx ke sini atau klik untuk mencari</p>
               </div>
             ) : (

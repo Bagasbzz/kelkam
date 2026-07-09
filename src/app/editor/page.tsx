@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import Navbar from "@/components/Navbar";
 import { LayoutPanelLeft, Settings2, Download } from "lucide-react";
 import SkripsiEditor from "@/components/Editor";
 import StructureSidebar from "@/components/editor/StructureSidebar";
@@ -71,8 +70,6 @@ export default function UnifiedEditorPage() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
-      <Navbar />
-      
       <div className="flex-1 flex pt-16 overflow-hidden">
         {/* Left Sidebar: Structural Control */}
         <aside className="w-72 bg-white border-r border-gray-100 flex flex-col hidden lg:flex">
@@ -98,7 +95,7 @@ export default function UnifiedEditorPage() {
                     </span>
                 </div>
                 <div className="text-[10px] font-black text-gray-500 uppercase tracking-widest border border-gray-200 px-3 py-1 rounded-full bg-white">
-                    {doc.settings.paperSize} • {doc.settings.font.family}
+                    {doc.settings.paperSize} / {doc.settings.font.family}
                 </div>
             </div>
 
