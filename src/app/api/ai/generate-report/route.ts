@@ -38,6 +38,8 @@ function compactProject(project: any) {
       purpose: ref.purpose,
       citation: ref.citation,
       url: ref.url,
+      pdfUrl: ref.pdfUrl,
+      abstract: String(ref.abstract || "").slice(0, 1200),
     })),
   };
 }

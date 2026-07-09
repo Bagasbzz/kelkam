@@ -13,6 +13,8 @@ import {
   FileText,
   GitBranch,
   Lightbulb,
+  Loader2,
+  ExternalLink,
   Search,
   PenLine,
   Plus,
@@ -79,6 +81,24 @@ interface ReferenceItem {
   status: "planned" | "saved";
   citation?: string;
   url?: string;
+  abstract?: string;
+  pdfUrl?: string | null;
+  results?: ReferenceResult[];
+}
+
+interface ReferenceResult {
+  id: string;
+  title: string;
+  authors: string[];
+  year?: number;
+  venue?: string;
+  abstract: string;
+  url?: string;
+  pdfUrl?: string | null;
+  doi?: string | null;
+  citationCount: number;
+  isOpenAccess: boolean;
+  citationApa: string;
 }
 
 interface ReportDraft {
@@ -319,10 +339,13 @@ export default function ReportBuilderPage() {
   const [project, setProject] = useState<ReportProject>(defaultProject);
   const [sourceDraft, setSourceDraft] = useState<{ kind: SourceKind; title: string; content: string; fileName?: string }>({ kind: "brief", title: "", content: "" });
   const [activeStep, setActiveStep] = useState<BuilderStep>("setup");
+  const [isExtractingSource, setIsExtractingSource] = useState(false);
+  const [sourceError, setSourceError] = useState("");
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generationLabel, setGenerationLabel] = useState("Menunggu perintah");
   const [reportError, setReportError] = useState("");
+  const [searchingReferenceId, setSearchingReferenceId] = useState<string | null>(null);
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -459,25 +482,94 @@ export default function ReportBuilderPage() {
 
   const handleSourceFile = async (file?: File) => {
     if (!file) return;
-    const readableTextFile = /\.(txt|md|csv|json|js|jsx|ts|tsx|php|py|java|sql|html|css|xml|yml|yaml)$/i.test(file.name);
+    setIsExtractingSource(true);
+    setSourceError("");
 
-    if (readableTextFile && file.size <= 250_000) {
-      const text = await file.text();
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("/api/context/extract", {
+        method: "POST",
+        body: formData,
+      });
+
+      const raw = await response.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error(raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Gagal membaca file.");
+      }
+
+      if (!response.ok || !data.success) throw new Error(data.error || "Gagal membaca file.");
+
       setSourceDraft((prev) => ({
         ...prev,
-        title: prev.title || file.name,
-        content: `${prev.content ? `${prev.content}\n\n` : ""}[File: ${file.name}]\n${text}`,
-        fileName: file.name,
+        kind: (data.data.kind || prev.kind) as SourceKind,
+        title: prev.title || data.data.title || file.name,
+        content: `${prev.content ? `${prev.content}\n\n` : ""}${data.data.content}`,
+        fileName: data.data.fileName || file.name,
       }));
-      return;
+      setReportError("");
+    } catch (error: any) {
+      setSourceError(error.message || "Gagal membaca file konteks.");
+    } finally {
+      setIsExtractingSource(false);
     }
+  };
 
-    setSourceDraft((prev) => ({
+  const searchReferences = async (reference: ReferenceItem) => {
+    setSearchingReferenceId(reference.id);
+    setReportError("");
+
+    try {
+      const response = await fetch("/api/references/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: reference.query, limit: 5 }),
+      });
+      const raw = await response.text();
+      let data: any = null;
+      try {
+        data = raw ? JSON.parse(raw) : null;
+      } catch {
+        throw new Error(raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Gagal mencari referensi.");
+      }
+
+      if (!response.ok || !data.success) throw new Error(data.error || "Gagal mencari referensi.");
+
+      setProject((prev) => ({
+        ...prev,
+        references: prev.references.map((item) => item.id === reference.id ? { ...item, results: data.data } : item),
+      }));
+    } catch (error: any) {
+      setReportError(error.message || "Gagal mencari referensi.");
+    } finally {
+      setSearchingReferenceId(null);
+    }
+  };
+
+  const saveReferenceResult = (referenceId: string, result: ReferenceResult) => {
+    setProject((prev) => ({
       ...prev,
-      title: prev.title || file.name,
-      content: `${prev.content ? `${prev.content}\n\n` : ""}[Lampiran: ${file.name}]\nFile ini dicatat sebagai konteks. Untuk hasil AI yang akurat, tempel ringkasan isi pentingnya di sini: pedoman, struktur laporan contoh, fitur project, route/API, database, atau poin revisi dosen.`,
-      fileName: file.name,
+      references: prev.references.map((item) => item.id === referenceId ? {
+        ...item,
+        status: "saved",
+        citation: result.citationApa,
+        url: result.url,
+        pdfUrl: result.pdfUrl,
+        abstract: result.abstract,
+      } : item),
+      sources: [{
+        id: makeId("ref"),
+        kind: "reference",
+        title: result.title,
+        fileName: result.pdfUrl || result.url,
+        content: `[Referensi tersimpan]\nSitasi: ${result.citationApa}\nLink: ${result.url || "-"}\nPDF: ${result.pdfUrl || "-"}\nDOI: ${result.doi || "-"}\nAbstrak:\n${result.abstract}`,
+      }, ...prev.sources],
     }));
+    setReportError("");
   };
 
   const sendToUmlBuilder = (diagram: DiagramPlan) => {
@@ -557,7 +649,7 @@ export default function ReportBuilderPage() {
                   className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-blue-500 bg-white shadow-sm" : "border-blue-100 bg-white/70 hover:border-blue-300"}`}
                 >
                   <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${done ? "bg-green-500 text-white" : active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>{done ? "✓" : index + 1}</span>
+                    <span className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${done ? "bg-green-500 text-white" : active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>{done ? "OK" : index + 1}</span>
                     {active && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700">AKTIF</span>}
                   </div>
                   <p className="font-black text-slate-900">{step.label}</p>
@@ -714,10 +806,11 @@ export default function ReportBuilderPage() {
                 <div className="space-y-3">
                   <input value={sourceDraft.title} onChange={(e) => setSourceDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Judul sumber, contoh: Pedoman Dosen RPL" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-amber-500" />
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-500 hover:border-amber-300 hover:text-amber-700 transition-colors">
-                    <Upload className="w-4 h-4" /> Upload / catat file
-                    <input type="file" className="hidden" accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.php,.py,.java,.sql,.html,.css,.xml,.yml,.yaml,.pdf,.docx,.zip" onChange={(e) => handleSourceFile(e.target.files?.[0])} />
+                    {isExtractingSource ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} {isExtractingSource ? "Membaca file..." : "Upload & baca konteks"}
+                    <input type="file" className="hidden" disabled={isExtractingSource} accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.php,.py,.java,.sql,.html,.css,.xml,.yml,.yaml,.pdf,.docx,.zip" onChange={(e) => handleSourceFile(e.target.files?.[0])} />
                   </label>
                   {sourceDraft.fileName && <p className="text-xs font-bold text-slate-400">File dipilih: {sourceDraft.fileName}</p>}
+                  {sourceError && <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">{sourceError}</p>}
                 </div>
                 <textarea value={sourceDraft.content} onChange={(e) => setSourceDraft((prev) => ({ ...prev, content: e.target.value }))} placeholder="Tempel isi penting/ringkasan di sini. Contoh: struktur laporan contoh, aturan format PDF pedoman, daftar fitur aplikasi, struktur folder codingan, route API, schema database, atau catatan revisi dosen..." className="min-h-40 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-amber-500" />
               </div>
@@ -900,10 +993,35 @@ export default function ReportBuilderPage() {
                     <p className="font-black text-slate-900">{reference.query}</p>
                     <p className="mt-1 text-xs text-slate-500">{reference.purpose}</p>
                     <div className="mt-3 flex flex-wrap gap-2">
+                      <button onClick={() => searchReferences(reference)} disabled={searchingReferenceId === reference.id} className="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-black text-white hover:bg-purple-700 disabled:opacity-50">
+                        {searchingReferenceId === reference.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Cari & baca abstrak
+                      </button>
                       <a href={`https://scholar.google.com/scholar?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-black text-white hover:bg-purple-700"><Search className="w-3.5 h-3.5" /> Google Scholar</a>
                       <a href={`https://www.semanticscholar.org/search?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-xs font-black text-purple-700 border border-purple-100 hover:border-purple-300"><Search className="w-3.5 h-3.5" /> Semantic Scholar</a>
                       <button onClick={() => setProject((prev) => ({ ...prev, references: prev.references.map((item) => item.id === reference.id ? { ...item, status: item.status === "saved" ? "planned" : "saved" } : item) }))} className={`rounded-lg px-3 py-2 text-xs font-black border ${reference.status === "saved" ? "bg-green-50 text-green-700 border-green-100" : "bg-white text-slate-500 border-slate-200"}`}>{reference.status === "saved" ? "Tersimpan" : "Tandai cocok"}</button>
                     </div>
+                    {reference.results && reference.results.length > 0 && (
+                      <div className="mt-4 space-y-3">
+                        {reference.results.map((result) => (
+                          <div key={result.id} className="rounded-xl border border-purple-100 bg-white p-4">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <p className="font-black text-slate-900 leading-snug">{result.title}</p>
+                                <p className="mt-1 text-xs font-bold text-slate-500">{result.authors.slice(0, 4).join(", ") || "Penulis tidak tersedia"} {result.year ? `(${result.year})` : ""} {result.venue ? `- ${result.venue}` : ""}</p>
+                                <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-slate-500">{result.abstract}</p>
+                                <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-purple-600">{result.citationCount} sitasi {result.isOpenAccess ? "- open access" : ""}</p>
+                              </div>
+                              <button onClick={() => saveReferenceResult(reference.id, result)} className="shrink-0 rounded-lg bg-green-600 px-3 py-2 text-xs font-black text-white hover:bg-green-700">Simpan ke konteks</button>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {result.url && <a href={result.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 hover:border-purple-300"><ExternalLink className="w-3.5 h-3.5" /> Halaman paper</a>}
+                              {result.pdfUrl && <a href={result.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs font-black text-green-700 hover:border-green-300"><ExternalLink className="w-3.5 h-3.5" /> PDF / download</a>}
+                              {result.doi && <a href={`https://doi.org/${result.doi}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 hover:border-purple-300"><ExternalLink className="w-3.5 h-3.5" /> DOI</a>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
