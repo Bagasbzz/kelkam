@@ -7,6 +7,17 @@ import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
 import { Hand, Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X } from 'lucide-react';
 
+interface DiagramMeta {
+  title?: string;
+  lanes: string[];
+  reportDiagramId?: string;
+  reportContext?: {
+    reportTitle?: string;
+    projectType?: string;
+    citationStyle?: string;
+  };
+}
+
 export default function UMLBuilder() {
   const [diagramType, setDiagramType] = useState<DiagramType>('flowchart');
   const [nodes, setNodes] = useState<DiagramNode[]>([]);
@@ -40,6 +51,8 @@ export default function UMLBuilder() {
   const [aiClarification, setAiClarification] = useState('');
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
+  const [diagramMeta, setDiagramMeta] = useState<DiagramMeta>({ lanes: [] });
+  const loadedPrefillRef = useRef(false);
 
   const wrapText = useCallback((text: string, maxCharsPerLine: number) => {
     const words = text.split(' ');
@@ -86,7 +99,7 @@ export default function UMLBuilder() {
       const res = await fetch('/api/ai/generate-uml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiPrompt, diagramType, existingSummary })
+        body: JSON.stringify({ prompt: aiPrompt, diagramType, existingSummary, reportContext: diagramMeta.reportContext })
       });
       const data = await res.json();
       if (data.needsClarification) {
@@ -98,6 +111,7 @@ export default function UMLBuilder() {
       if (data.success && data.data) {
         saveToHistory();
         setAiClarification('');
+        const returnedLanes = Array.isArray(data.data.lanes) ? data.data.lanes : Array.isArray(data.spec?.lanes) ? data.spec.lanes : [];
         const CHARS_PER_LINE = diagramType === 'usecase' ? 18 : 20;
         const LINE_HEIGHT = 24;
         const PADDING_V = 40;
@@ -134,11 +148,17 @@ export default function UMLBuilder() {
             height: nodeHeight,
             x: typeof n.x === 'number' ? n.x : 500,
             y: typeof n.y === 'number' ? n.y : 100,
+            lane: n.lane,
             pinned: Boolean(n.pinned)
           };
         });
         setNodes(generatedNodes);
         setEdges(data.data.edges || []);
+        setDiagramMeta((prev) => ({
+          ...prev,
+          title: data.data.title || data.spec?.title || prev.title,
+          lanes: returnedLanes,
+        }));
         setAiPrompt('');
         setIsAiModalOpen(false);
         showToast('AI diagram generated successfully!');
@@ -150,7 +170,7 @@ export default function UMLBuilder() {
     } finally {
       setIsGeneratingAI(false);
     }
-  }, [aiPrompt, diagramType, edges.length, nodes, saveToHistory, showToast]);
+  }, [aiPrompt, diagramMeta.reportContext, diagramType, edges.length, nodes, saveToHistory, showToast, wrapText]);
 
   const handleNudge = useCallback((id: string, dx: number, dy: number) => {
     setNodes(prev => prev.map(n => n.id === id ? {
@@ -291,7 +311,22 @@ export default function UMLBuilder() {
       if (parsed.diagramType && ['flowchart', 'usecase', 'activity'].includes(parsed.diagramType)) {
         setDiagramType(parsed.diagramType);
       }
-      setIsAiModalOpen(true);
+      loadedPrefillRef.current = true;
+      const restoredNodes = Array.isArray(parsed.diagramData?.nodes) ? parsed.diagramData.nodes : [];
+      const restoredEdges = Array.isArray(parsed.diagramData?.edges) ? parsed.diagramData.edges : [];
+      setNodes(restoredNodes);
+      setEdges(restoredEdges);
+      setSelectedNodeId(null);
+      const restoredLanes = Array.isArray(parsed.diagramData?.meta?.lanes)
+        ? parsed.diagramData.meta.lanes
+        : Array.from(new Set(restoredNodes.map((node: DiagramNode) => node.lane).filter(Boolean))) as string[];
+      setDiagramMeta({
+        title: parsed.diagramData?.meta?.title || parsed.title,
+        lanes: restoredLanes,
+        reportDiagramId: parsed.reportDiagramId,
+        reportContext: parsed.reportContext,
+      });
+      setIsAiModalOpen(restoredNodes.length === 0);
       setAiClarification('');
       localStorage.removeItem('uml-ai-prefill');
     } catch (error) {
@@ -421,10 +456,10 @@ export default function UMLBuilder() {
       try {
         const parsed = JSON.parse(savedData);
         if (parsed.projects) setProjects(parsed.projects);
-        if (parsed.activeType) setDiagramType(parsed.activeType);
+        if (!loadedPrefillRef.current && parsed.activeType) setDiagramType(parsed.activeType);
         if (parsed.zoomLevel) setZoomLevel(parsed.zoomLevel);
         const active = parsed.projects[parsed.activeType || 'flowchart'];
-        if (active) {
+        if (!loadedPrefillRef.current && active) {
           setNodes(active.nodes || []);
           setEdges(active.edges || []);
         }
@@ -448,7 +483,57 @@ export default function UMLBuilder() {
     setEdges(target.edges);
     setDiagramType(newType);
     setSelectedNodeId(null);
+    setDiagramMeta((prev) => ({ ...prev, lanes: Array.from(new Set((target.nodes || []).map((node) => node.lane).filter(Boolean))) as string[] }));
   }, [saveToHistory, projects]);
+
+  const handleApproveToReport = useCallback(() => {
+    if (!diagramMeta.reportDiagramId) {
+      showToast('Diagram ini belum tersambung ke Laporan Builder.');
+      return;
+    }
+    if (!nodes.length || !edges.length) {
+      showToast('Generate atau buat diagram dulu sebelum approve.');
+      return;
+    }
+
+    const reportKey = 'report_builder_project_v1';
+    const saved = localStorage.getItem(reportKey);
+    if (!saved) {
+      showToast('Data laporan belum ditemukan.');
+      return;
+    }
+
+    try {
+      const project = JSON.parse(saved);
+      const updatedProject = {
+        ...project,
+        diagrams: (project.diagrams || []).map((diagram: any) => {
+          if (diagram.id !== diagramMeta.reportDiagramId) return diagram;
+          return {
+            ...diagram,
+            status: 'approved',
+            approvedAt: new Date().toISOString(),
+            caption: diagram.caption || diagram.title,
+            diagramData: {
+              nodes,
+              edges,
+              meta: {
+                ...diagramMeta,
+                title: diagramMeta.title || diagram.title,
+                lanes: diagramMeta.lanes.length ? diagramMeta.lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))),
+                diagramType,
+              },
+            },
+          };
+        }),
+      };
+      localStorage.setItem(reportKey, JSON.stringify(updatedProject));
+      showToast('Diagram approved dan masuk ke Laporan Builder.');
+    } catch (error) {
+      console.error('Failed to approve diagram to report:', error);
+      showToast('Gagal menyimpan diagram ke laporan.');
+    }
+  }, [diagramMeta, diagramType, edges, nodes, showToast]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1100,6 +1185,7 @@ export default function UMLBuilder() {
           <DiagramCanvas
             nodes={nodes}
             edges={edges}
+            lanes={diagramMeta.lanes}
             onNodeClick={handleNodeClick}
             onNodeDragStart={handleNodeDragStart}
             onNodeDrag={handleNodeDrag}
@@ -1133,6 +1219,30 @@ export default function UMLBuilder() {
 
       {/* AI Floating Button */}
       <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 100, display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {diagramMeta.reportDiagramId && (
+          <button
+            onClick={handleApproveToReport}
+            disabled={nodes.length === 0 || edges.length === 0}
+            style={{
+              height: '44px',
+              borderRadius: '999px',
+              border: '1px solid #bbf7d0',
+              background: nodes.length && edges.length ? '#16a34a' : '#94a3b8',
+              color: 'white',
+              padding: '0 16px',
+              fontSize: '0.82rem',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: nodes.length && edges.length ? 'pointer' : 'not-allowed',
+              boxShadow: '0 4px 14px rgba(22, 163, 74, 0.24)'
+            }}
+            title="Setujui diagram dan masukkan ke Laporan Builder"
+          >
+            <CheckCircle2 size={18} /> Approve ke Laporan
+          </button>
+        )}
         <div style={{ background: 'white', padding: '8px 16px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)', fontSize: '0.85rem', fontWeight: 700, color: '#4f46e5', border: '1px solid #e0e7ff', animation: 'bounce 2s infinite' }}>
           Mau gampang? Pake AI aja 👉
         </div>

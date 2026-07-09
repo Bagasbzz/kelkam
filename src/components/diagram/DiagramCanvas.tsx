@@ -19,6 +19,7 @@ interface DiagramCanvasProps {
   zoomLevel: number;
   canvasWidth?: number;
   canvasHeight?: number;
+  lanes?: string[];
 }
 
 
@@ -40,6 +41,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   onZoomChange,
   canvasWidth = 2500,
   canvasHeight = 2000,
+  lanes = [],
 }) => {
 
   const scale = zoomLevel / 100;
@@ -70,6 +72,11 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   } | null>(null);
 
   const [rubberBand, setRubberBand] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const visibleLanes = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
+  const laneWidth = 420;
+  const laneStartX = 20;
+  const laneHeaderHeight = 52;
+  const laneHeight = Math.max(canvasHeight - 80, 900, ...nodes.map((node) => node.y + node.height + 80));
 
   const getSvgPoint = useCallback((e: React.MouseEvent | React.PointerEvent | MouseEvent | PointerEvent): { x: number; y: number } => {
     const svg = svgRef.current;
@@ -276,6 +283,47 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
         <rect width="5000" height="5000" fill="url(#grid)" />
 
         <g transform={`scale(${scale})`}>
+          {visibleLanes.length > 0 && (
+            <g className="swimlanes" style={{ pointerEvents: 'none' }}>
+              {visibleLanes.map((lane, index) => {
+                const x = laneStartX + index * laneWidth;
+                return (
+                  <g key={lane}>
+                    <rect
+                      x={x}
+                      y={24}
+                      width={laneWidth}
+                      height={laneHeight}
+                      fill={index % 2 === 0 ? '#ffffff' : '#f8fafc'}
+                      stroke="#cbd5e1"
+                      strokeWidth="1.5"
+                    />
+                    <rect
+                      x={x}
+                      y={24}
+                      width={laneWidth}
+                      height={laneHeaderHeight}
+                      fill="#eef2ff"
+                      stroke="#cbd5e1"
+                      strokeWidth="1.5"
+                    />
+                    <text
+                      x={x + laneWidth / 2}
+                      y={56}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      fill="#3730a3"
+                      fontSize="18"
+                      fontWeight="700"
+                    >
+                      {lane}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          )}
+
           {edges.map((edge) => {
             const fromNode = nodes.find((n) => n.id === edge.fromId);
             const toNode = nodes.find((n) => n.id === edge.toId);

@@ -5,6 +5,7 @@ export interface DiagramNode {
   type: NodeType;
   text: string;
   lines: string[];
+  lane?: string;
   x: number;
   y: number;
   width: number;

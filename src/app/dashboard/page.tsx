@@ -39,6 +39,13 @@ interface DiagramPlan {
   purpose: string;
   prompt: string;
   status: DiagramStatus;
+  approvedAt?: string;
+  caption?: string;
+  diagramData?: {
+    nodes: unknown[];
+    edges: unknown[];
+    meta?: Record<string, unknown>;
+  };
 }
 
 interface SourceNote {
@@ -169,7 +176,7 @@ function qualityChecks(project: ReportProject) {
     { label: "Outline sudah dibuat", ok: project.outline.length > 0 },
     { label: "Bahan mentah/contoh sudah masuk", ok: project.sources.length > 0 },
     { label: "Diagram sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
-    { label: "Semua diagram penting sudah approved", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved") },
+    { label: "Semua diagram penting sudah approved", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
     { label: "Gaya sitasi dipilih", ok: Boolean(project.citationStyle) },
   ];
 }
@@ -195,7 +202,7 @@ export default function ReportBuilderPage() {
   }, [project]);
 
   const checks = useMemo(() => qualityChecks(project), [project]);
-  const approvedCount = project.diagrams.filter((d) => d.status === "approved").length;
+  const approvedCount = project.diagrams.filter((d) => d.status === "approved" && d.diagramData).length;
 
   const updateProject = <K extends keyof ReportProject>(key: K, value: ReportProject[K]) => {
     setProject((prev) => ({ ...prev, [key]: value }));
@@ -220,14 +227,37 @@ export default function ReportBuilderPage() {
   };
 
   const sendToUmlBuilder = (diagram: DiagramPlan) => {
-    localStorage.setItem("uml-ai-prefill", JSON.stringify({ prompt: diagram.prompt, diagramType: diagram.type }));
+    const sourceSummary = project.sources.slice(0, 3).map((source) => ({
+      title: source.title,
+      preview: source.content.slice(0, 500),
+    }));
+
+    localStorage.setItem("uml-ai-prefill", JSON.stringify({
+      prompt: diagram.prompt,
+      diagramType: ["flowchart", "activity", "usecase"].includes(diagram.type) ? diagram.type : "flowchart",
+      reportDiagramId: diagram.id,
+      title: diagram.title,
+      reportContext: {
+        reportTitle: project.title,
+        topic: project.topic.slice(0, 700),
+        projectType: project.projectType,
+        course: project.course,
+        citationStyle: project.citationStyle,
+        sources: sourceSummary,
+      },
+      diagramData: diagram.diagramData,
+    }));
     router.push("/uml-builder");
   };
 
   const setDiagramStatus = (id: string, status: DiagramStatus) => {
     setProject((prev) => ({
       ...prev,
-      diagrams: prev.diagrams.map((diagram) => (diagram.id === id ? { ...diagram, status } : diagram)),
+      diagrams: prev.diagrams.map((diagram) => {
+        if (diagram.id !== id) return diagram;
+        if (status === "approved" && !diagram.diagramData) return { ...diagram, status: "draft" };
+        return { ...diagram, status };
+      }),
     }));
   };
 
@@ -380,11 +410,17 @@ export default function ReportBuilderPage() {
                       <select value={diagram.status} onChange={(e) => setDiagramStatus(diagram.id, e.target.value as DiagramStatus)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
                         <option value="planned">planned</option>
                         <option value="draft">draft</option>
-                        <option value="approved">approved</option>
+                        <option value="approved" disabled={!diagram.diagramData}>approved</option>
                       </select>
                     </div>
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${diagram.diagramData ? "bg-green-100 text-green-700" : "bg-white text-slate-400 border border-slate-200"}`}>
+                        {diagram.diagramData ? "diagram tersimpan" : "belum ada diagram"}
+                      </span>
+                      {diagram.approvedAt && <span className="text-[10px] font-bold text-slate-400">Approved {new Date(diagram.approvedAt).toLocaleDateString("id-ID")}</span>}
+                    </div>
                     <button onClick={() => sendToUmlBuilder(diagram)} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700 transition-colors">
-                      <Workflow className="w-4 h-4" /> Buat di UML Builder
+                      <Workflow className="w-4 h-4" /> {diagram.diagramData ? "Edit di UML Builder" : "Buat di UML Builder"}
                     </button>
                   </div>
                 ))}

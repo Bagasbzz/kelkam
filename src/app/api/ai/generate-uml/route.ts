@@ -189,6 +189,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
       y,
       width: size.width,
       height: size.height,
+      lane: step.lane,
       yes: step.yes,
       no: step.no,
       pinned: lanes.length > 0,
@@ -203,7 +204,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
     return out;
   });
 
-  return { nodes, edges };
+  return { nodes, edges, lanes, title: spec.title || "Diagram" };
 }
 
 function extractJson(text: string) {
@@ -216,7 +217,7 @@ function extractJson(text: string) {
 
 export async function POST(req: Request) {
   try {
-    const { prompt, diagramType = "flowchart", existingSummary = null } = await req.json();
+    const { prompt, diagramType = "flowchart", existingSummary = null, reportContext = null } = await req.json();
 
     if (!prompt?.trim()) {
       return NextResponse.json({ success: false, error: "Prompt tidak boleh kosong" }, { status: 400 });
@@ -237,7 +238,7 @@ Untuk flowchart/activity balas {"needsClarification":false,"title":"...","lanes"
 Untuk usecase balas {"needsClarification":false,"title":"...","actors":[{"id":"a1","name":"Admin","side":"left"}],"usecases":[{"id":"u1","text":"Kelola data","actors":["a1"]}]}.
 Aturan: 6-14 langkah untuk proses nyata, decision wajib punya yes dan no, label singkat, alur jelas, jangan isi x/y/width/height/lines.`;
 
-    const userPrompt = JSON.stringify({ prompt, existingSummary }, null, 0);
+    const userPrompt = JSON.stringify({ prompt, existingSummary, reportContext }, null, 0);
     const response = await aiClient.chat.completions.create({
       model: AI_MODEL,
       messages: [
