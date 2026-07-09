@@ -51,6 +51,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Judul atau topik belum diisi." }, { status: 400 });
     }
 
+    if (!Array.isArray(project.sources) || project.sources.length === 0) {
+      return NextResponse.json({ success: false, error: "Sumber/konteks proyek belum diisi. Tambahkan brief, pedoman, contoh laporan, referensi, atau ringkasan codingan dulu." }, { status: 400 });
+    }
+
+    if (!Array.isArray(project.outline) || project.outline.length === 0) {
+      return NextResponse.json({ success: false, error: "Outline belum dibuat. Jalankan brainstorm rencana dulu sebelum generate laporan." }, { status: 400 });
+    }
+
     const compact = compactProject(project);
     const systemPrompt = `Anda adalah penyusun laporan akademik keluhkampus.
 Buat draft laporan lengkap dalam Bahasa Indonesia berdasarkan konteks yang diberikan.
@@ -69,7 +77,7 @@ Aturan:
         { role: "user", content: JSON.stringify(compact) },
       ],
       temperature: 0.2,
-      max_tokens: 4200,
+      max_tokens: 3600,
     });
 
     return NextResponse.json({ success: true, data: response.choices[0].message.content || "" });

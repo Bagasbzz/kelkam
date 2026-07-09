@@ -367,6 +367,7 @@ export default function ReportBuilderPage() {
   };
 
   const generatePlan = () => {
+    setReportError("");
     setProject((prev) => {
       const next = { ...prev };
       next.titleIdeas = buildTitleIdeas(prev);
@@ -386,6 +387,24 @@ export default function ReportBuilderPage() {
   };
 
   const generateFullReport = async () => {
+    if (!project.title.trim() && !project.topic.trim()) {
+      setReportError("Isi judul atau topik dulu sebelum generate laporan.");
+      setActiveStep("setup");
+      return;
+    }
+
+    if (project.sources.length === 0) {
+      setReportError("Tambahkan minimal 1 sumber/konteks dulu, misalnya brief tugas, pedoman dosen, contoh laporan, atau ringkasan project codingan.");
+      setActiveStep("context");
+      return;
+    }
+
+    if (project.outline.length === 0) {
+      setReportError("Jalankan Brainstorm rencana dulu supaya outline, tabel, referensi, dan kebutuhan gambar tersusun.");
+      setActiveStep("context");
+      return;
+    }
+
     setIsGeneratingReport(true);
     setGenerationProgress(8);
     setGenerationLabel(loadingSteps[0]);
@@ -398,7 +417,15 @@ export default function ReportBuilderPage() {
         body: JSON.stringify({ project }),
       });
 
-      const data = await response.json();
+      const rawResponse = await response.text();
+      let data: any = null;
+      try {
+        data = rawResponse ? JSON.parse(rawResponse) : null;
+      } catch {
+        const cleanText = rawResponse.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        throw new Error(cleanText || "Server mengembalikan respons tidak valid. Coba ulangi beberapa saat lagi.");
+      }
+
       if (!response.ok || !data.success) throw new Error(data.error || "Gagal generate laporan lengkap.");
 
       setProject((prev) => ({
@@ -418,6 +445,7 @@ export default function ReportBuilderPage() {
 
   const addSource = () => {
     if (!sourceDraft.title.trim() && !sourceDraft.content.trim()) return;
+    setReportError("");
     setProject((prev) => ({
       ...prev,
       sources: [{ id: makeId("src"), kind: sourceDraft.kind, title: sourceDraft.title || sourceKindLabel[sourceDraft.kind], content: sourceDraft.content, fileName: sourceDraft.fileName }, ...prev.sources],
@@ -551,7 +579,7 @@ export default function ReportBuilderPage() {
                 {activeStep === "context" && <button onClick={generatePlan} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white"><Lightbulb className="w-4 h-4" /> Brainstorm rencana</button>}
                 {activeStep === "plan" && <button onClick={() => setActiveStep("execute")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut eksekusi UML</button>}
                 {activeStep === "execute" && <button onClick={() => setActiveStep("draft")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut ke draft</button>}
-                {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> Generate laporan</button>}
+                {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0 || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : "Generate laporan"}</button>}
               </div>
             </div>
             {isGeneratingReport && (
@@ -892,8 +920,8 @@ export default function ReportBuilderPage() {
                 <p className="text-sm text-slate-500">Hasil akhir disusun dari konteks, outline, tabel, daftar UML, dan referensi yang sudah disimpan.</p>
               </div>
             </div>
-            <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40">
-              <Sparkles className="w-4 h-4" /> {project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
+            <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0 || project.sources.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40">
+              <Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
             </button>
           </div>
           {!project.reportDraft ? (
