@@ -298,7 +298,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
     return { nodes, edges };
   }
 
-  const steps = spec.steps?.length ? spec.steps : [
+  const steps: CompactStep[] = spec.steps?.length ? spec.steps : [
     { id: "start", type: "start", text: "Mulai", next: "process" },
     { id: "process", type: diagramType === "activity" ? "activity" : "process", text: spec.title || "Jalankan proses utama", next: "end" },
     { id: "end", type: "end", text: "Selesai" },
