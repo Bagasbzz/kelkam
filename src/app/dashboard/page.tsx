@@ -540,35 +540,56 @@ export default function ReportBuilderPage() {
     }
 
     setIsGeneratingReport(true);
-    setGenerationProgress(8);
-    setGenerationLabel(loadingSteps[0]);
+    setGenerationProgress(2);
+    setGenerationLabel("Memulai job generate laporan");
     setReportError("");
 
     try {
-      const response = await fetch("/api/ai/generate-report", {
+      const startResponse = await fetch("/api/report-jobs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project }),
       });
 
-      const rawResponse = await response.text();
-      let data: any = null;
-      try {
-        data = rawResponse ? JSON.parse(rawResponse) : null;
-      } catch {
-        const cleanText = rawResponse.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-        throw new Error(cleanText || "Server mengembalikan respons tidak valid. Coba ulangi beberapa saat lagi.");
+      const startData = await startResponse.json().catch(() => null);
+      if (!startResponse.ok || !startData?.success || !startData.job?.id) {
+        throw new Error(startData?.error || "Gagal memulai job laporan.");
       }
 
-      if (!response.ok || !data.success) throw new Error(data.error || "Gagal generate laporan lengkap.");
+      const jobId = startData.job.id;
+      setGenerationProgress(startData.job.progress || 5);
+      setGenerationLabel(startData.job.stage || "Job laporan dimulai");
+
+      let finalJob: any = null;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        const statusResponse = await fetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
+        const statusData = await statusResponse.json().catch(() => null);
+
+        if (!statusResponse.ok || !statusData?.success) {
+          throw new Error(statusData?.error || "Gagal membaca progres generate laporan.");
+        }
+
+        const job = statusData.job;
+        setGenerationProgress(Math.min(100, Math.max(0, Number(job.progress || 0))));
+        setGenerationLabel(job.stage || "Generate laporan berjalan");
+
+        if (job.status === "done" || job.status === "failed") {
+          finalJob = job;
+          break;
+        }
+      }
+
+      if (!finalJob) throw new Error("Generate laporan terlalu lama. Coba cek lagi beberapa saat atau ulangi job.");
+      if (finalJob.status === "failed") throw new Error(finalJob.error || "Generate laporan gagal.");
 
       setProject((prev) => ({
         ...prev,
         workflowStage: "drafted",
-        reportDraft: { content: data.data, generatedAt: new Date().toISOString() },
+        reportDraft: { content: finalJob.result || "", generatedAt: new Date().toISOString() },
       }));
       setGenerationProgress(100);
-      setGenerationLabel("Laporan selesai disusun");
+      setGenerationLabel(finalJob.stage || "Laporan selesai disusun");
       setActiveStep("draft");
     } catch (error: any) {
       setReportError(error.message || "Gagal generate laporan lengkap.");
