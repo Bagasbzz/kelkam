@@ -8,6 +8,8 @@ import {
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  FileArchive,
+  FileCheck2,
   FileText,
   GitBranch,
   Lightbulb,
@@ -15,6 +17,8 @@ import {
   Plus,
   Save,
   Sparkles,
+  Trash2,
+  Upload,
   Workflow,
 } from "lucide-react";
 
@@ -22,6 +26,7 @@ type ProjectType = "capstone" | "course" | "practicum" | "paper" | "formal" | "t
 type Formality = "ringkas" | "formal" | "akademik";
 type SectionStatus = "draft" | "review" | "approved";
 type DiagramStatus = "planned" | "draft" | "approved";
+type SourceKind = "brief" | "guide" | "example" | "reference" | "code" | "note";
 
 interface ReportSection {
   id: string;
@@ -49,8 +54,10 @@ interface DiagramPlan {
 
 interface SourceNote {
   id: string;
+  kind?: SourceKind;
   title: string;
   content: string;
+  fileName?: string;
 }
 
 interface ReportProject {
@@ -77,6 +84,24 @@ const projectTypeLabel: Record<ProjectType, string> = {
   thesis: "Skripsi / Proposal",
 };
 
+const sourceKindLabel: Record<SourceKind, string> = {
+  brief: "Brief / aturan tugas",
+  guide: "Pedoman dosen / kampus",
+  example: "Contoh laporan benar",
+  reference: "Referensi / sitasi",
+  code: "Konteks codingan / repo",
+  note: "Catatan bebas",
+};
+
+const sourceKindHint: Record<SourceKind, string> = {
+  brief: "Tempel brief tugas, rubrik penilaian, batasan, atau instruksi dosen.",
+  guide: "Tempel poin penting dari PDF pedoman, format kampus, atau aturan penulisan.",
+  example: "Tempel struktur/contoh laporan yang dianggap benar supaya sistem meniru pola, bukan isinya mentah-mentah.",
+  reference: "Tempel daftar jurnal, link, DOI, kutipan, atau catatan teori yang ingin dipakai.",
+  code: "Tempel README, struktur folder, daftar fitur, route/API, schema DB, atau ringkasan ZIP project codingan.",
+  note: "Tempel catatan kasar, hasil diskusi, kebutuhan user, atau ide yang belum rapi.",
+};
+
 const defaultProject: ReportProject = {
   projectType: "formal",
   title: "",
@@ -93,7 +118,8 @@ const defaultProject: ReportProject = {
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 
 function buildOutline(project: ReportProject): ReportSection[] {
-  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database/i.test(`${project.title} ${project.topic}`);
+  const sourceContext = project.sources.map((source) => `${source.title} ${source.content}`).join(" ").slice(0, 2500);
+  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(`${project.title} ${project.topic} ${sourceContext}`);
 
   if (project.projectType === "practicum") {
     return [
@@ -129,7 +155,8 @@ function buildOutline(project: ReportProject): ReportSection[] {
 
 function buildDiagramPlan(project: ReportProject): DiagramPlan[] {
   const topic = project.title || project.topic || "Sistem";
-  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database/i.test(`${project.title} ${project.topic}`);
+  const sourceContext = project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ").slice(0, 2500);
+  const hasSystemTopic = /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(`${project.title} ${project.topic} ${sourceContext}`);
   if (!hasSystemTopic) return [];
 
   return [
@@ -173,8 +200,8 @@ function qualityChecks(project: ReportProject) {
     { label: "Judul/topik sudah jelas", ok: Boolean(project.title.trim() || project.topic.trim()) },
     { label: "Jenis laporan sudah dipilih", ok: Boolean(project.projectType) },
     { label: "Outline sudah dibuat", ok: project.outline.length > 0 },
-    { label: "Bahan mentah/contoh sudah masuk", ok: project.sources.length > 0 },
-    { label: "Diagram sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
+    { label: "Sumber/konteks proyek sudah masuk", ok: project.sources.length > 0 },
+    { label: "Daftar gambar & UML sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
     { label: "Semua diagram penting sudah approved", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
     { label: "Gaya sitasi dipilih", ok: Boolean(project.citationStyle) },
   ];
@@ -183,7 +210,7 @@ function qualityChecks(project: ReportProject) {
 export default function ReportBuilderPage() {
   const router = useRouter();
   const [project, setProject] = useState<ReportProject>(defaultProject);
-  const [sourceDraft, setSourceDraft] = useState({ title: "", content: "" });
+  const [sourceDraft, setSourceDraft] = useState<{ kind: SourceKind; title: string; content: string; fileName?: string }>({ kind: "brief", title: "", content: "" });
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -220,13 +247,41 @@ export default function ReportBuilderPage() {
     if (!sourceDraft.title.trim() && !sourceDraft.content.trim()) return;
     setProject((prev) => ({
       ...prev,
-      sources: [{ id: makeId("src"), title: sourceDraft.title || "Bahan Mentah", content: sourceDraft.content }, ...prev.sources],
+      sources: [{ id: makeId("src"), kind: sourceDraft.kind, title: sourceDraft.title || sourceKindLabel[sourceDraft.kind], content: sourceDraft.content, fileName: sourceDraft.fileName }, ...prev.sources],
     }));
-    setSourceDraft({ title: "", content: "" });
+    setSourceDraft((prev) => ({ kind: prev.kind, title: "", content: "" }));
+  };
+
+  const removeSource = (id: string) => {
+    setProject((prev) => ({ ...prev, sources: prev.sources.filter((source) => source.id !== id) }));
+  };
+
+  const handleSourceFile = async (file?: File) => {
+    if (!file) return;
+    const readableTextFile = /\.(txt|md|csv|json|js|jsx|ts|tsx|php|py|java|sql|html|css|xml|yml|yaml)$/i.test(file.name);
+
+    if (readableTextFile && file.size <= 250_000) {
+      const text = await file.text();
+      setSourceDraft((prev) => ({
+        ...prev,
+        title: prev.title || file.name,
+        content: `${prev.content ? `${prev.content}\n\n` : ""}[File: ${file.name}]\n${text}`,
+        fileName: file.name,
+      }));
+      return;
+    }
+
+    setSourceDraft((prev) => ({
+      ...prev,
+      title: prev.title || file.name,
+      content: `${prev.content ? `${prev.content}\n\n` : ""}[Lampiran: ${file.name}]\nFile ini dicatat sebagai konteks. Untuk hasil AI yang akurat, tempel ringkasan isi pentingnya di sini: pedoman, struktur laporan contoh, fitur project, route/API, database, atau poin revisi dosen.`,
+      fileName: file.name,
+    }));
   };
 
   const sendToUmlBuilder = (diagram: DiagramPlan) => {
     const sourceSummary = project.sources.slice(0, 3).map((source) => ({
+      kind: source.kind || "note",
       title: source.title,
       preview: source.content.slice(0, 500),
     }));
@@ -273,8 +328,24 @@ export default function ReportBuilderPage() {
           </div>
           <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4">Rancang laporan, diagram, dan struktur akademik dari satu tempat.</h1>
           <p className="text-slate-500 max-w-3xl text-base md:text-lg leading-relaxed">
-            Pilih bentuk proyek, masukkan bahan mentah atau contoh laporan, lalu sistem menyusun outline, kebutuhan diagram, dan checklist kualitas sebelum masuk tahap penulisan final.
+            Pilih bentuk proyek, kumpulkan sumber seperti pedoman dosen/contoh laporan/konteks codingan, lalu sistem membantu brainstorming outline dan daftar gambar/UML sebelum eksekusi diagram satu per satu.
           </p>
+        </section>
+
+        <section className="mb-6 grid md:grid-cols-3 gap-3">
+          {[
+            { step: "1", title: "Kumpulkan konteks", desc: "Brief tugas, pedoman PDF, contoh laporan, referensi, atau ringkasan codingan." },
+            { step: "2", title: "Brainstorm struktur", desc: "Sistem menyusun outline, asumsi, dan daftar gambar/UML yang dibutuhkan." },
+            { step: "3", title: "Eksekusi & approve", desc: "Buat diagram di UML Builder, cek hasilnya, lalu approve ke laporan." },
+          ].map((item) => (
+            <div key={item.step} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="mb-2 flex items-center gap-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-600 text-xs font-black text-white">{item.step}</span>
+                <p className="font-black text-slate-900">{item.title}</p>
+              </div>
+              <p className="text-sm text-slate-500 leading-relaxed">{item.desc}</p>
+            </div>
+          ))}
         </section>
 
         <div className="grid xl:grid-cols-[1.1fr_0.9fr] gap-6 items-start">
@@ -331,33 +402,74 @@ export default function ReportBuilderPage() {
               </div>
 
               <button onClick={generatePlan} className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 transition-colors">
-                <Lightbulb className="w-4 h-4" /> Rancang Outline & Diagram
+                <Lightbulb className="w-4 h-4" /> Brainstorm Outline & Daftar Gambar/UML
               </button>
             </section>
 
             <section className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
               <div className="flex items-center gap-3 mb-5">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><BookOpen className="w-5 h-5" /></div>
+                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><FileCheck2 className="w-5 h-5" /></div>
                 <div>
-                  <h2 className="text-xl font-black">Bahan Mentah & Contoh</h2>
-                  <p className="text-sm text-slate-500">Masukkan brief, contoh laporan, catatan, referensi, atau bahan kasar.</p>
+                  <h2 className="text-xl font-black">Sumber & Konteks Proyek</h2>
+                  <p className="text-sm text-slate-500">Masukkan pedoman dosen, contoh laporan benar, referensi, brief tugas, atau konteks codingan sebelum brainstorming.</p>
                 </div>
               </div>
 
-              <div className="grid md:grid-cols-[0.8fr_1.2fr_auto] gap-3 items-start">
-                <input value={sourceDraft.title} onChange={(e) => setSourceDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Judul bahan" className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-amber-500" />
-                <textarea value={sourceDraft.content} onChange={(e) => setSourceDraft((prev) => ({ ...prev, content: e.target.value }))} placeholder="Tempel bahan mentah di sini..." className="min-h-24 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-amber-500" />
+              <div className="grid md:grid-cols-3 gap-3 mb-4">
+                {Object.entries(sourceKindLabel).map(([value, label]) => {
+                  const active = sourceDraft.kind === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setSourceDraft((prev) => ({ ...prev, kind: value as SourceKind }))}
+                      className={`rounded-xl border px-3 py-2.5 text-left text-xs font-black transition-colors ${active ? "border-amber-400 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-500 hover:border-amber-200"}`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="rounded-2xl border border-amber-100 bg-amber-50/40 p-4 mb-4">
+                <p className="text-sm font-bold text-amber-900">{sourceKindHint[sourceDraft.kind]}</p>
+                <p className="mt-1 text-xs text-amber-700 leading-relaxed">Alur sistem: kumpulkan konteks dulu, klik brainstorm, sistem membuat outline dan daftar gambar/UML yang perlu dibuat. Diagram baru dieksekusi setelah daftar ini disetujui.</p>
+              </div>
+
+              <div className="grid md:grid-cols-[0.8fr_1.2fr] gap-3 items-start">
+                <div className="space-y-3">
+                  <input value={sourceDraft.title} onChange={(e) => setSourceDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Judul sumber, contoh: Pedoman Dosen RPL" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-amber-500" />
+                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-500 hover:border-amber-300 hover:text-amber-700 transition-colors">
+                    <Upload className="w-4 h-4" /> Upload / catat file
+                    <input type="file" className="hidden" accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.php,.py,.java,.sql,.html,.css,.xml,.yml,.yaml,.pdf,.docx,.zip" onChange={(e) => handleSourceFile(e.target.files?.[0])} />
+                  </label>
+                  {sourceDraft.fileName && <p className="text-xs font-bold text-slate-400">File dipilih: {sourceDraft.fileName}</p>}
+                </div>
+                <textarea value={sourceDraft.content} onChange={(e) => setSourceDraft((prev) => ({ ...prev, content: e.target.value }))} placeholder="Tempel isi penting/ringkasan di sini. Contoh: struktur laporan contoh, aturan format PDF pedoman, daftar fitur aplikasi, struktur folder codingan, route API, schema database, atau catatan revisi dosen..." className="min-h-40 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-amber-500" />
+              </div>
+
+              <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
+                <p className="text-xs text-slate-500 leading-relaxed">Tips hemat token: masukkan ringkasan yang relevan saja. Untuk ZIP codingan, cukup struktur folder, fitur, route/API, database, dan flow utama.</p>
                 <button onClick={addSource} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-amber-600 transition-colors">
-                  <Plus className="w-4 h-4" /> Tambah
+                  <Plus className="w-4 h-4" /> Tambah Sumber
                 </button>
               </div>
 
               <div className="mt-4 grid md:grid-cols-2 gap-3">
                 {project.sources.length === 0 ? (
-                  <div className="md:col-span-2 rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada bahan. Tambahkan minimal brief tugas atau catatan kasar supaya nanti AI tidak ngarang.</div>
+                  <div className="md:col-span-2 rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada sumber. Tambahkan minimal brief tugas, pedoman, contoh laporan, atau ringkasan project codingan supaya hasil brainstorm tidak generik.</div>
                 ) : project.sources.map((source) => (
                   <div key={source.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <p className="font-black text-slate-800 mb-1">{source.title}</p>
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-black text-slate-800">{source.title}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">{sourceKindLabel[source.kind || "note"]}</p>
+                      </div>
+                      <button onClick={() => removeSource(source.id)} className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500 transition-colors" title="Hapus sumber">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {source.fileName && <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500 border border-slate-200"><FileArchive className="w-3 h-3" /> {source.fileName}</p>}
                     <p className="text-xs text-slate-500 line-clamp-3">{source.content}</p>
                   </div>
                 ))}
@@ -388,14 +500,14 @@ export default function ReportBuilderPage() {
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><GitBranch className="w-5 h-5" /></div>
                 <div>
-                  <h2 className="text-xl font-black">Diagram Plan</h2>
-                  <p className="text-sm text-slate-500">{approvedCount}/{project.diagrams.length} diagram approved.</p>
+                  <h2 className="text-xl font-black">Daftar Gambar & UML</h2>
+                  <p className="text-sm text-slate-500">{approvedCount}/{project.diagrams.length} diagram sudah dieksekusi dan approved.</p>
                 </div>
               </div>
 
               <div className="space-y-3">
                 {project.diagrams.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Klik rancang outline dulu. Diagram akan muncul otomatis kalau topiknya berbasis sistem/aplikasi.</div>
+                  <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Klik Brainstorm Outline & Daftar Gambar/UML dulu. Setelah itu sistem menampilkan gambar/diagram yang perlu dibuat sebelum masuk penulisan final.</div>
                 ) : project.diagrams.map((diagram) => (
                   <div key={diagram.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -412,7 +524,7 @@ export default function ReportBuilderPage() {
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${diagram.diagramData ? "bg-green-100 text-green-700" : "bg-white text-slate-400 border border-slate-200"}`}>
-                        {diagram.diagramData ? "diagram tersimpan" : "belum ada diagram"}
+                        {diagram.diagramData ? "hasil sudah tersimpan" : "belum dieksekusi"}
                       </span>
                       {diagram.approvedAt && <span className="text-[10px] font-bold text-slate-400">Approved {new Date(diagram.approvedAt).toLocaleDateString("id-ID")}</span>}
                     </div>
@@ -439,7 +551,7 @@ export default function ReportBuilderPage() {
           </div>
 
           {project.outline.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Outline belum dibuat. Isi setup proyek lalu klik Rancang Outline & Diagram.</div>
+            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Outline belum dibuat. Isi setup proyek dan sumber/konteks, lalu klik Brainstorm Outline & Daftar Gambar/UML.</div>
           ) : (
             <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
               {project.outline.map((section) => (
