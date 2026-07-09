@@ -73,7 +73,7 @@ export default function Home() {
             </div>
           </Link>
 
-          {/* Skripsi Build Card */}
+          {/* Report Builder Card */}
           <button
             onClick={handleSkripsiClick}
             className="group flex flex-col items-start text-left p-6 md:p-8 rounded-[2rem] bg-white/60 backdrop-blur-sm border border-slate-200 hover:border-amber-400 hover:shadow-2xl hover:shadow-amber-500/20 transition-all duration-500 relative overflow-hidden"
@@ -82,12 +82,12 @@ export default function Home() {
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-50 to-amber-100 text-amber-600 flex items-center justify-center mb-6 group-hover:scale-110 group-hover:rotate-3 transition-transform duration-500 shadow-sm">
               <FileText className="w-8 h-8" />
             </div>
-            <h2 className="text-xl md:text-2xl font-black mb-3 text-slate-900 group-hover:text-amber-700 transition-colors">Skripsi Build</h2>
+            <h2 className="text-xl md:text-2xl font-black mb-3 text-slate-900 group-hover:text-amber-700 transition-colors">Laporan Builder</h2>
             <p className="text-slate-500 text-sm md:text-base leading-relaxed mb-8 flex-1 font-medium group-hover:text-slate-600 transition-colors">
-              Masih sering bingung masalah format atau margin? Tools ini bantu rapikan format skripsimu sesuai standar kampus tanpa pusing.
+              Buat laprak, makalah, capstone, laporan proyek, atau skripsi dengan alur terstruktur, diagram, bahan mentah, dan checklist kualitas.
             </p>
             <div className="inline-flex items-center justify-center w-full py-3.5 rounded-xl bg-slate-50 text-amber-600 font-bold text-sm md:text-base group-hover:bg-amber-600 group-hover:text-white transition-all duration-300 shadow-sm border border-slate-100 group-hover:border-transparent">
-              Buka Fitur Skripsi <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+              Rancang Laporan <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
             </div>
           </button>
 
@@ -110,9 +110,9 @@ export default function Home() {
               </button>
             </div>
             
-            <h3 className="text-xl md:text-2xl font-black text-slate-900 mb-3 md:mb-4">Fitur Sedang Dikembangkan</h3>
+            <h3 className="text-xl md:text-2xl font-black text-slate-900 mb-3 md:mb-4">Laporan Builder Beta</h3>
             <p className="text-slate-500 text-base md:text-lg leading-relaxed mb-8 md:mb-10 font-medium">
-              Fitur Skripsi Build saat ini masih dalam tahap pengembangan. Apakah kamu tetap mau melanjutkan untuk mencoba versi beta?
+              Fitur ini sekarang mendukung rancangan laprak, makalah, capstone, laporan proyek, dan skripsi. Lanjut untuk menyusun struktur awal?
             </p>
             
             <div className="flex flex-col sm:flex-row gap-3 md:gap-4">

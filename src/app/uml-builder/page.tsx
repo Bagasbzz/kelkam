@@ -281,6 +281,25 @@ export default function UMLBuilder() {
     }
   }, []);
 
+  useEffect(() => {
+    const prefill = localStorage.getItem('uml-ai-prefill');
+    if (!prefill) return;
+
+    try {
+      const parsed = JSON.parse(prefill);
+      if (parsed.prompt) setAiPrompt(parsed.prompt);
+      if (parsed.diagramType && ['flowchart', 'usecase', 'activity'].includes(parsed.diagramType)) {
+        setDiagramType(parsed.diagramType);
+      }
+      setIsAiModalOpen(true);
+      setAiClarification('');
+      localStorage.removeItem('uml-ai-prefill');
+    } catch (error) {
+      console.error('Failed to load UML prefill:', error);
+      localStorage.removeItem('uml-ai-prefill');
+    }
+  }, []);
+
   const handleToggleActorSelection = useCallback((actorId: string) => {
     setSelectedActorIds(prev =>
       prev.includes(actorId) ? prev.filter(id => id !== actorId) : [...prev, actorId]
