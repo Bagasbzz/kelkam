@@ -28,6 +28,7 @@ import {
 
 type ProjectType = "capstone" | "course" | "practicum" | "paper" | "formal" | "thesis";
 type Formality = "ringkas" | "formal" | "akademik";
+type StartMode = "need_title" | "has_title" | "has_material";
 type SectionStatus = "draft" | "review" | "approved";
 type DiagramStatus = "planned" | "draft" | "approved";
 type SourceKind = "brief" | "guide" | "example" | "reference" | "code" | "note";
@@ -104,9 +105,11 @@ interface ReferenceResult {
 interface ReportDraft {
   content: string;
   generatedAt: string;
+  revisedAt?: string;
 }
 
 interface ReportProject {
+  startMode: StartMode;
   projectType: ProjectType;
   title: string;
   topic: string;
@@ -124,6 +127,8 @@ interface ReportProject {
   reportDraft?: ReportDraft;
 }
 
+type RevisionMode = "format" | "expand" | "citation" | "table" | "bibliography" | "diagram" | "custom";
+
 const STORAGE_KEY = "report_builder_project_v1";
 
 const projectTypeLabel: Record<ProjectType, string> = {
@@ -133,6 +138,22 @@ const projectTypeLabel: Record<ProjectType, string> = {
   paper: "Makalah Biasa",
   formal: "Laporan Projek Formal",
   thesis: "Skripsi / Proposal",
+};
+
+const startModeLabel: Record<StartMode, { title: string; helper: string }> = {
+  need_title: { title: "Saya belum punya judul", helper: "AI bantu cari judul dari topik, file, dan kebutuhan tugas." },
+  has_title: { title: "Saya sudah punya judul", helper: "Judul dipakai sebagai jangkar outline, tabel, UML, dan referensi." },
+  has_material: { title: "Saya punya bahan/file contoh", helper: "Mulai dari pedoman, laporan lama, atau ZIP project codingan." },
+};
+
+const revisionModeLabel: Record<RevisionMode, string> = {
+  format: "Rapikan format",
+  expand: "Tambah isi",
+  citation: "Tambah sitasi",
+  table: "Tambah tabel",
+  bibliography: "Rapikan daftar pustaka",
+  diagram: "Masukkan diagram",
+  custom: "Instruksi bebas",
 };
 
 const sourceKindLabel: Record<SourceKind, string> = {
@@ -154,6 +175,7 @@ const sourceKindHint: Record<SourceKind, string> = {
 };
 
 const defaultProject: ReportProject = {
+  startMode: "need_title",
   projectType: "formal",
   title: "",
   topic: "",
@@ -188,9 +210,65 @@ const loadingSteps = [
   "Merapikan draft final",
 ];
 
+const revisionSteps = [
+  "Membaca draft dan konteks",
+  "Mengecek instruksi revisi",
+  "Memperbaiki bagian terkait",
+  "Menjaga sitasi, tabel, dan placeholder gambar",
+  "Merapikan hasil revisi",
+];
+
+const sectionStatusLabel: Record<SectionStatus, string> = {
+  draft: "Perlu dicek",
+  review: "Sedang dicek",
+  approved: "Sudah oke",
+};
+
+const diagramStatusLabel: Record<DiagramStatus, string> = {
+  planned: "Belum dibuat",
+  draft: "Sedang dibuat",
+  approved: "Sudah oke",
+};
+
+const tableStatusLabel: Record<TablePlan["status"], string> = {
+  planned: "Belum dibuat",
+  draft: "Sedang dibuat",
+  done: "Sudah oke",
+};
+
 const getProjectContext = (project: ReportProject) => `${project.title} ${project.topic} ${project.course} ${project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ")}`;
 
 const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(getProjectContext(project));
+
+function plannerMessage(project: ReportProject, activeStep: BuilderStep) {
+  if (activeStep === "setup") {
+    if (project.startMode === "need_title") return "Mulai dari ide kasar dulu. Isi topik/kebutuhan dosen seadanya, lalu klik Brainstorm supaya sistem kasih pilihan judul, outline, tabel, UML, dan referensi awal.";
+    if (project.startMode === "has_material") return "Upload atau tempel bahan dulu di langkah Konteks. Bahan seperti contoh laporan, pedoman dosen, atau ZIP codingan akan jadi dasar rencana laporan.";
+    return "Isi judul sementara dan topik singkat. Setelah itu sistem bisa menurunkan struktur BAB, daftar gambar, tabel, dan query jurnal yang lebih pas.";
+  }
+
+  if (activeStep === "context") {
+    return project.sources.length > 0
+      ? `Sudah ada ${project.sources.length} sumber. Kalau sumber utama sudah masuk, lanjut Brainstorm supaya daftar BAB, diagram, tabel, dan referensi tersusun.`
+      : "Masukkan minimal satu bahan utama: brief tugas, pedoman PDF/DOCX, contoh laporan benar, ZIP project codingan, atau catatan revisi dosen.";
+  }
+
+  if (activeStep === "plan") {
+    return project.outline.length > 0
+      ? "Cek rencana dulu. Kalau judul, outline, tabel, dan referensi sudah masuk akal, lanjut eksekusi UML/gambar yang dibutuhkan."
+      : "Rencana belum ada. Jalankan Brainstorm dari konteks agar sistem menyusun daftar kerja sebelum generate laporan.";
+  }
+
+  if (activeStep === "execute") {
+    return project.diagrams.length > 0
+      ? `Ada ${project.diagrams.length} diagram/gambar yang direncanakan. Buat yang wajib dulu, approve, lalu masuk ke draft final.`
+      : "Untuk laporan non-sistem, diagram bisa kosong. Kalau butuh gambar khusus, tambahkan konteksnya lalu brainstorm ulang.";
+  }
+
+  return project.reportDraft?.content
+    ? "Draft sudah ada. Sekarang bisa copy, generate ulang, atau revisi bagian tertentu tanpa mengulang semua dari nol."
+    : "Generate laporan baru setelah sumber, outline, tabel, referensi, dan diagram yang wajib sudah siap.";
+}
 
 function buildTitleIdeas(project: ReportProject): string[] {
   const base = (project.title || project.topic || "Sistem Informasi").replace(/\s+/g, " ").trim();
@@ -328,7 +406,7 @@ function qualityChecks(project: ReportProject) {
     { label: "Daftar gambar & UML sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
     { label: "Tabel laporan sudah direncanakan", ok: project.tables.length > 0 },
     { label: "Query jurnal/referensi sudah disiapkan", ok: project.references.length > 0 },
-    { label: "Semua diagram penting sudah approved", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
+    { label: "Semua diagram penting sudah oke", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
     { label: "Draft laporan lengkap sudah dibuat", ok: Boolean(project.reportDraft?.content) },
     { label: "Gaya sitasi dipilih", ok: Boolean(project.citationStyle) },
   ];
@@ -346,6 +424,12 @@ export default function ReportBuilderPage() {
   const [generationLabel, setGenerationLabel] = useState("Menunggu perintah");
   const [reportError, setReportError] = useState("");
   const [searchingReferenceId, setSearchingReferenceId] = useState<string | null>(null);
+  const [revisionMode, setRevisionMode] = useState<RevisionMode>("format");
+  const [revisionInstruction, setRevisionInstruction] = useState("");
+  const [revisionTarget, setRevisionTarget] = useState("");
+  const [isRevisingReport, setIsRevisingReport] = useState(false);
+  const [revisionProgress, setRevisionProgress] = useState(0);
+  const [revisionLabel, setRevisionLabel] = useState("Menunggu instruksi revisi");
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -380,7 +464,26 @@ export default function ReportBuilderPage() {
     return () => window.clearInterval(timer);
   }, [isGeneratingReport]);
 
+  useEffect(() => {
+    if (!isRevisingReport) return;
+
+    setRevisionProgress(10);
+    setRevisionLabel(revisionSteps[0]);
+
+    const timer = window.setInterval(() => {
+      setRevisionProgress((prev) => {
+        const next = Math.min(prev + Math.max(3, Math.round((94 - prev) / 7)), 94);
+        const labelIndex = Math.min(Math.floor(next / 20), revisionSteps.length - 1);
+        setRevisionLabel(revisionSteps[labelIndex]);
+        return next;
+      });
+    }, 800);
+
+    return () => window.clearInterval(timer);
+  }, [isRevisingReport]);
+
   const checks = useMemo(() => qualityChecks(project), [project]);
+  const assistantMessage = useMemo(() => plannerMessage(project, activeStep), [project, activeStep]);
   const approvedCount = project.diagrams.filter((d) => d.status === "approved" && d.diagramData).length;
   const doneTableCount = project.tables.filter((table) => table.status === "done").length;
   const savedReferenceCount = project.references.filter((reference) => reference.status === "saved").length;
@@ -463,6 +566,58 @@ export default function ReportBuilderPage() {
       setReportError(error.message || "Gagal generate laporan lengkap.");
     } finally {
       window.setTimeout(() => setIsGeneratingReport(false), 500);
+    }
+  };
+
+  const reviseReport = async () => {
+    if (!project.reportDraft?.content) {
+      setReportError("Belum ada draft yang bisa direvisi. Generate laporan dulu atau tempel laporan lama sebagai konteks, lalu generate draft awal.");
+      return;
+    }
+
+    setIsRevisingReport(true);
+    setRevisionProgress(10);
+    setRevisionLabel(revisionSteps[0]);
+    setReportError("");
+
+    try {
+      const response = await fetch("/api/ai/revise-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          draft: project.reportDraft.content,
+          revisionMode,
+          targetSection: revisionTarget,
+          instruction: revisionInstruction,
+        }),
+      });
+
+      const rawResponse = await response.text();
+      let data: any = null;
+      try {
+        data = rawResponse ? JSON.parse(rawResponse) : null;
+      } catch {
+        const cleanText = rawResponse.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        throw new Error(cleanText || "Server mengembalikan respons revisi tidak valid.");
+      }
+
+      if (!response.ok || !data.success) throw new Error(data.error || "Gagal merevisi laporan.");
+
+      setProject((prev) => ({
+        ...prev,
+        reportDraft: {
+          content: data.data,
+          generatedAt: prev.reportDraft?.generatedAt || new Date().toISOString(),
+          revisedAt: new Date().toISOString(),
+        },
+      }));
+      setRevisionProgress(100);
+      setRevisionLabel("Revisi selesai dirapikan");
+    } catch (error: any) {
+      setReportError(error.message || "Gagal merevisi laporan.");
+    } finally {
+      window.setTimeout(() => setIsRevisingReport(false), 500);
     }
   };
 
@@ -674,6 +829,10 @@ export default function ReportBuilderPage() {
                 {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0 || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : "Generate laporan"}</button>}
               </div>
             </div>
+            <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+              <p className="mb-1 text-xs font-black uppercase tracking-widest text-blue-700">AI Planner</p>
+              <p className="text-sm font-semibold leading-relaxed text-slate-700">{assistantMessage}</p>
+            </div>
             {isGeneratingReport && (
               <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <div className="mb-2 flex items-center justify-between text-xs font-black text-blue-800">
@@ -710,6 +869,23 @@ export default function ReportBuilderPage() {
                   <h2 className="text-xl font-black">Setup Proyek</h2>
                   <p className="text-sm text-slate-500">Tentukan konteks dulu supaya output tidak generik.</p>
                 </div>
+              </div>
+
+              <div className="mb-5 grid gap-3 md:grid-cols-3">
+                {(Object.entries(startModeLabel) as [StartMode, { title: string; helper: string }][]).map(([value, item]) => {
+                  const active = project.startMode === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => updateProject("startMode", value)}
+                      className={`rounded-xl border px-4 py-3 text-left transition-colors ${active ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+                    >
+                      <p className="text-sm font-black">{item.title}</p>
+                      <p className="mt-1 text-xs font-semibold leading-relaxed opacity-80">{item.helper}</p>
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="grid md:grid-cols-2 gap-4">
@@ -868,7 +1044,7 @@ export default function ReportBuilderPage() {
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><GitBranch className="w-5 h-5" /></div>
                 <div>
                   <h2 className="text-xl font-black">Daftar Gambar & UML</h2>
-                  <p className="text-sm text-slate-500">{approvedCount}/{project.diagrams.length} diagram sudah dieksekusi dan approved.</p>
+                  <p className="text-sm text-slate-500">{approvedCount}/{project.diagrams.length} diagram sudah dibuat dan disetujui.</p>
                 </div>
               </div>
 
@@ -884,9 +1060,9 @@ export default function ReportBuilderPage() {
                         <p className="text-xs text-slate-500 mt-2 leading-relaxed">{diagram.purpose}</p>
                       </div>
                       <select value={diagram.status} onChange={(e) => setDiagramStatus(diagram.id, e.target.value as DiagramStatus)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
-                        <option value="planned">planned</option>
-                        <option value="draft">draft</option>
-                        <option value="approved" disabled={!diagram.diagramData}>approved</option>
+                        <option value="planned">Belum dibuat</option>
+                        <option value="draft">Sedang dibuat</option>
+                        <option value="approved" disabled={!diagram.diagramData}>Sudah oke</option>
                       </select>
                     </div>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -894,6 +1070,7 @@ export default function ReportBuilderPage() {
                         {diagram.diagramData ? "hasil sudah tersimpan" : "belum dieksekusi"}
                       </span>
                       {diagram.approvedAt && <span className="text-[10px] font-bold text-slate-400">Approved {new Date(diagram.approvedAt).toLocaleDateString("id-ID")}</span>}
+                      <span className="text-[10px] font-bold text-slate-400">{diagramStatusLabel[diagram.status]}</span>
                     </div>
                     <button onClick={() => sendToUmlBuilder(diagram)} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700 transition-colors">
                       <Workflow className="w-4 h-4" /> {diagram.diagramData ? "Edit di UML Builder" : "Buat di UML Builder"}
@@ -925,7 +1102,7 @@ export default function ReportBuilderPage() {
                 <div key={section.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <h3 className="font-black text-slate-900 leading-snug">{section.title}</h3>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{section.status}</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{sectionStatusLabel[section.status]}</span>
                   </div>
                   <p className="text-sm text-slate-500 leading-relaxed">{section.purpose}</p>
                   {section.requiredDiagrams.length > 0 && (
@@ -960,11 +1137,12 @@ export default function ReportBuilderPage() {
                       <div>
                         <p className="font-black text-slate-900">{table.title}</p>
                         <p className="text-xs text-slate-500 mt-1">{table.purpose}</p>
+                        <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-cyan-600">{tableStatusLabel[table.status]}</p>
                       </div>
                       <select value={table.status} onChange={(e) => setProject((prev) => ({ ...prev, tables: prev.tables.map((item) => item.id === table.id ? { ...item, status: e.target.value as TablePlan["status"] } : item) }))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
-                        <option value="planned">planned</option>
-                        <option value="draft">draft</option>
-                        <option value="done">done</option>
+                        <option value="planned">Belum dibuat</option>
+                        <option value="draft">Sedang dibuat</option>
+                        <option value="done">Sudah oke</option>
                       </select>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
@@ -1045,12 +1223,53 @@ export default function ReportBuilderPage() {
           {!project.reportDraft ? (
             <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Belum ada draft lengkap. Jalankan brainstorm, lengkapi konteks penting, lalu klik Generate Laporan Lengkap.</div>
           ) : (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <p className="text-xs font-black uppercase tracking-widest text-slate-400">Generated {new Date(project.reportDraft.generatedAt).toLocaleString("id-ID")}</p>
-                <button onClick={() => navigator.clipboard.writeText(project.reportDraft?.content || "")} className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 border border-slate-200 hover:border-blue-300">Copy Draft</button>
+            <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="mb-3 text-xs font-black uppercase tracking-widest text-slate-400">Revisi cepat</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {(Object.entries(revisionModeLabel) as [RevisionMode, string][]).map(([value, label]) => {
+                    const active = revisionMode === value;
+                    return (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setRevisionMode(value)}
+                        className={`rounded-lg border px-3 py-2 text-left text-xs font-black transition-colors ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <input value={revisionTarget} onChange={(e) => setRevisionTarget(e.target.value)} placeholder="Target bagian, contoh: BAB 1 / Landasan Teori / Daftar Pustaka" className="mt-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-slate-500" />
+                <textarea value={revisionInstruction} onChange={(e) => setRevisionInstruction(e.target.value)} placeholder="Instruksi tambahan. Contoh: tambahkan 2 paragraf latar belakang, pakai sitasi dari referensi tersimpan, buat tabel kebutuhan fungsional, atau masukkan Activity Diagram Login ke BAB 3." className="mt-3 min-h-28 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-slate-500" />
+                <button onClick={reviseReport} disabled={isRevisingReport} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-50">
+                  {isRevisingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <PenLine className="w-4 h-4" />} Terapkan Revisi
+                </button>
+                {isRevisingReport && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+                    <div className="mb-2 flex items-center justify-between text-xs font-black text-slate-700">
+                      <span>{revisionLabel}</span>
+                      <span>{revisionProgress}%</span>
+                    </div>
+                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-gradient-to-r from-slate-900 via-blue-500 to-emerald-500 transition-all duration-700" style={{ width: `${revisionProgress}%` }} />
+                    </div>
+                  </div>
+                )}
+                <p className="mt-3 text-xs leading-relaxed text-slate-500">Revisi memakai draft sekarang, outline, daftar tabel, referensi tersimpan, dan konteks proyek. Jadi user bisa rapihin laporan lama tanpa generate ulang total.</p>
               </div>
-              <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg bg-white p-4 text-sm leading-relaxed text-slate-700 border border-slate-100">{project.reportDraft.content}</pre>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-slate-400">Generated {new Date(project.reportDraft.generatedAt).toLocaleString("id-ID")}</p>
+                    {project.reportDraft.revisedAt && <p className="mt-1 text-xs font-bold text-green-600">Revisi terakhir {new Date(project.reportDraft.revisedAt).toLocaleString("id-ID")}</p>}
+                  </div>
+                  <button onClick={() => navigator.clipboard.writeText(project.reportDraft?.content || "")} className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 border border-slate-200 hover:border-blue-300">Copy Draft</button>
+                </div>
+                <pre className="max-h-[560px] overflow-auto whitespace-pre-wrap rounded-lg bg-white p-4 text-sm leading-relaxed text-slate-700 border border-slate-100">{project.reportDraft.content}</pre>
+              </div>
             </div>
           )}
         </section>
