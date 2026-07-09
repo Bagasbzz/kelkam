@@ -16,7 +16,7 @@ export async function POST(req: Request) {
     const validationError = validateProject(project);
     if (validationError) return NextResponse.json({ success: false, error: validationError }, { status: 400 });
 
-    const job = startReportJob(project);
+    const job = await startReportJob(project);
     return NextResponse.json({ success: true, job });
   } catch (error: any) {
     return NextResponse.json(

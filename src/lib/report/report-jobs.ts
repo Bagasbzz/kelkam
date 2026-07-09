@@ -1,3 +1,4 @@
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { generateReportDraft } from "@/lib/report/generate-report";
 
 export type ReportJobStatus = "queued" | "running" | "done" | "failed";
@@ -14,6 +15,19 @@ export interface ReportJob {
   error?: string;
 }
 
+type ReportJobRow = {
+  id: string;
+  status: ReportJobStatus;
+  progress: number;
+  stage: string;
+  created_at: string;
+  updated_at: string;
+  result: string | null;
+  source: string | null;
+  error: string | null;
+  project?: any;
+};
+
 const globalForJobs = globalThis as typeof globalThis & { __reportJobs?: Map<string, ReportJob> };
 const jobs = globalForJobs.__reportJobs || new Map<string, ReportJob>();
 globalForJobs.__reportJobs = jobs;
@@ -27,18 +41,89 @@ const stages = [
   { progress: 92, stage: "Merapikan hasil akhir" },
 ];
 
-function patchJob(id: string, patch: Partial<ReportJob>) {
-  const current = jobs.get(id);
-  if (!current) return;
-  jobs.set(id, { ...current, ...patch, updatedAt: new Date().toISOString() });
+function getSupabaseAdmin(): SupabaseClient | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+
+  if (!url || !key) return null;
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
 }
 
-export function getReportJob(id: string) {
+function fromRow(row: ReportJobRow): ReportJob {
+  return {
+    id: row.id,
+    status: row.status,
+    progress: row.progress,
+    stage: row.stage,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    result: row.result || undefined,
+    source: row.source || undefined,
+    error: row.error || undefined,
+  };
+}
+
+function toRowPatch(patch: Partial<ReportJob>) {
+  return {
+    status: patch.status,
+    progress: patch.progress,
+    stage: patch.stage,
+    updated_at: new Date().toISOString(),
+    result: patch.result,
+    source: patch.source,
+    error: patch.error,
+  };
+}
+
+async function saveJob(job: ReportJob, project?: any) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return;
+
+  const { error } = await supabase.from("report_jobs").upsert({
+    id: job.id,
+    status: job.status,
+    progress: job.progress,
+    stage: job.stage,
+    created_at: job.createdAt,
+    updated_at: job.updatedAt,
+    result: job.result || null,
+    source: job.source || null,
+    error: job.error || null,
+    project: project || null,
+  });
+
+  if (error) console.warn("Supabase report_jobs upsert skipped:", error.message);
+}
+
+async function patchJob(id: string, patch: Partial<ReportJob>) {
+  const current = jobs.get(id);
+  const updatedAt = new Date().toISOString();
+
+  if (current) jobs.set(id, { ...current, ...patch, updatedAt });
+
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return;
+
+  const { error } = await supabase.from("report_jobs").update(toRowPatch(patch)).eq("id", id);
+  if (error) console.warn("Supabase report_jobs update skipped:", error.message);
+}
+
+export async function getReportJob(id: string) {
+  const supabase = getSupabaseAdmin();
+  if (supabase) {
+    const { data, error } = await supabase.from("report_jobs").select("*").eq("id", id).maybeSingle<ReportJobRow>();
+    if (data) return fromRow(data);
+    if (error) console.warn("Supabase report_jobs read skipped:", error.message);
+  }
+
   return jobs.get(id) || null;
 }
 
-export function startReportJob(project: any) {
-  const id = `report_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export async function startReportJob(project: any) {
+  const id = `report_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   const job: ReportJob = {
     id,
@@ -49,6 +134,7 @@ export function startReportJob(project: any) {
     updatedAt: now,
   };
   jobs.set(id, job);
+  await saveJob(job, project);
 
   void runReportJob(id, project);
   return job;
@@ -56,19 +142,19 @@ export function startReportJob(project: any) {
 
 async function runReportJob(id: string, project: any) {
   try {
-    patchJob(id, { status: "running", progress: stages[0].progress, stage: stages[0].stage });
+    await patchJob(id, { status: "running", progress: stages[0].progress, stage: stages[0].stage });
 
     for (const item of stages.slice(1, 4)) {
       await new Promise((resolve) => setTimeout(resolve, 350));
-      patchJob(id, { progress: item.progress, stage: item.stage });
+      await patchJob(id, { progress: item.progress, stage: item.stage });
     }
 
-    patchJob(id, { progress: stages[4].progress, stage: stages[4].stage });
+    await patchJob(id, { progress: stages[4].progress, stage: stages[4].stage });
     const draft = await generateReportDraft(project);
-    patchJob(id, { progress: stages[5].progress, stage: stages[5].stage });
+    await patchJob(id, { progress: stages[5].progress, stage: stages[5].stage });
 
     await new Promise((resolve) => setTimeout(resolve, 250));
-    patchJob(id, {
+    await patchJob(id, {
       status: "done",
       progress: 100,
       stage: draft.source === "fallback-timeout" ? "Draft cepat selesai, siap direvisi/diperpanjang" : "Laporan selesai disusun",
@@ -76,7 +162,7 @@ async function runReportJob(id: string, project: any) {
       source: draft.source,
     });
   } catch (error: any) {
-    patchJob(id, {
+    await patchJob(id, {
       status: "failed",
       progress: 100,
       stage: "Generate laporan gagal",

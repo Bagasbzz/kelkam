@@ -5,7 +5,7 @@ export const maxDuration = 10;
 
 export async function GET(_req: Request, { params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = await params;
-  const job = getReportJob(jobId);
+  const job = await getReportJob(jobId);
 
   if (!job) {
     return NextResponse.json(
