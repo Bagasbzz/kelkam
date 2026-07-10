@@ -193,6 +193,7 @@ const defaultProject: ReportProject = {
 };
 
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+const createDefaultProject = (): ReportProject => ({ ...defaultProject, sources: [], outline: [], diagrams: [], tables: [], references: [], titleIdeas: [] });
 
 const builderSteps: { id: BuilderStep; label: string; helper: string }[] = [
   { id: "setup", label: "Setup", helper: "Judul, jenis laporan, format" },
@@ -443,9 +444,9 @@ export default function ReportBuilderPage() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        setProject({ ...defaultProject, ...JSON.parse(saved) });
+        setProject({ ...createDefaultProject(), ...JSON.parse(saved) });
       } catch {
-        setProject(defaultProject);
+        setProject(createDefaultProject());
       }
     }
   }, []);
@@ -498,6 +499,26 @@ export default function ReportBuilderPage() {
 
   const updateProject = <K extends keyof ReportProject>(key: K, value: ReportProject[K]) => {
     setProject((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const resetProject = () => {
+    if (isGeneratingReport || isRevisingReport) return;
+    const ok = window.confirm("Reset proyek dan mulai dari awal? Judul, konteks, rencana, UML, tabel, referensi, dan draft lokal akan dibersihkan.");
+    if (!ok) return;
+
+    const freshProject = createDefaultProject();
+    setProject(freshProject);
+    setSourceDraft({ kind: "brief", title: "", content: "" });
+    setActiveStep("setup");
+    setReportError("");
+    setSourceError("");
+    setRevisionInstruction("");
+    setRevisionTarget("");
+    setGenerationProgress(0);
+    setGenerationLabel("Menunggu perintah");
+    setRevisionProgress(0);
+    setRevisionLabel("Menunggu instruksi revisi");
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(freshProject));
   };
 
   const generatePlan = () => {
@@ -815,6 +836,14 @@ export default function ReportBuilderPage() {
               <h2 className="text-xl font-black text-slate-900">Alur Terpadu Laporan</h2>
               <p className="text-sm text-slate-600 mt-1">Ikuti langkah dari kiri ke kanan. Panel di bawah cuma menampilkan langkah yang sedang aktif.</p>
             </div>
+            <button
+              type="button"
+              onClick={resetProject}
+              disabled={isGeneratingReport || isRevisingReport}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-black text-red-600 transition-colors hover:border-red-200 hover:bg-red-50 disabled:opacity-40"
+            >
+              <Trash2 className="w-4 h-4" /> Reset proyek
+            </button>
           </div>
 
           <div className="mt-5 grid gap-2 md:grid-cols-5">
