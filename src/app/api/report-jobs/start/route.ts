@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { startReportJob } from "@/lib/report/report-jobs";
 
-export const maxDuration = 10;
+export const maxDuration = 60;
 
 function validateProject(project: any) {
   if (!project?.title && !project?.topic) return "Judul atau topik belum diisi.";

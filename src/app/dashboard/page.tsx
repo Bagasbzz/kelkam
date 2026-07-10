@@ -561,7 +561,7 @@ export default function ReportBuilderPage() {
       setGenerationLabel(startData.job.stage || "Job laporan dimulai");
 
       let finalJob: any = null;
-      for (let attempt = 0; attempt < 120; attempt += 1) {
+      for (let attempt = 0; attempt < 1800; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1200));
         const statusResponse = await fetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
         const statusData = await statusResponse.json().catch(() => null);
@@ -580,7 +580,7 @@ export default function ReportBuilderPage() {
         }
       }
 
-      if (!finalJob) throw new Error("Generate laporan terlalu lama. Coba cek lagi beberapa saat atau ulangi job.");
+      if (!finalJob) throw new Error("Generate masih berjalan lebih dari 36 menit. Cek ulang beberapa saat lagi atau mulai ulang job kalau progres benar-benar berhenti.");
       if (finalJob.status === "failed") throw new Error(finalJob.error || "Generate laporan gagal.");
 
       setProject((prev) => ({

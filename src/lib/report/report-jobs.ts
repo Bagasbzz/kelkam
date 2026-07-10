@@ -28,9 +28,19 @@ type ReportJobRow = {
   project?: any;
 };
 
-const globalForJobs = globalThis as typeof globalThis & { __reportJobs?: Map<string, ReportJob> };
+const globalForJobs = globalThis as typeof globalThis & {
+  __reportJobs?: Map<string, ReportJob>;
+  __reportJobProjects?: Map<string, any>;
+  __reportJobRunners?: Set<string>;
+};
 const jobs = globalForJobs.__reportJobs || new Map<string, ReportJob>();
+const jobProjects = globalForJobs.__reportJobProjects || new Map<string, any>();
+const jobRunners = globalForJobs.__reportJobRunners || new Set<string>();
 globalForJobs.__reportJobs = jobs;
+globalForJobs.__reportJobProjects = jobProjects;
+globalForJobs.__reportJobRunners = jobRunners;
+
+const STALE_JOB_MS = 20_000;
 
 const stages = [
   { progress: 8, stage: "Menyiapkan job laporan" },
@@ -78,6 +88,15 @@ function toRowPatch(patch: Partial<ReportJob>) {
   };
 }
 
+async function readJobRow(id: string) {
+  const supabase = getSupabaseAdmin();
+  if (!supabase) return null;
+
+  const { data, error } = await supabase.from("report_jobs").select("*").eq("id", id).maybeSingle<ReportJobRow>();
+  if (error) console.warn("Supabase report_jobs read skipped:", error.message);
+  return data || null;
+}
+
 async function saveJob(job: ReportJob, project?: any) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return;
@@ -112,14 +131,25 @@ async function patchJob(id: string, patch: Partial<ReportJob>) {
 }
 
 export async function getReportJob(id: string) {
-  const supabase = getSupabaseAdmin();
-  if (supabase) {
-    const { data, error } = await supabase.from("report_jobs").select("*").eq("id", id).maybeSingle<ReportJobRow>();
-    if (data) return fromRow(data);
-    if (error) console.warn("Supabase report_jobs read skipped:", error.message);
-  }
-
+  const row = await readJobRow(id);
+  if (row) return fromRow(row);
   return jobs.get(id) || null;
+}
+
+export async function ensureReportJobRunning(id: string) {
+  const row = await readJobRow(id);
+  const job = row ? fromRow(row) : jobs.get(id) || null;
+  if (!job || job.status === "done" || job.status === "failed") return job;
+  if (jobRunners.has(id)) return job;
+
+  const project = row?.project || jobProjects.get(id);
+  const stale = Date.now() - new Date(job.updatedAt).getTime() > STALE_JOB_MS;
+  const shouldResume = job.status === "queued" || stale;
+
+  if (!project || !shouldResume) return job;
+
+  await runReportJob(id, project);
+  return getReportJob(id);
 }
 
 export async function startReportJob(project: any) {
@@ -134,6 +164,7 @@ export async function startReportJob(project: any) {
     updatedAt: now,
   };
   jobs.set(id, job);
+  jobProjects.set(id, project);
   await saveJob(job, project);
 
   void runReportJob(id, project);
@@ -141,7 +172,11 @@ export async function startReportJob(project: any) {
 }
 
 async function runReportJob(id: string, project: any) {
+  if (jobRunners.has(id)) return;
+  jobRunners.add(id);
+
   try {
+    jobProjects.set(id, project);
     await patchJob(id, { status: "running", progress: stages[0].progress, stage: stages[0].stage });
 
     for (const item of stages.slice(1, 4)) {
@@ -168,5 +203,7 @@ async function runReportJob(id: string, project: any) {
       stage: "Generate laporan gagal",
       error: error.message || "Gagal membuat laporan.",
     });
+  } finally {
+    jobRunners.delete(id);
   }
 }
