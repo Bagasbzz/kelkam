@@ -1,4 +1,4 @@
-export interface ProviderPaper {
+﻿export interface ProviderPaper {
   id: string;
   title: string;
   authors?: string[];
@@ -11,6 +11,9 @@ export interface ProviderPaper {
   citationCount?: number | null;
   isOpenAccess?: boolean;
   source?: string;
+  sourceProviders?: string[];
+  pdfStatus?: "verified" | "landing_page" | "closed" | "broken" | "unknown";
+  doiVerified?: boolean;
   raw?: any;
 }
 

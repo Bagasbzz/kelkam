@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import ResearchChat from "@/components/ResearchChat";
 import ProjectBrief from "@/components/ProjectBrief";
 import ReferenceLibrary from "@/components/ReferenceLibrary";
+import EvidenceMatrix from "@/components/EvidenceMatrix";
 import Auth from "@/components/Auth";
 import type { ResearchBrief } from "@/lib/types/research-project";
 
@@ -30,12 +31,13 @@ export default function NewResearchPage() {
       <h1 className="text-2xl font-bold mb-4">Buat Proyek Riset Baru</h1>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2">
+        <div className="xl:col-span-2 space-y-6">
           <ResearchChat
             projectId={projectId}
             brief={brief}
             onUpdateBrief={(patch) => setBrief((prev) => ({ ...prev, ...patch }))}
           />
+          <EvidenceMatrix />
         </div>
 
         <div className="xl:col-span-1">

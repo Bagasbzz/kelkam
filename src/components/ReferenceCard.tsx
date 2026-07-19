@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState } from "react";
 import { supabase } from "@/lib/supabase-browser";
@@ -13,9 +13,12 @@ export interface ReferenceItem {
   url?: string | null;
   pdfUrl?: string | null;
   doi?: string | null;
+  doiVerified?: boolean;
+  pdfStatus?: "verified" | "landing_page" | "closed" | "broken" | "unknown";
   citationCount?: number;
   isOpenAccess?: boolean;
   source?: string | null;
+  sourceProviders?: string[];
   citationApa?: string | null;
 }
 
@@ -68,10 +71,11 @@ export default function ReferenceCard({
       const j = await resp.json().catch(() => ({ success: false }));
       if (j?.success) {
         setExtractStatus("Ekstraksi selesai");
+        window.dispatchEvent(new Event("referenceEvidenceUpdated"));
       } else {
         setExtractStatus("Gagal: " + (j?.error || "Unknown"));
       }
-    } catch (e: any) {
+    } catch {
       setExtractStatus("Network error");
     } finally {
       setExtracting(false);
@@ -79,9 +83,13 @@ export default function ReferenceCard({
     }
   }
 
+  const providerLabel = Array.isArray(paper.sourceProviders) && paper.sourceProviders.length
+    ? paper.sourceProviders.join(", ")
+    : paper.source || "";
+
   return (
     <div className="border rounded-lg p-4 bg-white shadow-sm">
-      <div className="flex justify-between items-start">
+      <div className="flex justify-between items-start gap-4">
         <div>
           <h3 className="text-sm font-bold mb-1">{paper.title}</h3>
           <div className="text-xs text-slate-500 mb-2">
@@ -89,12 +97,21 @@ export default function ReferenceCard({
             {paper.venue ? ` • ${paper.venue}` : ""}
           </div>
         </div>
-        <div className="text-xs text-slate-400">{paper.source || ""}</div>
+        <div className="text-right text-[11px] text-slate-400">
+          <div>{providerLabel}</div>
+          <div>{paper.citationCount ? `${paper.citationCount} sitasi` : "Sitasi n/a"}</div>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-2 text-[11px] font-semibold">
+        {paper.doi && <span className={`rounded-full px-2 py-1 ${paper.doiVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{paper.doiVerified ? "DOI tervalidasi" : "DOI belum tervalidasi"}</span>}
+        <span className={`rounded-full px-2 py-1 ${paper.pdfStatus === "verified" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>PDF {paper.pdfStatus || "unknown"}</span>
+        {paper.isOpenAccess ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Open access</span> : <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">Akses belum pasti</span>}
       </div>
 
       <div className="text-xs text-slate-600 mb-3" style={{ maxHeight: 96, overflow: "hidden" }}>
         {paper.abstract ? String(paper.abstract).slice(0, 600) : "Abstrak tidak tersedia."}
-        {paper.abstract && paper.abstract.length > 600 ? "…" : ""}
+        {paper.abstract && paper.abstract.length > 600 ? "..." : ""}
       </div>
 
       <div className="flex items-center justify-between gap-3">
