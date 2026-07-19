@@ -1,10 +1,12 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useState } from "react";
 import ResearchChat from "@/components/ResearchChat";
 import ProjectBrief from "@/components/ProjectBrief";
 import ReferenceLibrary from "@/components/ReferenceLibrary";
 import EvidenceMatrix from "@/components/EvidenceMatrix";
+import NoveltyWorkbench from "@/components/NoveltyWorkbench";
+import OutlineWorkbench from "@/components/OutlineWorkbench";
 import Auth from "@/components/Auth";
 import type { ResearchBrief } from "@/lib/types/research-project";
 
@@ -38,6 +40,8 @@ export default function NewResearchPage() {
             onUpdateBrief={(patch) => setBrief((prev) => ({ ...prev, ...patch }))}
           />
           <EvidenceMatrix />
+          <NoveltyWorkbench brief={brief} />
+          <OutlineWorkbench brief={brief} />
         </div>
 
         <div className="xl:col-span-1">
