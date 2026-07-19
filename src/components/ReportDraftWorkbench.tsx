@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
@@ -39,6 +39,17 @@ interface ReportJob {
   error?: string;
 }
 
+interface SectionActionDetail {
+  action: "expand" | "citation" | "table";
+  section: {
+    id: string;
+    title: string;
+    purpose?: string;
+    targetWords?: number;
+    referenceIds?: string[];
+  };
+}
+
 type RevisionMode = "format" | "expand" | "citation" | "table" | "bibliography" | "diagram" | "custom";
 
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
@@ -68,6 +79,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionProgress, setRevisionProgress] = useState(0);
   const [revisionStage, setRevisionStage] = useState("Menunggu instruksi revisi");
+  const [activeSectionRefs, setActiveSectionRefs] = useState<ReferenceItem[]>([]);
 
   const projectId = useMemo(() => {
     try {
@@ -82,22 +94,44 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const noveltyKey = `research_novelty_${projectId}`;
   const referencesKey = "reference_search_results";
 
+  const buildSectionReferences = (referenceIds: string[] = [], refsOverride?: ReferenceItem[]) => {
+    const pool = refsOverride || references;
+    const seen = new Set(referenceIds);
+    return pool.filter((ref) => seen.has(ref.id)).slice(0, 6);
+  };
+
   const loadLocalState = () => {
     try {
-      const outlineRaw = localStorage.getItem(outlineKey);
-      if (outlineRaw) {
-        const parsed = JSON.parse(outlineRaw);
-        setOutline({
+      const nextOutlineRaw = localStorage.getItem(outlineKey);
+      const nextNoveltyRaw = localStorage.getItem(noveltyKey);
+      const nextRefsRaw = localStorage.getItem(referencesKey);
+      const nextDraftRaw = localStorage.getItem(draftKey);
+
+      const nextRefs = nextRefsRaw ? JSON.parse(nextRefsRaw) : [];
+      const normalizedRefs = Array.isArray(nextRefs) ? nextRefs : [];
+      setReferences(normalizedRefs);
+
+      if (nextOutlineRaw) {
+        const parsed = JSON.parse(nextOutlineRaw);
+        const nextOutline = {
           sections: Array.isArray(parsed?.sections) ? parsed.sections : [],
           citationMap: parsed?.citationMap && typeof parsed.citationMap === "object" ? parsed.citationMap : {},
-        });
+        };
+        setOutline(nextOutline);
+
+        if (revisionTarget) {
+          const matchedSection = nextOutline.sections.find((section: ReportSectionBrief) => section.title === revisionTarget);
+          if (matchedSection) {
+            const referenceIds = nextOutline.citationMap?.[matchedSection.id] || matchedSection.allowedReferenceIds || [];
+            setActiveSectionRefs(buildSectionReferences(referenceIds as string[], normalizedRefs));
+          }
+        }
       } else {
         setOutline({ sections: [], citationMap: {} });
       }
 
-      const noveltyRaw = localStorage.getItem(noveltyKey);
-      if (noveltyRaw) {
-        const parsed = JSON.parse(noveltyRaw);
+      if (nextNoveltyRaw) {
+        const parsed = JSON.parse(nextNoveltyRaw);
         const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
         const selected = candidates.find((item: NoveltyCandidate) => item.id === parsed?.selectedId) || candidates[0] || null;
         setNovelty(selected);
@@ -105,17 +139,8 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
         setNovelty(null);
       }
 
-      const refsRaw = localStorage.getItem(referencesKey);
-      if (refsRaw) {
-        const parsed = JSON.parse(refsRaw);
-        setReferences(Array.isArray(parsed) ? parsed : []);
-      } else {
-        setReferences([]);
-      }
-
-      const draftRaw = localStorage.getItem(draftKey);
-      if (draftRaw) {
-        const parsed = JSON.parse(draftRaw);
+      if (nextDraftRaw) {
+        const parsed = JSON.parse(nextDraftRaw);
         setDraft(typeof parsed?.content === "string" ? parsed.content : "");
       } else {
         setDraft("");
@@ -129,18 +154,49 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     loadLocalState();
 
     const refresh = () => loadLocalState();
+    const handleSectionAction = (event: Event) => {
+      const detail = (event as CustomEvent<SectionActionDetail>).detail;
+      if (!detail?.section?.title) return;
+
+      const modeMap: Record<SectionActionDetail["action"], RevisionMode> = {
+        expand: "expand",
+        citation: "citation",
+        table: "table",
+      };
+      setRevisionMode(modeMap[detail.action]);
+      setRevisionTarget(detail.section.title);
+
+      const refs = buildSectionReferences(detail.section.referenceIds || []);
+      setActiveSectionRefs(refs);
+
+      const referenceHint = refs.length > 0
+        ? `Gunakan referensi ini bila relevan: ${refs.map((ref) => ref.title).join("; ")}.`
+        : "Jika belum cukup referensi, beri placeholder kebutuhan sitasi yang jelas.";
+
+      const baseInstruction = detail.action === "expand"
+        ? `Perpanjang bagian ${detail.section.title} agar lebih detail, tetap konsisten dengan tujuan section, dan jaga alur antar paragraf. ${referenceHint}`
+        : detail.action === "citation"
+          ? `Tambahkan sitasi yang cocok pada bagian ${detail.section.title}. Jangan mengarang sumber baru. ${referenceHint}`
+          : `Tambahkan tabel markdown yang paling relevan untuk bagian ${detail.section.title}, lengkap dengan judul tabel yang jelas. ${referenceHint}`;
+
+      setRevisionInstruction(baseInstruction);
+      setFeedback(`Target revisi diatur ke ${detail.section.title}. Tinggal klik "Revisi Draft".`);
+    };
+
     window.addEventListener("researchOutlineUpdated", refresh);
     window.addEventListener("researchNoveltyUpdated", refresh);
     window.addEventListener("referenceResultsUpdated", refresh);
     window.addEventListener("researchProjectChanged", refresh);
+    window.addEventListener("researchSectionActionRequested", handleSectionAction as EventListener);
 
     return () => {
       window.removeEventListener("researchOutlineUpdated", refresh);
       window.removeEventListener("researchNoveltyUpdated", refresh);
       window.removeEventListener("referenceResultsUpdated", refresh);
       window.removeEventListener("researchProjectChanged", refresh);
+      window.removeEventListener("researchSectionActionRequested", handleSectionAction as EventListener);
     };
-  }, [projectId]);
+  }, [projectId, references, revisionTarget]);
 
   useEffect(() => {
     if (!draft) return;
@@ -368,6 +424,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       setRevisionTarget("");
       setRevisionProgress(0);
       setRevisionStage("Menunggu instruksi revisi");
+      setActiveSectionRefs([]);
     } catch {
       setError("Gagal mereset konteks lokal.");
     }
@@ -471,18 +528,26 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <div className="mt-2 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() => setRevisionTarget("")}
+                onClick={() => {
+                  setRevisionTarget("");
+                  setActiveSectionRefs([]);
+                }}
                 className={`rounded-full px-3 py-2 text-xs font-semibold ${revisionTarget === "" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"}`}
               >
                 Seluruh draft
               </button>
               {outline.sections.map((section) => {
                 const active = revisionTarget === section.title;
+                const referenceIds = (outline.citationMap?.[section.id] || section.allowedReferenceIds || []) as string[];
+                const refs = buildSectionReferences(referenceIds);
                 return (
                   <button
                     key={section.id}
                     type="button"
-                    onClick={() => setRevisionTarget(section.title)}
+                    onClick={() => {
+                      setRevisionTarget(section.title);
+                      setActiveSectionRefs(refs);
+                    }}
                     className={`rounded-full px-3 py-2 text-xs font-semibold ${active ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"}`}
                   >
                     {section.title}
@@ -490,6 +555,20 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
                 );
               })}
             </div>
+
+            {revisionTarget && (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Referensi untuk bagian ini</div>
+                <div className="mt-2 space-y-2">
+                  {activeSectionRefs.length > 0 ? activeSectionRefs.map((ref) => (
+                    <div key={ref.id} className="rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-700">
+                      <div className="font-semibold text-slate-900">{ref.title}</div>
+                      <div className="mt-1 text-slate-500">{[ref.authors?.[0], ref.year, ref.venue].filter(Boolean).join(" | ") || ref.id}</div>
+                    </div>
+                  )) : <div className="text-xs text-slate-400">Belum ada mapping referensi spesifik untuk bagian ini.</div>}
+                </div>
+              </div>
+            )}
           </div>
 
           <div>

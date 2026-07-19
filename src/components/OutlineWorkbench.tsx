@@ -95,6 +95,23 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
     }));
   };
 
+  const dispatchSectionAction = (section: ReportSectionBrief, action: "expand" | "citation" | "table") => {
+    const sectionRefs = citationMap[section.id] || section.allowedReferenceIds || [];
+    window.dispatchEvent(new CustomEvent("researchSectionActionRequested", {
+      detail: {
+        projectId,
+        action,
+        section: {
+          id: section.id,
+          title: section.title,
+          purpose: section.purpose,
+          targetWords: section.targetWords,
+          referenceIds: sectionRefs,
+        },
+      },
+    }));
+  };
+
   const generateOutline = async () => {
     setLoading(true);
     setError(null);
@@ -180,6 +197,12 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
                     <span key={`${section.id}-${refId}`} className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{refId}</span>
                   )) : <span className="text-xs text-slate-400">Belum ada mapping referensi.</span>}
                 </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button onClick={() => dispatchSectionAction(section, "expand")} className="rounded-full bg-slate-900 px-3 py-2 text-xs font-semibold text-white">Kembangkan bagian ini</button>
+                <button onClick={() => dispatchSectionAction(section, "citation")} className="rounded-full border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Tambah sitasi bagian ini</button>
+                <button onClick={() => dispatchSectionAction(section, "table")} className="rounded-full border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">Tambah tabel terkait</button>
               </div>
             </div>
           );
