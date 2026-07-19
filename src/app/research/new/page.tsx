@@ -7,6 +7,7 @@ import ReferenceLibrary from "@/components/ReferenceLibrary";
 import EvidenceMatrix from "@/components/EvidenceMatrix";
 import NoveltyWorkbench from "@/components/NoveltyWorkbench";
 import OutlineWorkbench from "@/components/OutlineWorkbench";
+import ReportDraftWorkbench from "@/components/ReportDraftWorkbench";
 import Auth from "@/components/Auth";
 import type { ResearchBrief } from "@/lib/types/research-project";
 
@@ -42,6 +43,7 @@ export default function NewResearchPage() {
           <EvidenceMatrix />
           <NoveltyWorkbench brief={brief} />
           <OutlineWorkbench brief={brief} />
+          <ReportDraftWorkbench brief={brief} />
         </div>
 
         <div className="xl:col-span-1">
