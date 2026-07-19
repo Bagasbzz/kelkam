@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState } from 'react';
 import { Upload, File, X, CheckCircle2 } from 'lucide-react';
@@ -8,9 +8,19 @@ import Link from 'next/link';
 
 interface FileUploadProps {
   onSuccess?: (content: any) => void;
+  endpoint?: string;
+  ctaLabel?: string;
+  successTitle?: string;
+  successDescription?: string;
 }
 
-export default function FileUpload({ onSuccess }: FileUploadProps) {
+export default function FileUpload({
+  onSuccess,
+  endpoint = '/api/fix-format',
+  ctaLabel = 'PERBAIKI SEKARANG',
+  successTitle = 'Selesai diperbaiki!',
+  successDescription = 'File Anda sudah otomatis terunduh dengan format yang sudah rapi.',
+}: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,24 +66,23 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
     formData.append('file', file);
 
     try {
-      const response = await fetch('/api/fix-format', {
+      const response = await fetch(endpoint, {
         method: 'POST',
         body: formData,
       });
 
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Gagal memproses dokumen.');
+        const contentType = response.headers.get('content-type') || '';
+        const data = contentType.includes('application/json') ? await response.json() : null;
+        throw new Error(data?.error || 'Gagal memproses dokumen.');
       }
-
-      setSuccess(true);
-      setFile(null);
 
       if (onSuccess) {
         const data = await response.json();
+        setSuccess(true);
+        setFile(null);
         onSuccess(data);
       } else {
-        // Fallback for non-unified flow (unlikely now)
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -83,6 +92,8 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
         a.click();
         window.URL.revokeObjectURL(url);
         a.remove();
+        setSuccess(true);
+        setFile(null);
       }
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan.');
@@ -100,8 +111,6 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
           >
-            {/* Hidden Input at the bottom of the container to be on top */}
-            
             {!file ? (
               <div className="flex flex-col items-center">
                 <div className="w-20 h-20 bg-white shadow-xl rounded-3xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
@@ -150,7 +159,7 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
             size="xl"
             className="w-full"
           >
-            PERBAIKI SEKARANG
+            {ctaLabel}
           </Button>
         </div>
       ) : (
@@ -158,11 +167,11 @@ export default function FileUpload({ onSuccess }: FileUploadProps) {
           <div className="w-24 h-24 bg-green-50 text-green-500 rounded-full flex items-center justify-center mb-8">
             <CheckCircle2 className="w-12 h-12" />
           </div>
-          <h2 className="text-3xl font-black mb-4 text-gray-900">Selesai diperbaiki!</h2>
-          <p className="text-gray-400 font-medium mb-10 max-w-sm">File Anda sudah otomatis terunduh dengan format yang sudah rapi.</p>
+          <h2 className="text-3xl font-black mb-4 text-gray-900">{successTitle}</h2>
+          <p className="text-gray-400 font-medium mb-10 max-w-sm">{successDescription}</p>
           
           <div className="w-full grid grid-cols-2 gap-4 mb-10 text-left">
-            {["Margin Fix", "Spasi 1.5", "Font TNR 12", "Heading Ok"].map((check) => (
+            {['Margin Fix', 'Spasi 1.5', 'Font TNR 12', 'Heading Ok'].map((check) => (
               <div key={check} className="flex items-center gap-2 p-3 rounded-2xl bg-gray-50 text-gray-600 text-[10px] font-black uppercase tracking-widest">
                 <CheckCircle2 className="w-4 h-4 text-green-500" /> {check}
               </div>
