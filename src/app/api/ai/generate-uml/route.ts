@@ -26,6 +26,7 @@ interface CompactSpec {
   usecases?: { id: string; text: string; actors: string[] }[];
   participants?: { id: string; name: string }[];
   messages?: { from: string; to: string; text: string; return?: boolean }[];
+  qualityNotes?: string[];
 }
 
 const allowedTypes = new Set(["flowchart", "usecase", "activity", "sequence"]);
@@ -35,7 +36,7 @@ const cleanId = (value: string, fallback: string) => {
   return cleaned || fallback;
 };
 
-const cleanText = (value: string, fallback: string, max = 90) => String(value || fallback).replace(/\s+/g, " ").trim().slice(0, max) || fallback;
+const cleanText = (value: string, fallback: string, max = 90) => String(value || fallback).replace(/\s+/g, " ").trim().replace(/^[-•\d.)\s]+/, "").slice(0, max) || fallback;
 
 const wrapText = (text: string, max = 20) => {
   const words = text.split(/\s+/).filter(Boolean);
@@ -54,10 +55,87 @@ const wrapText = (text: string, max = 20) => {
 
 const nodeSize = (type: string, text: string) => {
   if (type === "start" || type === "end") return { width: 80, height: 60 };
-  if (type === "decision") return { width: 170, height: 110 };
+  if (type === "decision") return { width: 180, height: 118 };
   const lines = wrapText(text, 20);
-  return { width: Math.max(150, Math.min(250, Math.max(...lines.map((l) => l.length), 1) * 9 + 44)), height: Math.max(64, lines.length * 22 + 36) };
+  return { width: Math.max(150, Math.min(260, Math.max(...lines.map((l) => l.length), 1) * 9 + 48)), height: Math.max(64, lines.length * 22 + 38) };
 };
+
+function inferDomainPrompt(prompt: string, reportContext: any) {
+  const parts = [
+    prompt,
+    reportContext?.reportTitle,
+    reportContext?.topic,
+    reportContext?.purpose,
+  ].filter(Boolean);
+  return parts.join(" ").toLowerCase();
+}
+
+function buildGenericSpec(prompt: string, diagramType: DiagramType, reportContext: any): CompactSpec {
+  const contextText = inferDomainPrompt(prompt, reportContext);
+  const title = cleanText(reportContext?.reportTitle || reportContext?.topic || prompt, "Proses Sistem", 72);
+  const subject = cleanText(title.replace(/^(buat|generate|diagram|uml|alur)\s+/i, ""), "sistem", 60);
+  const actor = /admin|operator|petugas/i.test(contextText) ? "Admin" : /mahasiswa|student/i.test(contextText) ? "Mahasiswa" : "Pengguna";
+
+  if (diagramType === "usecase") {
+    return {
+      title: `Use Case ${subject}`,
+      actors: [
+        { id: "actor-primary", name: actor, side: "left" },
+        { id: "actor-system", name: "Sistem", side: "right" },
+      ],
+      usecases: [
+        { id: "uc-access", text: `Mengakses ${subject}`, actors: ["actor-primary"] },
+        { id: "uc-input", text: "Mengisi data yang diperlukan", actors: ["actor-primary"] },
+        { id: "uc-validate", text: "Memvalidasi data", actors: ["actor-system"] },
+        { id: "uc-process", text: "Memproses permintaan", actors: ["actor-system"] },
+        { id: "uc-result", text: "Melihat hasil proses", actors: ["actor-primary"] },
+      ],
+      qualityNotes: ["Spec dibuat dari template generik karena prompt tidak cocok dengan template khusus."],
+    };
+  }
+
+  if (diagramType === "sequence") {
+    return {
+      title: `Sequence Diagram ${subject}`,
+      participants: [
+        { id: "user", name: actor },
+        { id: "ui", name: "Antarmuka" },
+        { id: "service", name: "Layanan Sistem" },
+        { id: "db", name: "Database" },
+      ],
+      messages: [
+        { from: "user", to: "ui", text: "Membuka fitur" },
+        { from: "user", to: "ui", text: "Mengisi dan mengirim data" },
+        { from: "ui", to: "service", text: "Meneruskan permintaan" },
+        { from: "service", to: "db", text: "Validasi dan simpan/ambil data" },
+        { from: "db", to: "service", text: "Kirim hasil query", return: true },
+        { from: "service", to: "ui", text: "Kirim status proses", return: true },
+        { from: "ui", to: "user", text: "Tampilkan hasil", return: true },
+      ],
+      qualityNotes: ["Spec dibuat dari template generik karena prompt tidak cocok dengan template khusus."],
+    };
+  }
+
+  const actionType: StepType = diagramType === "activity" ? "activity" : "process";
+  const lanes = diagramType === "activity" ? [actor, "Sistem"] : undefined;
+  return {
+    title: `Alur ${subject}`,
+    lanes,
+    steps: [
+      { id: "start", lane: lanes?.[0], type: "start", text: "Mulai", next: "open" },
+      { id: "open", lane: lanes?.[0], type: actionType, text: "Buka fitur yang dibutuhkan", next: "input" },
+      { id: "input", lane: lanes?.[0], type: actionType, text: "Masukkan data atau pilihan", next: "validate" },
+      { id: "validate", lane: lanes?.[1], type: actionType, text: "Validasi kelengkapan data", next: "valid" },
+      { id: "valid", lane: lanes?.[1], type: "decision", text: "Data valid?", yes: "process", no: "revise" },
+      { id: "revise", lane: lanes?.[0], type: actionType, text: "Perbaiki input", next: "input" },
+      { id: "process", lane: lanes?.[1], type: actionType, text: "Proses permintaan", next: "save" },
+      { id: "save", lane: lanes?.[1], type: actionType, text: "Simpan atau perbarui data", next: "result" },
+      { id: "result", lane: lanes?.[0], type: actionType, text: "Tampilkan hasil proses", next: "end" },
+      { id: "end", lane: lanes?.[0], type: "end", text: "Selesai" },
+    ],
+    qualityNotes: ["Spec dibuat dari template generik karena prompt tidak cocok dengan template khusus."],
+  };
+}
 
 function buildFlowSpec(kind: "login" | "crud" | "transaction", diagramType: DiagramType, prompt: string): CompactSpec {
   const asActivity = diagramType === "activity";
@@ -229,6 +307,59 @@ function localTemplate(prompt: string, diagramType: DiagramType): CompactSpec | 
   return null;
 }
 
+function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: string, reportContext: any): CompactSpec {
+  const fallback = buildGenericSpec(prompt, diagramType, reportContext);
+  const normalized: CompactSpec = { ...spec };
+
+  normalized.title = cleanText(normalized.title || fallback.title || prompt, fallback.title || "Diagram", 80);
+
+  if (diagramType === "usecase") {
+    if (!Array.isArray(normalized.actors) || !normalized.actors.length) normalized.actors = fallback.actors;
+    if (!Array.isArray(normalized.usecases) || !normalized.usecases.length) normalized.usecases = fallback.usecases;
+
+    const actors = (normalized.actors || []).slice(0, 6).map((actor, index) => ({
+      id: cleanId(actor.id || actor.name, `actor-${index + 1}`),
+      name: cleanText(actor.name, `Aktor ${index + 1}`, 34),
+      side: actor.side === "right" ? "right" as const : "left" as const,
+    }));
+    const actorIds = new Set(actors.map((actor) => actor.id));
+    const usecases = (normalized.usecases || []).slice(0, 10).map((usecase, index) => {
+      const connectedActors = (usecase.actors || []).map((actorId) => cleanId(actorId, "")).filter((actorId) => actorIds.has(actorId));
+      return {
+        id: cleanId(usecase.id || usecase.text, `uc-${index + 1}`),
+        text: cleanText(usecase.text, `Use Case ${index + 1}`, 64),
+        actors: connectedActors.length ? connectedActors : [actors[0].id],
+      };
+    });
+    return { ...normalized, actors, usecases };
+  }
+
+  if (diagramType === "sequence") {
+    if (!Array.isArray(normalized.participants) || normalized.participants.length < 2) normalized.participants = fallback.participants;
+    if (!Array.isArray(normalized.messages) || normalized.messages.length < 3) normalized.messages = fallback.messages;
+
+    const participants = (normalized.participants || []).slice(0, 6).map((participant, index) => ({
+      id: cleanId(participant.id || participant.name, `p${index + 1}`),
+      name: cleanText(participant.name, `Partisipan ${index + 1}`, 36),
+    }));
+    const participantIds = new Set(participants.map((participant) => participant.id));
+    const messages = (normalized.messages || []).slice(0, 12).map((message) => ({
+      from: cleanId(message.from, participants[0].id),
+      to: cleanId(message.to, participants[Math.min(1, participants.length - 1)].id),
+      text: cleanText(message.text, "Kirim pesan", 52),
+      return: Boolean(message.return),
+    })).filter((message) => participantIds.has(message.from) && participantIds.has(message.to) && message.from !== message.to);
+
+    return { ...normalized, participants, messages: messages.length >= 3 ? messages : fallback.messages };
+  }
+
+  if (!Array.isArray(normalized.steps) || normalized.steps.length < 4) normalized.steps = fallback.steps;
+  const fallbackLanes = diagramType === "activity" ? fallback.lanes : undefined;
+  normalized.lanes = Array.isArray(normalized.lanes) && normalized.lanes.length ? normalized.lanes.slice(0, 5).map((lane) => cleanText(lane, "Lane", 28)) : fallbackLanes;
+
+  return normalized;
+}
+
 function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
   if (diagramType === "sequence") {
     const rawParticipants = spec.participants?.length ? spec.participants : [
@@ -295,7 +426,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
       ...usecases.map((u, i) => ({ id: u.id, type: "usecase", text: u.text, lines: wrapText(u.text, 18), x: 430, y: 140 + i * 120, width: 190, height: 76, pinned: true })),
     ];
     const edges = usecases.flatMap((u) => u.actors.map((actorId) => ({ id: `edge-${actorId}-${u.id}`, fromId: actorId, toId: u.id, dashed: false })));
-    return { nodes, edges };
+    return { nodes, edges, lanes: [], title: spec.title || "Use Case Diagram" };
   }
 
   const steps: CompactStep[] = spec.steps?.length ? spec.steps : [
@@ -303,7 +434,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
     { id: "process", type: diagramType === "activity" ? "activity" : "process", text: spec.title || "Jalankan proses utama", next: "end" },
     { id: "end", type: "end", text: "Selesai" },
   ];
-  const lanes = spec.lanes?.length ? spec.lanes : [];
+  const lanes = spec.lanes?.length ? spec.lanes.slice(0, 5) : [];
   const normalizedSteps: CompactStep[] = steps.slice(0, 16).map((step, index) => ({
     ...step,
     id: cleanId(step.id, `s${index + 1}`),
@@ -334,15 +465,29 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
     const idx = Math.max(0, lanes.indexOf(lane || lanes[0]));
     return 230 + idx * 420;
   };
-  const yByLane = new Map<string, number>();
+  const layerById = new Map<string, number>();
+  normalizedSteps.forEach((step, index) => layerById.set(step.id, index));
+  for (let pass = 0; pass < normalizedSteps.length; pass += 1) {
+    for (const step of normalizedSteps) {
+      const current = layerById.get(step.id) || 0;
+      for (const targetId of [step.next, step.yes, step.no].filter(Boolean) as string[]) {
+        if (!validStepIds.has(targetId)) continue;
+        const targetLayer = layerById.get(targetId) || 0;
+        if (targetLayer <= current && targetId !== step.id) layerById.set(targetId, current + 1);
+      }
+    }
+  }
+  const laneOffsets = new Map<string, number>();
 
   const nodes = normalizedSteps.map((step, index) => {
     const type = diagramType === "activity" && step.type === "process" ? "activity" : step.type;
     const size = nodeSize(type, step.text);
     const lane = step.lane || "main";
-    const laneCount = yByLane.get(lane) || 0;
-    yByLane.set(lane, laneCount + 1);
-    const y = lanes.length ? 110 + laneCount * 135 : 100 + index * 140;
+    const layer = Math.min(layerById.get(step.id) ?? index, normalizedSteps.length + 2);
+    const sameLayerKey = `${lane}-${layer}`;
+    const offset = laneOffsets.get(sameLayerKey) || 0;
+    laneOffsets.set(sameLayerKey, offset + 1);
+    const y = 100 + layer * 145 + offset * 48;
     return {
       id: step.id,
       type,
@@ -368,6 +513,12 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType) {
   });
 
   return { nodes, edges, lanes, title: spec.title || "Diagram" };
+}
+
+function hasEnoughPromptDetail(prompt: string, reportContext: any) {
+  const combined = inferDomainPrompt(prompt, reportContext);
+  const words = combined.split(/\s+/).filter(Boolean);
+  return words.length >= 5 || /login|register|kelola|crud|transaksi|pembayaran|laporan|pengaduan|mahasiswa|admin|sistem|database|dashboard/i.test(combined);
 }
 
 function extractJson(text: string) {
@@ -423,11 +574,12 @@ Aturan ketat:
     });
 
     const spec = extractJson(response.choices[0].message.content || "{}");
-    if (spec.needsClarification) {
+    if (spec.needsClarification && !hasEnoughPromptDetail(prompt, reportContext)) {
       return NextResponse.json({ success: false, needsClarification: true, clarification: spec.clarification || "Bisa jelaskan aktor dan alur utamanya dulu?" });
     }
 
-    return NextResponse.json({ success: true, source: "ai-spec", data: specToDiagram(spec, normalizedType), spec });
+    const normalizedSpec = normalizeSpec(spec.needsClarification ? buildGenericSpec(prompt, normalizedType, reportContext) : spec, normalizedType, prompt, reportContext);
+    return NextResponse.json({ success: true, source: spec.needsClarification ? "fallback-generic" : "ai-spec", data: specToDiagram(normalizedSpec, normalizedType), spec: normalizedSpec });
   } catch (error: any) {
     console.error("API /api/ai/generate-uml Error:", error);
     return NextResponse.json(
