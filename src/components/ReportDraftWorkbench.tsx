@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
+import { exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
 
 interface NoveltyCandidate {
   id: string;
@@ -50,8 +51,24 @@ interface SectionActionDetail {
   };
 }
 
+interface ApprovedDiagram {
+  id: string;
+  title: string;
+  type: string;
+  purpose?: string;
+  caption?: string;
+  status?: string;
+  approvedAt?: string;
+  diagramData?: {
+    nodes?: Array<{ text?: string }>;
+    edges?: unknown[];
+    meta?: Record<string, unknown>;
+  };
+}
+
 type RevisionMode = "format" | "expand" | "citation" | "table" | "bibliography" | "diagram" | "custom";
 
+const REPORT_BUILDER_KEY = "report_builder_project_v1";
 const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
 
 const revisionModeOptions: { value: RevisionMode; label: string; helper: string }[] = [
@@ -64,14 +81,41 @@ const revisionModeOptions: { value: RevisionMode; label: string; helper: string 
   { value: "custom", label: "Instruksi bebas", helper: "Kasih arahan spesifik sesuai kebutuhan user." },
 ];
 
+function normalizeApprovedDiagrams(rawProject: any): ApprovedDiagram[] {
+  const diagrams = Array.isArray(rawProject?.diagrams) ? rawProject.diagrams : [];
+  return diagrams
+    .filter((diagram: any) => diagram?.status === "approved" && diagram?.diagramData)
+    .map((diagram: any) => ({
+      id: String(diagram.id || makeId("diagram")),
+      title: String(diagram.title || "Diagram"),
+      type: String(diagram.type || "diagram"),
+      purpose: diagram.purpose ? String(diagram.purpose) : undefined,
+      caption: diagram.caption ? String(diagram.caption) : undefined,
+      status: String(diagram.status || "approved"),
+      approvedAt: diagram.approvedAt ? String(diagram.approvedAt) : undefined,
+      diagramData: diagram.diagramData,
+    }));
+}
+
+function inferSectionDiagramIds(section: ReportSectionBrief, diagrams: ApprovedDiagram[]) {
+  const title = String(section.title || "").toLowerCase();
+  if (/pendahuluan|kesimpulan|penutup|daftar pustaka/.test(title)) return [];
+  if (/analisis|perancangan|metode|implementasi|hasil|pembahasan/.test(title)) {
+    return diagrams.slice(0, 6).map((diagram) => diagram.id);
+  }
+  return diagrams.slice(0, 3).map((diagram) => diagram.id);
+}
+
 export default function ReportDraftWorkbench({ brief }: { brief?: Partial<ResearchBrief> }) {
   const [outline, setOutline] = useState<StoredOutline>({ sections: [], citationMap: {} });
   const [novelty, setNovelty] = useState<NoveltyCandidate | null>(null);
   const [references, setReferences] = useState<ReferenceItem[]>([]);
+  const [approvedDiagrams, setApprovedDiagrams] = useState<ApprovedDiagram[]>([]);
   const [job, setJob] = useState<ReportJob | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [isRevising, setIsRevising] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revisionMode, setRevisionMode] = useState<RevisionMode>("format");
@@ -106,10 +150,14 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       const nextNoveltyRaw = localStorage.getItem(noveltyKey);
       const nextRefsRaw = localStorage.getItem(referencesKey);
       const nextDraftRaw = localStorage.getItem(draftKey);
+      const nextReportBuilderRaw = localStorage.getItem(REPORT_BUILDER_KEY);
 
       const nextRefs = nextRefsRaw ? JSON.parse(nextRefsRaw) : [];
       const normalizedRefs = Array.isArray(nextRefs) ? nextRefs : [];
       setReferences(normalizedRefs);
+
+      const nextDiagrams = nextReportBuilderRaw ? normalizeApprovedDiagrams(JSON.parse(nextReportBuilderRaw)) : [];
+      setApprovedDiagrams(nextDiagrams);
 
       if (nextOutlineRaw) {
         const parsed = JSON.parse(nextOutlineRaw);
@@ -188,6 +236,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     window.addEventListener("referenceResultsUpdated", refresh);
     window.addEventListener("researchProjectChanged", refresh);
     window.addEventListener("researchSectionActionRequested", handleSectionAction as EventListener);
+    window.addEventListener("storage", refresh);
 
     return () => {
       window.removeEventListener("researchOutlineUpdated", refresh);
@@ -195,6 +244,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       window.removeEventListener("referenceResultsUpdated", refresh);
       window.removeEventListener("researchProjectChanged", refresh);
       window.removeEventListener("researchSectionActionRequested", handleSectionAction as EventListener);
+      window.removeEventListener("storage", refresh);
     };
   }, [projectId, references, revisionTarget]);
 
@@ -266,6 +316,12 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
           ref.abstract ? `Abstrak: ${ref.abstract}` : "",
         ].filter(Boolean).join("\n"),
       })),
+      ...approvedDiagrams.slice(0, 6).map((diagram) => ({
+        id: makeId("diagram-src"),
+        kind: "note",
+        title: diagram.title,
+        content: `Diagram ${diagram.type}. Caption: ${diagram.caption || diagram.purpose || "Belum ada caption"}. Elemen utama: ${(diagram.diagramData?.nodes || []).slice(0, 8).map((node) => node?.text).filter(Boolean).join("; ") || "Belum ada elemen"}`,
+      })),
     ].filter(Boolean);
 
     return {
@@ -280,10 +336,18 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
         id: section.id,
         title: section.title,
         purpose: section.purpose,
-        requiredDiagrams: [],
+        requiredDiagrams: inferSectionDiagramIds(section, approvedDiagrams),
         status: section.status || "draft",
       })),
-      diagrams: [],
+      diagrams: approvedDiagrams.map((diagram) => ({
+        id: diagram.id,
+        title: diagram.title,
+        type: diagram.type,
+        purpose: diagram.purpose,
+        status: diagram.status || "approved",
+        caption: diagram.caption,
+        diagramData: diagram.diagramData,
+      })),
       tables: [],
       references: references.slice(0, 8).map((ref) => ({
         id: ref.id,
@@ -296,7 +360,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
         abstract: ref.abstract,
       })),
     };
-  }, [brief, novelty, outline.sections, references]);
+  }, [brief, novelty, outline.sections, references, approvedDiagrams]);
 
   const canGenerate = assembledProject.sources.length > 0 && assembledProject.outline.length > 0 && !loading && !isRevising;
   const canRevise = draft.trim().length > 80 && !loading && !isRevising;
@@ -394,6 +458,21 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     }
   };
 
+  const exportDocx = async () => {
+    if (!draft.trim()) return;
+    setIsExporting(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      await exportMarkdownToDocx(draft, assembledProject.title || assembledProject.topic || "laporan-riset");
+      setFeedback("DOCX berhasil diexport.");
+    } catch (e: any) {
+      setError(e?.message || "Gagal export DOCX.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const copyDraft = async () => {
     if (!draft) return;
     try {
@@ -416,6 +495,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       setOutline({ sections: [], citationMap: {} });
       setNovelty(null);
       setReferences([]);
+      setApprovedDiagrams([]);
       setDraft("");
       setJob(null);
       setError(null);
@@ -435,17 +515,17 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="text-sm font-bold">Draft Workbench</div>
-          <div className="text-xs text-slate-500">Satukan brief, novelty, outline, dan referensi jadi draft laporan dengan progres yang kelihatan.</div>
+          <div className="text-xs text-slate-500">Satukan brief, novelty, outline, referensi, dan diagram approved jadi draft laporan yang siap diexport.</div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={resetLocalFlow} disabled={loading || isRevising} className="px-3 py-2 rounded border text-xs font-semibold disabled:opacity-50">Reset Konteks</button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={resetLocalFlow} disabled={loading || isRevising || isExporting} className="px-3 py-2 rounded border text-xs font-semibold disabled:opacity-50">Reset Konteks</button>
           <button onClick={generateDraft} disabled={!canGenerate} className="px-3 py-2 rounded bg-slate-900 text-white text-xs font-semibold disabled:opacity-50">
             {loading ? "Menyusun Draft..." : "Generate Draft"}
           </button>
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3 mb-4">
+      <div className="grid gap-3 md:grid-cols-4 mb-4">
         <div className="rounded-lg border border-slate-200 p-3">
           <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Sumber aktif</div>
           <div className="mt-1 text-2xl font-bold text-slate-900">{assembledProject.sources.length}</div>
@@ -458,7 +538,25 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
           <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Referensi</div>
           <div className="mt-1 text-2xl font-bold text-slate-900">{assembledProject.references.length}</div>
         </div>
+        <div className="rounded-lg border border-slate-200 p-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Diagram Approved</div>
+          <div className="mt-1 text-2xl font-bold text-slate-900">{approvedDiagrams.length}</div>
+        </div>
       </div>
+
+      {approvedDiagrams.length > 0 && (
+        <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 p-4">
+          <div className="text-sm font-bold text-slate-900">Diagram Aktif dari UML Builder</div>
+          <div className="mt-1 text-xs text-slate-500">Diagram approved ini otomatis dibawa ke generate laporan dan dipakai sebagai placeholder/caption pada section yang paling relevan.</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {approvedDiagrams.map((diagram) => (
+              <div key={diagram.id} className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-slate-700 border border-violet-200">
+                {diagram.title}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {job && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
@@ -470,7 +568,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
           </div>
           <div className="mt-2 text-xs text-slate-500">
-            {job.status === "done" ? "Draft selesai dan disimpan lokal." : job.status === "failed" ? "Job berhenti karena error." : "AI sedang membaca konteks, menyusun struktur, lalu menulis draft secara bertahap."}
+            {job.status === "done" ? "Draft selesai dan disimpan lokal." : job.status === "failed" ? "Job berhenti karena error." : "AI sedang membaca konteks, menyusun struktur, diagram, lalu menulis draft secara bertahap."}
           </div>
         </div>
       )}
@@ -576,7 +674,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <textarea
               value={revisionInstruction}
               onChange={(e) => setRevisionInstruction(e.target.value)}
-              placeholder="Contoh: perpanjang pendahuluan 2 paragraf, tambahkan sitasi dari referensi aktif, buat tabel ringkasan metode, atau rapikan daftar pustaka APA."
+              placeholder="Contoh: perpanjang pendahuluan 2 paragraf, tambahkan sitasi dari referensi aktif, masukkan diagram approved yang relevan, atau buat tabel ringkasan metode."
               className="mt-2 min-h-28 w-full rounded-lg border border-slate-200 p-3 text-sm text-slate-700"
             />
           </div>
@@ -587,9 +685,14 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
         <div className="mb-3 flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-bold">Hasil Draft</div>
-            <div className="text-xs text-slate-500">Draft disimpan lokal per project, jadi bisa lanjut revisi nanti tanpa generate ulang dari nol.</div>
+            <div className="text-xs text-slate-500">Draft disimpan lokal per project, bisa disalin, direvisi, atau langsung diexport ke DOCX.</div>
           </div>
-          <button onClick={copyDraft} disabled={!draft} className="px-3 py-2 rounded border text-xs font-semibold disabled:opacity-50">Salin Draft</button>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={copyDraft} disabled={!draft} className="px-3 py-2 rounded border text-xs font-semibold disabled:opacity-50">Salin Draft</button>
+            <button onClick={exportDocx} disabled={!draft || isExporting} className="px-3 py-2 rounded bg-violet-600 text-white text-xs font-semibold disabled:opacity-50">
+              {isExporting ? "Exporting..." : "Export DOCX"}
+            </button>
+          </div>
         </div>
         <textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Draft laporan akan muncul di sini setelah generate selesai..." className="min-h-[320px] w-full rounded-lg border border-slate-200 p-3 text-sm leading-relaxed text-slate-700" />
       </div>
