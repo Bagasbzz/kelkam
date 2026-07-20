@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { validateSpec } from "@/lib/uml/diagram-guard";
 
 export const maxDuration = 45;
 
@@ -579,7 +580,16 @@ Aturan ketat:
     }
 
     const normalizedSpec = normalizeSpec(spec.needsClarification ? buildGenericSpec(prompt, normalizedType, reportContext) : spec, normalizedType, prompt, reportContext);
-    return NextResponse.json({ success: true, source: spec.needsClarification ? "fallback-generic" : "ai-spec", data: specToDiagram(normalizedSpec, normalizedType), spec: normalizedSpec });
+    const validation = validateSpec(normalizedSpec, normalizedType);
+    if (!validation.ok) {
+      return NextResponse.json({
+        success: false,
+        needsClarification: true,
+        clarification: validation.errors.join(' '),
+        validation,
+      });
+    }
+    return NextResponse.json({ success: true, source: spec.needsClarification ? "fallback-generic" : "ai-spec", data: specToDiagram(normalizedSpec, normalizedType), spec: normalizedSpec, validation });
   } catch (error: any) {
     console.error("API /api/ai/generate-uml Error:", error);
     return NextResponse.json(
@@ -588,3 +598,5 @@ Aturan ketat:
     );
   }
 }
+
+

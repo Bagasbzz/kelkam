@@ -273,7 +273,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#f1f5f9" strokeWidth="1" />
           </pattern>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+            <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
           </marker>
           <marker id="arrowhead-connect" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
             <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b" />
@@ -295,7 +295,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
                       width={laneWidth}
                       height={laneHeight}
                       fill={index % 2 === 0 ? '#ffffff' : '#f8fafc'}
-                      stroke="#cbd5e1"
+                      stroke="#94a3b8"
                       strokeWidth="1.5"
                     />
                     <rect
@@ -303,8 +303,8 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
                       y={24}
                       width={laneWidth}
                       height={laneHeaderHeight}
-                      fill="#eef2ff"
-                      stroke="#cbd5e1"
+                      fill="#f8fafc"
+                      stroke="#94a3b8"
                       strokeWidth="1.5"
                     />
                     <text
@@ -312,7 +312,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
                       y={56}
                       textAnchor="middle"
                       dominantBaseline="middle"
-                      fill="#3730a3"
+                      fill="#1e293b"
                       fontSize="18"
                       fontWeight="700"
                     >
@@ -364,3 +364,4 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
 };
 
 export default DiagramCanvas;
+

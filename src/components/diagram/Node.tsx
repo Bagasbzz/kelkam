@@ -110,8 +110,8 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
               y1={curY + 46}
               x2={centerX}
               y2={curY + height}
-              stroke="#64748b"
-              strokeWidth={1.8}
+              stroke="#475569"
+              strokeWidth={2}
               strokeDasharray="8,6"
             />
             <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />
@@ -239,3 +239,4 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
 };
 
 export default Node;
+

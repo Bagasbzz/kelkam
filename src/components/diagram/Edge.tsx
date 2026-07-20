@@ -7,6 +7,14 @@ interface EdgeProps {
   toNode: DiagramNode;
 }
 
+const PRIMARY_STROKE = '#334155';
+const DASHED_STROKE = '#94a3b8';
+const GRID_STEP = 4;
+
+function snap(value: number) {
+  return Math.round(value / GRID_STEP) * GRID_STEP;
+}
+
 function getExitPoint(node: DiagramNode, side: 'right' | 'left' | 'bottom' | 'top' | 'center') {
   const x = node.x + (node.offsetX || 0);
   const y = node.y + (node.offsetY || 0);
@@ -14,42 +22,82 @@ function getExitPoint(node: DiagramNode, side: 'right' | 'left' | 'bottom' | 'to
   const cy = y + node.height / 2;
 
   switch (side) {
-    case 'right':  return { x: x + node.width, y: cy };
-    case 'left':   return { x: x,               y: cy };
-    case 'bottom': return { x: cx,               y: y + node.height };
-    case 'top':    return { x: cx,               y: y };
-    default:       return { x: cx,               y: cy };
+    case 'right':
+      return { x: x + node.width, y: cy };
+    case 'left':
+      return { x, y: cy };
+    case 'bottom':
+      return { x: cx, y: y + node.height };
+    case 'top':
+      return { x: cx, y };
+    default:
+      return { x: cx, y: cy };
   }
+}
+
+function renderLabel(label: string, x: number, y: number, prominent = false) {
+  const width = prominent ? 168 : Math.max(54, Math.min(116, label.length * 7.2 + 18));
+  const height = 20;
+  return (
+    <g transform={`translate(${snap(x)}, ${snap(y)})`}>
+      <rect
+        x={-width / 2}
+        y={-height / 2}
+        width={width}
+        height={height}
+        fill="white"
+        rx={3}
+        opacity={0.98}
+        stroke="#cbd5e1"
+        strokeWidth="1"
+      />
+      <text
+        textAnchor="middle"
+        dominantBaseline="middle"
+        style={{
+          fontSize: '11px',
+          fontWeight: prominent ? 700 : 600,
+          fill: '#334155',
+          fontFamily: 'Inter, sans-serif',
+          letterSpacing: 0,
+        }}
+      >
+        {label}
+      </text>
+    </g>
+  );
 }
 
 const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
   const isUseCase =
-    fromNode.type === 'actor' || toNode.type === 'actor' ||
-    fromNode.type === 'usecase' || toNode.type === 'usecase';
+    fromNode.type === 'actor' ||
+    toNode.type === 'actor' ||
+    fromNode.type === 'usecase' ||
+    toNode.type === 'usecase';
 
   let pathData = '';
   let labelX = 0;
   let labelY = 0;
 
   if (fromNode.type === 'lifeline' && toNode.type === 'lifeline' && typeof edge.y === 'number') {
-    const fromCenterX = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
-    const toCenterX = toNode.x + (toNode.offsetX || 0) + toNode.width / 2;
-    const y = edge.y;
+    const fromCenterX = snap(fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2);
+    const toCenterX = snap(toNode.x + (toNode.offsetX || 0) + toNode.width / 2);
+    const y = snap(edge.y);
     pathData = `M ${fromCenterX},${y} H ${toCenterX}`;
     labelX = (fromCenterX + toCenterX) / 2;
     labelY = y - 14;
 
-    const strokeColor = edge.dashed ? '#94a3b8' : '#334155';
+    const strokeColor = edge.dashed ? DASHED_STROKE : PRIMARY_STROKE;
     const markerId = edge.dashed ? 'arrowhead-dashed' : 'arrowhead';
 
     return (
       <g className="edge-group">
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
+            <polygon points="0 0, 10 3.5, 0 7" fill={PRIMARY_STROKE} />
           </marker>
           <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
+            <polygon points="0 0, 10 3.5, 0 7" fill={DASHED_STROKE} />
           </marker>
         </defs>
         <path d={pathData} fill="none" stroke="transparent" strokeWidth="14" />
@@ -57,100 +105,91 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
           d={pathData}
           fill="none"
           stroke={strokeColor}
-          strokeWidth="2.2"
+          strokeWidth="2.4"
           strokeDasharray={edge.dashed ? '6,5' : 'none'}
           markerEnd={`url(#${markerId})`}
         />
-        {edge.label && (
-          <g transform={`translate(${labelX}, ${labelY})`}>
-            <rect x={-90} y={-11} width={180} height={22} fill="white" rx={4} opacity={0.96}
-              stroke="#cbd5e1" strokeWidth="1" />
-            <text
-              textAnchor="middle"
-              dominantBaseline="middle"
-              style={{ fontSize: '11px', fontWeight: 800, fill: '#334155', fontFamily: 'Inter, sans-serif' }}
-            >
-              {edge.label}
-            </text>
-          </g>
-        )}
+        {edge.label ? renderLabel(edge.label, labelX, labelY, true) : null}
       </g>
     );
   }
 
   if (isUseCase) {
-    const fx = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
-    const fy = fromNode.y + (fromNode.offsetY || 0) + fromNode.height / 2;
-    const tx = toNode.x + (toNode.offsetX || 0) + toNode.width / 2;
-    const ty = toNode.y + (toNode.offsetY || 0) + toNode.height / 2;
+    const fx = snap(fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2);
+    const fy = snap(fromNode.y + (fromNode.offsetY || 0) + fromNode.height / 2);
+    const tx = snap(toNode.x + (toNode.offsetX || 0) + toNode.width / 2);
+    const ty = snap(toNode.y + (toNode.offsetY || 0) + toNode.height / 2);
     pathData = `M ${fx},${fy} L ${tx},${ty}`;
     labelX = (fx + tx) / 2;
-    labelY = (fy + ty) / 2;
+    labelY = (fy + ty) / 2 - 12;
   } else {
     const dir = edge.direction;
-
     const fromBottom = getExitPoint(fromNode, 'bottom');
     const toTop = getExitPoint(toNode, 'top');
+    const fromRight = getExitPoint(fromNode, 'right');
+    const fromLeft = getExitPoint(fromNode, 'left');
+    const toLeft = getExitPoint(toNode, 'left');
+    const toRight = getExitPoint(toNode, 'right');
 
-    const fY = fromNode.y + (fromNode.offsetY || 0);
-    const tY = toNode.y + (toNode.offsetY || 0);
-    const isLoopBack = tY <= fY + 20;
+    const x1 = snap(fromBottom.x);
+    const y1 = snap(fromBottom.y);
+    const x2 = snap(toTop.x);
+    const y2 = snap(toTop.y);
+
+    const upwardOrLoop = y2 <= y1 + 24;
 
     if (dir === 'right') {
-      const fromRight = getExitPoint(fromNode, 'right');
-      const toTopPt = getExitPoint(toNode, 'top');
-      const bendX = Math.max(fromRight.x + 40, toTopPt.x);
-      pathData = `M ${fromRight.x},${fromRight.y} H ${bendX} V ${toTopPt.y} H ${toTopPt.x} V ${toTopPt.y}`;
-      labelX = fromRight.x + 25;
-      labelY = fromRight.y - 12;
+      const startX = snap(fromRight.x);
+      const startY = snap(fromRight.y);
+      const endX = snap((toNode.x + (toNode.offsetX || 0)) < startX ? toTop.x : toLeft.x);
+      const endY = snap((toNode.x + (toNode.offsetX || 0)) < startX ? toTop.y : toLeft.y);
+      const bendX = snap(startX + Math.max(48, Math.min(96, Math.abs(endX - startX) / 2)));
 
+      pathData = `M ${startX},${startY} H ${bendX} V ${endY} H ${endX}`;
+      labelX = (startX + bendX) / 2;
+      labelY = startY - 12;
     } else if (dir === 'left') {
-      const fromLeft = getExitPoint(fromNode, 'left');
-      const toTopPt = getExitPoint(toNode, 'top');
-      const bendX = Math.min(fromLeft.x - 40, toTopPt.x);
-      pathData = `M ${fromLeft.x},${fromLeft.y} H ${bendX} V ${toTopPt.y} H ${toTopPt.x} V ${toTopPt.y}`;
-      labelX = fromLeft.x - 25;
-      labelY = fromLeft.y - 12;
+      const startX = snap(fromLeft.x);
+      const startY = snap(fromLeft.y);
+      const endX = snap((toNode.x + (toNode.offsetX || 0) + toNode.width) > startX ? toTop.x : toRight.x);
+      const endY = snap((toNode.x + (toNode.offsetX || 0) + toNode.width) > startX ? toTop.y : toRight.y);
+      const bendX = snap(startX - Math.max(48, Math.min(96, Math.abs(endX - startX) / 2)));
 
-    } else if (isLoopBack) {
-      const loopOffset = 180;
-      const x1 = fromBottom.x;
-      const y1 = fromBottom.y;
-      const x2 = toTop.x;
-      const y2 = toTop.y;
-      const outerX = Math.max(x1, x2) + loopOffset;
-      pathData = `M ${x1},${y1} V ${y1 + 30} H ${outerX} V ${y2 - 20} H ${x2} V ${y2}`;
-      labelX = outerX + 5;
-      labelY = (y1 + y2) / 2;
+      pathData = `M ${startX},${startY} H ${bendX} V ${endY} H ${endX}`;
+      labelX = (startX + bendX) / 2;
+      labelY = startY - 12;
+    } else if (upwardOrLoop) {
+      const horizontalGap = Math.abs(x2 - x1);
+      const routeX = snap(Math.max(x1, x2) + Math.max(92, Math.min(148, horizontalGap / 2 + 48)));
+      const departureY = snap(y1 + 28);
+      const approachY = snap(y2 - 24);
 
+      pathData = `M ${x1},${y1} V ${departureY} H ${routeX} V ${approachY} H ${x2} V ${y2}`;
+      labelX = routeX + 8;
+      labelY = (departureY + approachY) / 2;
+    } else if (Math.abs(x1 - x2) <= 8) {
+      pathData = `M ${x1},${y1} V ${y2}`;
+      labelX = x1 + 10;
+      labelY = y1 + (y2 - y1) / 2;
     } else {
-      const x1 = fromBottom.x;
-      const y1 = fromBottom.y;
-      const x2 = toTop.x;
-      const y2 = toTop.y;
-      const midY = y1 + (y2 - y1) / 2;
-
-      if (Math.abs(x1 - x2) < 4) {
-        pathData = `M ${x1},${y1} V ${y2}`;
-      } else {
-        pathData = `M ${x1},${y1} V ${midY} H ${x2} V ${y2}`;
-      }
-      labelX = (x1 + x2) / 2 + 5;
-      labelY = midY;
+      const midY = snap(y1 + (y2 - y1) / 2);
+      pathData = `M ${x1},${y1} V ${midY} H ${x2} V ${y2}`;
+      labelX = (x1 + x2) / 2;
+      labelY = midY - 12;
     }
   }
 
-  const strokeColor = edge.dashed ? '#94a3b8' : '#64748b';
+  const strokeColor = edge.dashed ? DASHED_STROKE : PRIMARY_STROKE;
   const markerId = edge.dashed ? 'arrowhead-dashed' : 'arrowhead';
 
   return (
     <g className="edge-group">
       <defs>
         <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#64748b" />
+          <polygon points="0 0, 10 3.5, 0 7" fill={PRIMARY_STROKE} />
         </marker>
         <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill="#94a3b8" />
+          <polygon points="0 0, 10 3.5, 0 7" fill={DASHED_STROKE} />
         </marker>
       </defs>
 
@@ -160,24 +199,12 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
         d={pathData}
         fill="none"
         stroke={strokeColor}
-        strokeWidth="2.2"
+        strokeWidth="2.4"
         strokeDasharray={edge.dashed ? '5,5' : 'none'}
         markerEnd={`url(#${markerId})`}
       />
 
-      {edge.label && (
-        <g transform={`translate(${labelX}, ${labelY})`}>
-          <rect x={-22} y={-10} width={44} height={20} fill="white" rx={4} opacity={0.92}
-            stroke="#e2e8f0" strokeWidth="1" />
-          <text
-            textAnchor="middle"
-            dominantBaseline="middle"
-            style={{ fontSize: '11px', fontWeight: 700, fill: '#475569', fontFamily: 'Inter, sans-serif' }}
-          >
-            {edge.label}
-          </text>
-        </g>
-      )}
+      {edge.label ? renderLabel(edge.label, labelX, labelY) : null}
     </g>
   );
 };

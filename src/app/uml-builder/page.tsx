@@ -5,7 +5,8 @@ import Link from 'next/link';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
-import { Hand, Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X } from 'lucide-react';
+import { Hand, Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X, Upload } from 'lucide-react';
+import { autoLayoutDiagram } from '@/lib/uml/diagram-guard';
 
 interface DiagramMeta {
   title?: string;
@@ -53,6 +54,8 @@ export default function UMLBuilder() {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiClarification, setAiClarification] = useState('');
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
+  const [umlReferenceImage, setUmlReferenceImage] = useState<File | null>(null);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [diagramMeta, setDiagramMeta] = useState<DiagramMeta>({ lanes: [] });
   const loadedPrefillRef = useRef(false);
@@ -159,8 +162,10 @@ export default function UMLBuilder() {
             pinned: Boolean(n.pinned)
           };
         });
-        setNodes(generatedNodes);
-        setEdges(data.data.edges || []);
+        const nextEdges = data.data.edges || [];
+        const autoLaidOutNodes = autoLayoutDiagram(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
+        setNodes(autoLaidOutNodes);
+        setEdges(nextEdges);
         setDiagramMeta((prev) => ({
           ...prev,
           title: data.data.title || data.spec?.title || prev.title,
@@ -179,6 +184,43 @@ export default function UMLBuilder() {
     }
   }, [aiPrompt, diagramMeta.reportContext, diagramType, edges.length, nodes, saveToHistory, showToast, wrapText]);
 
+  const handleAnalyzeReferenceImage = useCallback(async () => {
+    if (!umlReferenceImage) return;
+    setIsAnalyzingImage(true);
+    setAiClarification('');
+    setToast('AI sedang menganalisis diagram referensi...');
+    try {
+      const formData = new FormData();
+      formData.append('file', umlReferenceImage);
+      formData.append('diagramType', diagramType);
+      if (aiPrompt.trim()) formData.append('prompt', aiPrompt.trim());
+
+      const res = await fetch('/api/ai/analyze-uml-image', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.success || !data.data) {
+        setAiClarification(data.error || 'Gagal membaca diagram gambar. Coba gambar yang lebih jelas.');
+        showToast(data.error || 'Gagal membaca gambar UML.');
+        return;
+      }
+
+      saveToHistory();
+      const returnedLanes = Array.isArray(data.data.lanes) ? data.data.lanes : [];
+      const nextNodes = autoLayoutDiagram(data.data.nodes || [], data.data.edges || [], diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
+      setNodes(nextNodes);
+      setEdges(data.data.edges || []);
+      setDiagramMeta((prev) => ({ ...prev, title: data.data.title || prev.title, lanes: returnedLanes }));
+      setAiClarification(data.analysisSummary || 'Diagram referensi berhasil dibaca dan dirapikan ulang.');
+      showToast('Diagram referensi berhasil diubah ke versi KeluhKampus.');
+    } catch (error) {
+      showToast('Error saat menganalisis gambar UML.');
+    } finally {
+      setIsAnalyzingImage(false);
+    }
+  }, [aiPrompt, diagramType, saveToHistory, showToast, umlReferenceImage]);
+
   const handleNudge = useCallback((id: string, dx: number, dy: number) => {
     setNodes(prev => prev.map(n => n.id === id ? {
       ...n,
@@ -189,118 +231,16 @@ export default function UMLBuilder() {
 
   // --- Layout Engine ---
   useEffect(() => {
-    if (diagramType === 'flowchart' || diagramType === 'activity') {
-      setNodes(prev => {
-        const newNodes = [...prev];
-        let hasChanges = false;
-        const roots = newNodes.filter(n => !edges.some(e => e.toId === n.id));
-        if (roots.length === 0 && newNodes.length > 0) roots.push(newNodes[0]);
-
-        const X_START = 500;
-        const Y_START = 100;
-        const Y_SPACING = 160;
-        const X_SPACING = 280;
-        const visited = new Set<string>();
-
-        const processNode = (nodeId: string, depth: number, xOffset: number) => {
-          if (visited.has(nodeId)) return;
-          visited.add(nodeId);
-
-          const idx = newNodes.findIndex(n => n.id === nodeId);
-          if (idx === -1) return;
-          const node = newNodes[idx];
-
-          if (!node.pinned) {
-            const targetX = X_START + xOffset - (node.width / 2);
-            const targetY = Y_START + depth * Y_SPACING;
-            if (node.x !== targetX || node.y !== targetY) {
-              newNodes[idx] = { ...node, x: targetX, y: targetY };
-              hasChanges = true;
-            }
-          }
-
-          const outgoing = edges.filter(e => e.fromId === nodeId);
-          if (node.type === 'decision') {
-            const yesEdge = outgoing.find(e => e.label === 'YES' || e.direction === 'right' || e.toId === node.yes);
-            const noEdge  = outgoing.find(e => e.label === 'NO'  || e.direction === 'left'  || e.toId === node.no);
-            const mainEdge = outgoing.find(e => e !== yesEdge && e !== noEdge);
-            
-            if (yesEdge) processNode(yesEdge.toId, depth + 1, xOffset + X_SPACING);
-            if (noEdge) processNode(noEdge.toId, depth + 1, xOffset - X_SPACING);
-            if (mainEdge) processNode(mainEdge.toId, depth + 1, xOffset);
-          } else if (node.type === 'fork') {
-            const outCount = outgoing.length;
-            outgoing.forEach((e, i) => {
-              const childXOffset = xOffset + (i - (outCount - 1) / 2) * X_SPACING;
-              processNode(e.toId, depth + 1, childXOffset);
-            });
-          } else if (node.type === 'join') {
-            const firstOut = outgoing[0];
-            if (firstOut) processNode(firstOut.toId, depth + 1, xOffset);
-          } else {
-            const outCount = outgoing.length;
-            outgoing.forEach((e, i) => {
-              const childXOffset = xOffset + (i - (outCount - 1) / 2) * X_SPACING;
-              processNode(e.toId, depth + 1, childXOffset);
-            });
-          }
-        };
-
-        roots.forEach((root, idx) => processNode(root.id, 0, idx * 500));
-        return hasChanges ? newNodes : prev;
-      });
-    } else if (diagramType === 'usecase') {
-      const useCases = nodes.filter(n => n.type === 'usecase');
-      const actors = nodes.filter(n => n.type === 'actor');
-
-      setNodes(prev => prev.map(node => {
-        if (node.pinned) return node;
-        let newX = node.x;
-        let newY = node.y;
-
-        if (node.type === 'usecase') {
-          const index = useCases.findIndex(u => u.id === node.id);
-          newX = 500 - (node.width / 2);
-          newY = 150 + index * 120;
-        }
-
-        if (newX !== node.x || newY !== node.y) {
-          return { ...node, x: newX, y: newY };
-        }
-        return node;
-      }));
-
-      setNodes(prev => {
-        const currentUseCases = prev.filter(n => n.type === 'usecase');
-        return prev.map(node => {
-          if (node.pinned) return node;
-          if (node.type === 'actor') {
-            const connectedEdges = edges.filter(e => e.fromId === node.id || e.toId === node.id);
-            const connectedUseCases = currentUseCases.filter(u =>
-              connectedEdges.some(e => e.fromId === u.id || e.toId === u.id)
-            );
-
-            let newX = node.side === 'left' ? 150 : 850;
-            let newY = node.y;
-
-            if (connectedUseCases.length > 0) {
-              const avgY = connectedUseCases.reduce((sum, u) => sum + u.y + u.height/2, 0) / connectedUseCases.length;
-              newY = avgY - node.height / 2;
-            } else {
-              const actorsOnSameSide = actors.filter(a => a.side === node.side);
-              const index = actorsOnSameSide.findIndex(a => a.id === node.id);
-              newY = 150 + index * 150;
-            }
-
-            if (newX !== node.x || newY !== node.y) {
-              return { ...node, x: newX, y: newY };
-            }
-          }
-          return node;
-        });
-      });
+    if (!nodes.length) return;
+    const nextNodes = autoLayoutDiagram(nodes, edges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', diagramMeta.lanes);
+    const changed = nextNodes.some((node, index) => {
+      const prev = nodes[index];
+      return !prev || prev.x !== node.x || prev.y !== node.y || prev.offsetX !== node.offsetX || prev.offsetY !== node.offsetY;
+    });
+    if (changed) {
+      setNodes(nextNodes);
     }
-  }, [nodes, edges, diagramType]);
+  }, [nodes, edges, diagramMeta.lanes, diagramType]);
 
   useEffect(() => {
     if (!localStorage.getItem('uml-onboarding-seen')) {
@@ -692,7 +632,7 @@ export default function UMLBuilder() {
 
     const serializer = new XMLSerializer();
     let source = serializer.serializeToString(svg);
-    const styleBlock = `<style>.diagram-svg{background:white;font-family:'Inter',sans-serif;}.node-shape{fill:white;stroke:#1e293b;stroke-width:1.5px;}.node-text{font-size:13px;font-weight:500;fill:#1e293b;}.connector-line{stroke:#64748b;stroke-width:2px;fill:none;}rect[fill="url(#grid)"]{display:none;}</style>`;
+    const styleBlock = `<style>.diagram-svg{background:white;font-family:'Inter',sans-serif;}.node-shape{fill:white;stroke:#1e293b;stroke-width:1.5px;}.node-text{font-size:13px;font-weight:500;fill:#1e293b;}.connector-line{stroke:#334155;stroke-width:2.4px;fill:none;}rect[fill="url(#grid)"]{display:none;}</style>`;
     source = source.replace('>', `>${styleBlock}`);
     source = source.replace(/viewBox="[^"]+"/, `viewBox="${minX} ${minY} ${width} ${height}"`);
     source = source.replace(/width="[^"]+"/, `width="${width}"`);
@@ -1360,6 +1300,49 @@ export default function UMLBuilder() {
                   {aiClarification}
                 </div>
               )}
+
+              <div style={{ marginBottom: '1rem', border: '1px dashed #cbd5e1', borderRadius: '10px', padding: '12px', background: '#f8fafc' }}>
+                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Upload size={16} /> Upload diagram referensi
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#64748b', lineHeight: 1.5, marginBottom: '10px' }}>
+                  Upload screenshot activity, flowchart, use case, atau sequence yang sudah ada. AI akan baca struktur, deteksi bagian yang kurang rapi, lalu bangun ulang versi KeluhKampus.
+                </div>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => setUmlReferenceImage(e.target.files?.[0] || null)}
+                  style={{ width: '100%', marginBottom: '10px' }}
+                />
+                {umlReferenceImage && (
+                  <div style={{ fontSize: '0.76rem', fontWeight: 600, color: '#475569' }}>
+                    File aktif: {umlReferenceImage.name}
+                  </div>
+                )}
+              </div>
+              <button 
+                onClick={handleAnalyzeReferenceImage}
+                disabled={isAnalyzingImage || !umlReferenceImage}
+                style={{ 
+                  background: (isAnalyzingImage || !umlReferenceImage) ? '#cbd5e1' : '#0f172a',
+                  border: 'none', 
+                  color: 'white', 
+                  padding: '0 1rem', 
+                  width: '100%', 
+                  height: '44px', 
+                  borderRadius: '8px',
+                  fontSize: '0.88rem',
+                  fontWeight: 700, 
+                  display: 'flex', 
+                  justifyContent: 'center', 
+                  alignItems: 'center', 
+                  gap: '8px',
+                  cursor: (isAnalyzingImage || !umlReferenceImage) ? 'not-allowed' : 'pointer',
+                  marginBottom: '10px'
+                }}
+              >
+                {isAnalyzingImage ? <><BrainCircuit size={18} /> Analisis...</> : <><Upload size={18} /> Analisis Gambar UML</>}
+              </button>
               
               <textarea
                 value={aiPrompt}
@@ -1411,4 +1394,15 @@ export default function UMLBuilder() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
 
