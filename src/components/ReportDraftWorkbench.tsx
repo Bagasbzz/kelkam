@@ -1,8 +1,10 @@
 ﻿"use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
 import { exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { useCurrentProjectId } from "@/lib/client/use-current-project";
 
 interface NoveltyCandidate {
   id: string;
@@ -81,11 +83,31 @@ const revisionModeOptions: { value: RevisionMode; label: string; helper: string 
   { value: "custom", label: "Instruksi bebas", helper: "Kasih arahan spesifik sesuai kebutuhan user." },
 ];
 
-function normalizeApprovedDiagrams(rawProject: any): ApprovedDiagram[] {
-  const diagrams = Array.isArray(rawProject?.diagrams) ? rawProject.diagrams : [];
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeDiagramData(value: unknown): ApprovedDiagram["diagramData"] | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const nodes = Array.isArray(value.nodes)
+    ? value.nodes
+        .filter(isRecord)
+        .map((node) => ({ text: typeof node.text === "string" ? node.text : undefined }))
+    : undefined;
+
+  return {
+    nodes,
+    edges: Array.isArray(value.edges) ? value.edges : undefined,
+    meta: isRecord(value.meta) ? value.meta : undefined,
+  };
+}
+
+function normalizeApprovedDiagrams(rawProject: unknown): ApprovedDiagram[] {
+  const diagrams = isRecord(rawProject) && Array.isArray(rawProject.diagrams) ? rawProject.diagrams : [];
   return diagrams
-    .filter((diagram: any) => diagram?.status === "approved" && diagram?.diagramData)
-    .map((diagram: any) => ({
+    .filter((diagram): diagram is Record<string, unknown> => isRecord(diagram) && diagram.status === "approved" && Boolean(diagram.diagramData))
+    .map((diagram) => ({
       id: String(diagram.id || makeId("diagram")),
       title: String(diagram.title || "Diagram"),
       type: String(diagram.type || "diagram"),
@@ -93,7 +115,7 @@ function normalizeApprovedDiagrams(rawProject: any): ApprovedDiagram[] {
       caption: diagram.caption ? String(diagram.caption) : undefined,
       status: String(diagram.status || "approved"),
       approvedAt: diagram.approvedAt ? String(diagram.approvedAt) : undefined,
-      diagramData: diagram.diagramData,
+      diagramData: normalizeDiagramData(diagram.diagramData),
     }));
 }
 
@@ -125,26 +147,20 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const [revisionStage, setRevisionStage] = useState("Menunggu instruksi revisi");
   const [activeSectionRefs, setActiveSectionRefs] = useState<ReferenceItem[]>([]);
 
-  const projectId = useMemo(() => {
-    try {
-      return localStorage.getItem("current_project_id") || "proj_local_1";
-    } catch {
-      return "proj_local_1";
-    }
-  }, []);
+  const projectId = useCurrentProjectId();
 
-  const draftKey = `research_report_draft_${projectId}`;
-  const outlineKey = `research_outline_${projectId}`;
-  const noveltyKey = `research_novelty_${projectId}`;
+  const draftKey = `research_report_draft_${projectId || "unselected"}`;
+  const outlineKey = `research_outline_${projectId || "unselected"}`;
+  const noveltyKey = `research_novelty_${projectId || "unselected"}`;
   const referencesKey = "reference_search_results";
 
-  const buildSectionReferences = (referenceIds: string[] = [], refsOverride?: ReferenceItem[]) => {
+  const buildSectionReferences = useCallback((referenceIds: string[] = [], refsOverride?: ReferenceItem[]) => {
     const pool = refsOverride || references;
     const seen = new Set(referenceIds);
     return pool.filter((ref) => seen.has(ref.id)).slice(0, 6);
-  };
+  }, [references]);
 
-  const loadLocalState = () => {
+  const loadLocalState = useCallback(() => {
     try {
       const nextOutlineRaw = localStorage.getItem(outlineKey);
       const nextNoveltyRaw = localStorage.getItem(noveltyKey);
@@ -196,10 +212,10 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     } catch {
       // ignore corrupted local state
     }
-  };
+  }, [buildSectionReferences, draftKey, noveltyKey, outlineKey, referencesKey, revisionTarget]);
 
   useEffect(() => {
-    loadLocalState();
+    const loadTimer = window.setTimeout(() => loadLocalState(), 0);
 
     const refresh = () => loadLocalState();
     const handleSectionAction = (event: Event) => {
@@ -239,6 +255,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     window.addEventListener("storage", refresh);
 
     return () => {
+      window.clearTimeout(loadTimer);
       window.removeEventListener("researchOutlineUpdated", refresh);
       window.removeEventListener("researchNoveltyUpdated", refresh);
       window.removeEventListener("referenceResultsUpdated", refresh);
@@ -246,7 +263,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       window.removeEventListener("researchSectionActionRequested", handleSectionAction as EventListener);
       window.removeEventListener("storage", refresh);
     };
-  }, [projectId, references, revisionTarget]);
+  }, [buildSectionReferences, loadLocalState]);
 
   useEffect(() => {
     if (!draft) return;
@@ -260,8 +277,10 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   useEffect(() => {
     if (!isRevising) return;
 
-    setRevisionProgress(12);
-    setRevisionStage("Membaca draft dan konteks aktif");
+    const initTimer = window.setTimeout(() => {
+      setRevisionProgress(12);
+      setRevisionStage("Membaca draft dan konteks aktif");
+    }, 0);
 
     const labels = [
       "Membaca draft dan konteks aktif",
@@ -280,7 +299,10 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       });
     }, 900);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initTimer);
+      window.clearInterval(timer);
+    };
   }, [isRevising]);
 
   const assembledProject = useMemo(() => {
@@ -368,7 +390,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const pollJob = async (jobId: string) => {
     for (let attempt = 0; attempt < 1800; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1200));
-      const resp = await fetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
+      const resp = await authenticatedFetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.success) {
         throw new Error(data?.error || "Gagal membaca progres laporan.");
@@ -399,7 +421,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     setJob({ id: "pending", status: "queued", progress: 2, stage: "Memulai job laporan" });
 
     try {
-      const resp = await fetch("/api/report-jobs/start", {
+      const resp = await authenticatedFetch("/api/report-jobs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project: assembledProject }),
@@ -411,8 +433,8 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
 
       setJob(data.job as ReportJob);
       await pollJob(data.job.id);
-    } catch (e: any) {
-      setError(e?.message || "Gagal generate draft");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Gagal generate draft");
     } finally {
       setLoading(false);
     }
@@ -426,7 +448,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     setFeedback(null);
 
     try {
-      const resp = await fetch("/api/ai/revise-report", {
+      const resp = await authenticatedFetch("/api/ai/revise-report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -451,8 +473,8 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       setRevisionProgress(100);
       setRevisionStage("Revisi selesai dirapikan");
       setFeedback(revisionTarget ? `Bagian ${revisionTarget} berhasil direvisi.` : "Draft berhasil direvisi.");
-    } catch (e: any) {
-      setError(e?.message || "Gagal merevisi draft.");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Gagal merevisi draft.");
     } finally {
       window.setTimeout(() => setIsRevising(false), 400);
     }
@@ -466,8 +488,8 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     try {
       await exportMarkdownToDocx(draft, assembledProject.title || assembledProject.topic || "laporan-riset");
       setFeedback("DOCX berhasil diexport.");
-    } catch (e: any) {
-      setError(e?.message || "Gagal export DOCX.");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Gagal export DOCX.");
     } finally {
       setIsExporting(false);
     }

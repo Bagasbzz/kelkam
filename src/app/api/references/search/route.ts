@@ -2,8 +2,10 @@
 import { searchSemanticScholar } from "@/lib/references/semantic-scholar";
 import { searchOpenAlex } from "@/lib/references/openalex";
 import { searchCrossref, verifyCrossrefDoi } from "@/lib/references/crossref";
+import type { ProviderPaper } from "@/lib/references/types";
+import { getErrorMessage } from "@/lib/errors";
 
-function toApaFromProvider(paper: any) {
+function toApaFromProvider(paper: ProviderPaper) {
   const authors = (paper.authors || []).slice(0, 5).join(", ");
   const year = paper.year || "n.d.";
   const title = paper.title || "Tanpa judul";
@@ -11,98 +13,113 @@ function toApaFromProvider(paper: any) {
   return `${authors || "Penulis tidak tersedia"} (${year}). ${title}.${venue ? ` ${venue}.` : ""}`;
 }
 
-function mergeAndDeduplicate(papersList: any[][], preferredSourceOrder: string[] = ["semantic-scholar", "openalex", "crossref"]) {
-  const byKey = new Map<string, any>();
+function mergeAndDeduplicate(
+  papersList: ProviderPaper[][],
+  preferredSourceOrder: string[] = ["semantic-scholar", "openalex", "crossref"],
+) {
+  const byKey = new Map<string, ProviderPaper>();
 
-  const normalizeDoi = (d: any) => {
-    if (!d) return null;
-    try {
-      const s = String(d).trim();
-      return s.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").toLowerCase();
-    } catch {
-      return String(d).toLowerCase();
-    }
+  const normalizeDoi = (value: unknown) => {
+    if (typeof value !== "string" && typeof value !== "number") return null;
+    const doi = String(value).trim();
+    if (!doi) return null;
+    return doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").toLowerCase();
   };
 
-  const normalizeTitle = (t: any) =>
-    String(t || "")
+  const normalizeTitle = (value: unknown) =>
+    String(value || "")
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
-  const fingerprint = (p: any) => {
-    const doi = normalizeDoi(p.doi);
+  const fingerprint = (paper: ProviderPaper) => {
+    const doi = normalizeDoi(paper.doi);
     if (doi) return `doi:${doi}`;
-    const t = normalizeTitle(p.title);
-    const y = p.year ? String(p.year) : "";
-    return `title:${t}::year:${y}`;
+    const title = normalizeTitle(paper.title);
+    const year = paper.year ? String(paper.year) : "";
+    return `title:${title}::year:${year}`;
   };
 
   const titleSimilarity = (a: string, b: string) => {
-    const wa = (a || "").split(/\s+/).filter(Boolean);
-    const wb = (b || "").split(/\s+/).filter(Boolean);
-    if (!wa.length || !wb.length) return 0;
-    const setA = new Set(wa);
-    const inter = wb.filter((w) => setA.has(w)).length;
-    const union = new Set([...wa, ...wb]).size || 1;
-    return inter / union;
+    const wordsA = a.split(/\s+/).filter(Boolean);
+    const wordsB = b.split(/\s+/).filter(Boolean);
+    if (!wordsA.length || !wordsB.length) return 0;
+    const setA = new Set(wordsA);
+    const intersection = wordsB.filter((word) => setA.has(word)).length;
+    const union = new Set([...wordsA, ...wordsB]).size || 1;
+    return intersection / union;
   };
 
   for (const papers of papersList) {
-    for (const p of papers) {
-      const key = fingerprint(p);
+    for (const paper of papers) {
+      const key = fingerprint(paper);
       let existing = byKey.get(key);
 
-      if (!existing && !normalizeDoi(p.doi)) {
-        const tNorm = normalizeTitle(p.title);
-        const y = p.year ? String(p.year) : "";
-        for (const [k, v] of byKey.entries()) {
-          if (!k.startsWith("title:")) continue;
-          const existingTitle = normalizeTitle(v.title || "");
-          const existingYear = v.year ? String(v.year) : "";
-          const sim = titleSimilarity(tNorm, existingTitle);
-          if (sim >= 0.7 && (existingYear === "" || y === "" || existingYear === y)) {
-            existing = v;
+      if (!existing && !normalizeDoi(paper.doi)) {
+        const normalizedTitle = normalizeTitle(paper.title);
+        const year = paper.year ? String(paper.year) : "";
+        for (const [storedKey, storedPaper] of byKey.entries()) {
+          if (!storedKey.startsWith("title:")) continue;
+          const storedTitle = normalizeTitle(storedPaper.title);
+          const storedYear = storedPaper.year ? String(storedPaper.year) : "";
+          const similarity = titleSimilarity(normalizedTitle, storedTitle);
+          if (similarity >= 0.7 && (!storedYear || !year || storedYear === year)) {
+            existing = storedPaper;
             break;
           }
         }
       }
 
       if (!existing) {
-        byKey.set(key, { ...p, sourceProviders: Array.from(new Set(p.sourceProviders || [p.source].filter(Boolean))) });
+        byKey.set(key, {
+          ...paper,
+          sourceProviders: Array.from(
+            new Set(paper.sourceProviders || (paper.source ? [paper.source] : [])),
+          ),
+        });
         continue;
       }
 
-      const merged = { ...existing };
-      if (!merged.doi && p.doi) merged.doi = normalizeDoi(p.doi) || p.doi;
-      if (!merged.pdfUrl && p.pdfUrl) merged.pdfUrl = p.pdfUrl;
-      if (!merged.abstract && p.abstract) merged.abstract = p.abstract;
-      if (!merged.url && p.url) merged.url = p.url;
-      if (!merged.venue && p.venue) merged.venue = p.venue;
-      if (!merged.authors || merged.authors.length === 0) merged.authors = p.authors || [];
-      if (!merged.pdfStatus || merged.pdfStatus === "unknown") merged.pdfStatus = p.pdfStatus || merged.pdfStatus || "unknown";
-      merged.doiVerified = Boolean(merged.doiVerified || p.doiVerified);
+      const merged: ProviderPaper = { ...existing };
+      if (!merged.doi && paper.doi) merged.doi = normalizeDoi(paper.doi) || paper.doi;
+      if (!merged.pdfUrl && paper.pdfUrl) merged.pdfUrl = paper.pdfUrl;
+      if (!merged.abstract && paper.abstract) merged.abstract = paper.abstract;
+      if (!merged.url && paper.url) merged.url = paper.url;
+      if (!merged.venue && paper.venue) merged.venue = paper.venue;
+      if (!merged.authors?.length) merged.authors = paper.authors || [];
+      if (!merged.pdfStatus || merged.pdfStatus === "unknown") {
+        merged.pdfStatus = paper.pdfStatus || merged.pdfStatus || "unknown";
+      }
+      merged.doiVerified = Boolean(merged.doiVerified || paper.doiVerified);
 
-      const existC = Number(merged.citationCount || 0);
-      const newC = Number(p.citationCount || 0);
-      if (newC > existC) merged.citationCount = newC;
+      const existingCitations = Number(merged.citationCount || 0);
+      const newCitations = Number(paper.citationCount || 0);
+      if (newCitations > existingCitations) merged.citationCount = newCitations;
 
-      merged.isOpenAccess = Boolean(merged.isOpenAccess || p.isOpenAccess);
+      merged.isOpenAccess = Boolean(merged.isOpenAccess || paper.isOpenAccess);
 
-      const existSourceIdx = preferredSourceOrder.indexOf(merged.source || "");
-      const pSourceIdx = preferredSourceOrder.indexOf(p.source || "");
-      if (pSourceIdx >= 0 && (existSourceIdx === -1 || pSourceIdx < existSourceIdx)) {
-        merged.source = p.source;
+      const existingSourceIndex = preferredSourceOrder.indexOf(merged.source || "");
+      const newSourceIndex = preferredSourceOrder.indexOf(paper.source || "");
+      if (newSourceIndex >= 0 && (existingSourceIndex === -1 || newSourceIndex < existingSourceIndex)) {
+        merged.source = paper.source;
       }
 
       merged.sourceProviders = Array.from(
-        new Set([...(merged.sourceProviders || []), ...(p.sourceProviders || []), ...(p.source ? [p.source] : [])])
+        new Set([
+          ...(merged.sourceProviders || []),
+          ...(paper.sourceProviders || []),
+          ...(paper.source ? [paper.source] : []),
+        ]),
       );
-      merged.raw = merged.raw ? (Array.isArray(merged.raw) ? merged.raw.concat(p.raw) : [merged.raw, p.raw]) : p.raw;
+      if (merged.raw !== undefined && paper.raw !== undefined) {
+        merged.raw = Array.isArray(merged.raw) ? [...merged.raw, paper.raw] : [merged.raw, paper.raw];
+      } else if (paper.raw !== undefined) {
+        merged.raw = paper.raw;
+      }
 
-      const newKey = normalizeDoi(merged.doi) ? `doi:${normalizeDoi(merged.doi)}` : key;
-      byKey.set(newKey, merged);
+      const canonicalDoi = normalizeDoi(merged.doi);
+      byKey.set(canonicalDoi ? `doi:${canonicalDoi}` : key, merged);
     }
   }
 
@@ -134,7 +151,7 @@ export async function POST(req: Request) {
       openAccessOnly: Boolean(openAccessOnly),
     };
 
-    const calls: Promise<any[]>[] = [];
+    const calls: Promise<ProviderPaper[]>[] = [];
     if (providers.includes("semantic-scholar")) calls.push(searchSemanticScholar(query, searchOptions));
     if (providers.includes("openalex")) calls.push(searchOpenAlex(query, searchOptions));
     if (providers.includes("crossref")) calls.push(searchCrossref(query, searchOptions));
@@ -144,7 +161,7 @@ export async function POST(req: Request) {
 
     const limited = (merged || []).slice(0, Number(limit || 5));
     const verified = await Promise.all(
-      limited.map(async (paper: any) => {
+      limited.map(async (paper) => {
         if (!paper.doi) return paper;
         const doiCheck = await verifyCrossrefDoi(paper.doi);
         return {
@@ -159,7 +176,7 @@ export async function POST(req: Request) {
       })
     );
 
-    const mapped = verified.map((p: any) => ({
+    const mapped = verified.map((p) => ({
       id: p.doi || p.id || p.title?.slice(0, 60) || Math.random().toString(36).slice(2, 9),
       title: p.title || "",
       authors: p.authors || [],
@@ -179,8 +196,11 @@ export async function POST(req: Request) {
     }));
 
     return NextResponse.json({ success: true, data: mapped });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("API /api/references/search Error:", error);
-    return NextResponse.json({ success: false, error: error?.message || "Gagal mencari referensi." }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: getErrorMessage(error, "Gagal mencari referensi.") },
+      { status: 500 },
+    );
   }
 }

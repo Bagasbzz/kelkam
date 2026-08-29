@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase-browser";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
+import { useCurrentProjectId } from "@/lib/client/use-current-project";
+import { getErrorMessage } from "@/lib/errors";
 
 interface NoveltyCandidate {
   id: string;
@@ -26,29 +28,35 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
   const [source, setSource] = useState<string | null>(null);
   const [novelty, setNovelty] = useState<NoveltyCandidate | null>(null);
 
-  const projectId = useMemo(() => {
-    try {
-      return localStorage.getItem("current_project_id") || "proj_local_1";
-    } catch {
-      return "proj_local_1";
-    }
-  }, []);
+  const projectId = useCurrentProjectId();
 
-  const storageKey = `research_outline_${projectId}`;
+  const storageKey = `research_outline_${projectId || "unselected"}`;
 
-  useEffect(() => {
+  const loadStoredOutline = useCallback(() => {
     try {
       const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        setSections(Array.isArray(parsed?.sections) ? parsed.sections : []);
-        setCitationMap(parsed?.citationMap && typeof parsed.citationMap === "object" ? parsed.citationMap : {});
-        setSource(typeof parsed?.source === "string" ? parsed.source : null);
-      }
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      setSections(Array.isArray(parsed?.sections) ? parsed.sections : []);
+      setCitationMap(parsed?.citationMap && typeof parsed.citationMap === "object" ? parsed.citationMap : {});
+      setSource(typeof parsed?.source === "string" ? parsed.source : null);
     } catch {
       // ignore cache parse errors
     }
   }, [storageKey]);
+
+  const loadStoredNovelty = useCallback(() => {
+    try {
+      const noveltyRaw = localStorage.getItem(`research_novelty_${projectId}`);
+      if (!noveltyRaw) return;
+      const parsed = JSON.parse(noveltyRaw);
+      const nextCandidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+      const selectedCandidate = nextCandidates.find((item: NoveltyCandidate) => item.id === parsed?.selectedId) || nextCandidates[0] || null;
+      setNovelty(selectedCandidate);
+    } catch {
+      // ignore novelty cache parse errors
+    }
+  }, [projectId]);
 
   useEffect(() => {
     const handleNovelty = (event: Event) => {
@@ -57,21 +65,15 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
     };
 
     window.addEventListener("researchNoveltyUpdated", handleNovelty);
+    const outlineTimer = window.setTimeout(() => loadStoredOutline(), 0);
+    const noveltyTimer = window.setTimeout(() => loadStoredNovelty(), 0);
 
-    try {
-      const noveltyRaw = localStorage.getItem(`research_novelty_${projectId}`);
-      if (noveltyRaw) {
-        const parsed = JSON.parse(noveltyRaw);
-        const nextCandidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
-        const selectedCandidate = nextCandidates.find((item: NoveltyCandidate) => item.id === parsed?.selectedId) || nextCandidates[0] || null;
-        setNovelty(selectedCandidate);
-      }
-    } catch {
-      // ignore novelty cache parse errors
-    }
-
-    return () => window.removeEventListener("researchNoveltyUpdated", handleNovelty);
-  }, [projectId]);
+    return () => {
+      window.clearTimeout(outlineTimer);
+      window.clearTimeout(noveltyTimer);
+      window.removeEventListener("researchNoveltyUpdated", handleNovelty);
+    };
+  }, [loadStoredNovelty, loadStoredOutline, projectId]);
 
   const persistOutline = (nextSections: ReportSectionBrief[], nextCitationMap: Record<string, string[]>, nextSource: string | null) => {
     try {
@@ -116,6 +118,7 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
     setLoading(true);
     setError(null);
     try {
+      if (!projectId) throw new Error("Pilih project terlebih dahulu.");
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
       if (!token) {
@@ -143,8 +146,8 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
       setCitationMap(nextCitationMap);
       setSource(data.source || null);
       persistOutline(nextSections, nextCitationMap, data.source || null);
-    } catch (e: any) {
-      setError(e?.message || "Gagal membuat outline");
+    } catch (generationError: unknown) {
+      setError(getErrorMessage(generationError, "Gagal membuat outline"));
     } finally {
       setLoading(false);
     }

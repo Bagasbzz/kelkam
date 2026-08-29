@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendToAI } from "@/lib/ai/client";
+import { getErrorMessage } from "@/lib/errors";
 
 export async function POST(req: Request) {
   try {
@@ -46,10 +47,10 @@ Teks yang dianalisis:
       success: true,
       data: aiResponse,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("API /api/ai/structure-check Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Terjadi kesalahan internal pada server" },
+      { success: false, error: getErrorMessage(error, "Terjadi kesalahan internal pada server") },
       { status: 500 }
     );
   }

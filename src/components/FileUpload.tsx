@@ -5,13 +5,23 @@ import { Upload, File, X, CheckCircle2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Link from 'next/link';
+import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
+import { getErrorMessage } from '@/lib/errors';
 
 interface FileUploadProps {
-  onSuccess?: (content: any) => void;
+  onSuccess?: (content: unknown) => void;
   endpoint?: string;
   ctaLabel?: string;
   successTitle?: string;
   successDescription?: string;
+}
+
+const MAX_DOCX_BYTES = 20 * 1024 * 1024;
+
+function validateDocx(file: File) {
+  if (!file.name.toLowerCase().endsWith('.docx')) return 'Format file harus .docx';
+  if (file.size > MAX_DOCX_BYTES) return 'Ukuran file maksimal 20 MB';
+  return null;
 }
 
 export default function FileUpload({
@@ -33,10 +43,11 @@ export default function FileUpload({
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
-      if (droppedFile.name.endsWith('.docx')) {
+      const validationError = validateDocx(droppedFile);
+      if (!validationError) {
         setFile(droppedFile);
       } else {
-        setError('Format file harus .docx');
+        setError(validationError);
       }
     }
   };
@@ -47,10 +58,11 @@ export default function FileUpload({
 
     if (e.target.files && e.target.files[0]) {
       const selectedFile = e.target.files[0];
-      if (selectedFile.name.endsWith('.docx')) {
+      const validationError = validateDocx(selectedFile);
+      if (!validationError) {
         setFile(selectedFile);
       } else {
-        setError('Format file harus .docx');
+        setError(validationError);
       }
     }
   };
@@ -66,7 +78,7 @@ export default function FileUpload({
     formData.append('file', file);
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: 'POST',
         body: formData,
       });
@@ -95,8 +107,8 @@ export default function FileUpload({
         setSuccess(true);
         setFile(null);
       }
-    } catch (err: any) {
-      setError(err.message || 'Terjadi kesalahan.');
+    } catch (uploadError: unknown) {
+      setError(getErrorMessage(uploadError, 'Terjadi kesalahan.'));
     } finally {
       setIsUploading(false);
     }
@@ -137,6 +149,7 @@ export default function FileUpload({
               </div>
             )}
             <input 
+              aria-label="Pilih dokumen DOCX"
               type="file" 
               accept=".docx" 
               onChange={handleChange} 

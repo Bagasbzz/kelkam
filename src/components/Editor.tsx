@@ -13,15 +13,16 @@ import { Highlight } from '@tiptap/extension-highlight';
 import { Underline } from '@tiptap/extension-underline';
 import { Placeholder } from '@tiptap/extension-placeholder';
 import { Extension } from '@tiptap/core';
+import type { JSONContent } from '@tiptap/core';
 import { useEffect, useState } from 'react';
 import { 
   Bold, Italic, Underline as UnderlineIcon, 
-  AlignLeft, AlignCenter, AlignRight, AlignJustify,
-  Type, Heading1, Heading2, Heading3, Image as ImageIcon,
-  Highlighter, Quote, Minus
+  AlignLeft, AlignCenter, AlignJustify,
+  Heading1, Heading2
 } from 'lucide-react';
 import { SlashCommand } from './editor/extensions/SlashCommand';
 import { suggestion } from './editor/extensions/suggestion';
+import type { RichTextNode } from "@/lib/types/thesis";
 
 // Custom Font Size Extension
 export const FontSize = Extension.create({
@@ -55,15 +56,44 @@ export const FontSize = Extension.create({
 });
 
 interface SkripsiEditorProps {
-  content: any;
-  onChange: (json: any) => void;
+  content: RichTextNode;
+  onChange: (json: RichTextNode) => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function withAutoImageLabels(json: JSONContent): RichTextNode {
+  let currentChapter = 0;
+  let currentImageInChapter = 0;
+
+  const newContent = json.content?.map((node) => {
+    if (node.type === 'heading' && isRecord(node.attrs) && node.attrs.level === 1) {
+      currentChapter++;
+      currentImageInChapter = 0;
+    }
+
+    if (node.type === 'smartImage') {
+      currentImageInChapter++;
+      const label = `Gambar ${currentChapter}.${currentImageInChapter}`;
+      if (!isRecord(node.attrs) || node.attrs.label !== label) {
+        return { ...node, attrs: { ...(node.attrs || {}), label } };
+      }
+    }
+
+    return node;
+  });
+
+  return { ...json, content: newContent } as RichTextNode;
 }
 
 export default function SkripsiEditor({ content, onChange }: SkripsiEditorProps) {
   const [isMount, setIsMount] = useState(false);
 
   useEffect(() => {
-    setIsMount(true);
+    const timer = window.setTimeout(() => setIsMount(true), 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const editor = useEditor({
@@ -109,33 +139,13 @@ export default function SkripsiEditor({ content, onChange }: SkripsiEditorProps)
     ],
     content: content,
     onUpdate: ({ editor }) => {
-      // Auto-Labeling for Images
       const json = editor.getJSON();
-      let currentChapter = 0;
-      let currentImageInChapter = 0;
-      
-      const newContent = json.content?.map((node: any) => {
-        if (node.type === 'heading' && node.attrs.level === 1) {
-          currentChapter++;
-          currentImageInChapter = 0;
-        }
-        if (node.type === 'smartImage') {
-          currentImageInChapter++;
-          const label = `Gambar ${currentChapter}.${currentImageInChapter}`;
-          if (node.attrs.label !== label) {
-            return { ...node, attrs: { ...node.attrs, label } };
-          }
-        }
-        return node;
-      });
+      const labeledJson = withAutoImageLabels(json);
 
-      // Avoid infinite loop by checking if changes actually occurred
-      if (JSON.stringify(newContent) !== JSON.stringify(json.content)) {
-        // We use a slight delay or command to update without re-triggering onUpdate immediately if possible
-        // but for now, we just pass to onChange
-        onChange({ ...json, content: newContent });
+      if (JSON.stringify(labeledJson.content) !== JSON.stringify(json.content)) {
+        onChange(labeledJson);
       } else {
-        onChange(json);
+        onChange(json as RichTextNode);
       }
     },
     editorProps: {

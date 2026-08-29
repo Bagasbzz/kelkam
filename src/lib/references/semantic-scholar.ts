@@ -1,5 +1,6 @@
 import { ProviderPaper, SearchOptions } from "./types";
-import { fetchWithRetryAndCache } from "./provider-client";
+import { fetchWithRetryAndCache, isRecord } from "./provider-client";
+import { getErrorMessage } from "@/lib/errors";
 
 const SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1/paper/search";
 
@@ -35,23 +36,36 @@ export async function searchSemanticScholar(query: string, options: SearchOption
       headers: { Accept: "application/json" },
     });
 
-    const data = Array.isArray(json.data) ? json.data : [];
+    const payload = isRecord(json) ? json : {};
+    const data = Array.isArray(payload.data) ? payload.data.filter(isRecord) : [];
 
-    const papers: ProviderPaper[] = data.map((p: any) => ({
-      id: p.paperId || p.paper_id || String(p.paperId || p.paper_id || ""),
-      title: p.title || "",
-      authors: Array.isArray(p.authors) ? p.authors.map((a: any) => a.name).filter(Boolean) : [],
-      year: p.year || null,
-      venue: p.venue || p.publicationVenue?.name || null,
-      abstract: p.abstract || null,
-      url: p.url || null,
-      pdfUrl: p.openAccessPdf?.url || null,
-      doi: p.externalIds?.DOI || null,
-      citationCount: p.citationCount || 0,
-      isOpenAccess: Boolean(p.isOpenAccess || p.openAccessPdf?.url),
-      source: "semantic-scholar",
-      raw: p,
-    }));
+    const papers: ProviderPaper[] = data.map((paper) => {
+      const publicationVenue = isRecord(paper.publicationVenue) ? paper.publicationVenue : {};
+      const openAccessPdf = isRecord(paper.openAccessPdf) ? paper.openAccessPdf : {};
+      const externalIds = isRecord(paper.externalIds) ? paper.externalIds : {};
+      const authors = Array.isArray(paper.authors)
+        ? paper.authors
+            .filter(isRecord)
+            .map((author) => author.name)
+            .filter((author): author is string => typeof author === "string" && Boolean(author))
+        : [];
+
+      return {
+        id: String(paper.paperId || paper.paper_id || ""),
+        title: String(paper.title || ""),
+        authors,
+        year: typeof paper.year === "number" ? paper.year : null,
+        venue: paper.venue ? String(paper.venue) : publicationVenue.name ? String(publicationVenue.name) : null,
+        abstract: paper.abstract ? String(paper.abstract) : null,
+        url: paper.url ? String(paper.url) : null,
+        pdfUrl: openAccessPdf.url ? String(openAccessPdf.url) : null,
+        doi: externalIds.DOI ? String(externalIds.DOI) : null,
+        citationCount: Number(paper.citationCount) || 0,
+        isOpenAccess: Boolean(paper.isOpenAccess || openAccessPdf.url),
+        source: "semantic-scholar",
+        raw: paper,
+      };
+    });
 
     // optional filtering by year range or openAccessOnly
     return papers.filter((paper) => {
@@ -60,8 +74,8 @@ export async function searchSemanticScholar(query: string, options: SearchOption
       if (options.openAccessOnly && !paper.isOpenAccess) return false;
       return true;
     });
-  } catch (error: any) {
-    console.error("searchSemanticScholar error:", error?.message || error);
+  } catch (error: unknown) {
+    console.error("searchSemanticScholar error:", getErrorMessage(error, "Unknown provider error"));
     return [];
   }
 }

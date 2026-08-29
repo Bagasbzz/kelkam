@@ -5,6 +5,8 @@ import { Sparkles, FileSearch, Type, Copy, Check } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Textarea from "@/components/ui/Textarea";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { getErrorMessage } from "@/lib/errors";
 
 export default function AIToolsPage() {
   const [activeTab, setActiveTab] = useState<"checker" | "rewriter">("checker");
@@ -25,7 +27,7 @@ export default function AIToolsPage() {
     const endpoint = activeTab === "checker" ? "/api/ai/structure-check" : "/api/ai/academic-rewrite";
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await authenticatedFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: inputText }),
@@ -36,8 +38,8 @@ export default function AIToolsPage() {
       
       // Handle the standardized { success, data } format
       setResult(data.data || data.result);
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err, "Gagal menghubungi AI."));
     } finally {
       setIsLoading(false);
     }
@@ -91,6 +93,7 @@ export default function AIToolsPage() {
             
             <Card variant="borderless" padding="md" className="ring-offset-white border-2 border-transparent focus-within:border-blue-200 focus-within:ring-8 focus-within:ring-blue-50 transition-all">
               <Textarea 
+                label={activeTab === "checker" ? "Teks yang akan diperiksa" : "Teks yang akan ditulis ulang"}
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 className="h-80 bg-transparent p-0 border-none focus:ring-0"

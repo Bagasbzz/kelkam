@@ -42,6 +42,8 @@ thesis-flow/
        created_at timestamp with time zone default timezone('utc'::text, now()) not null
      );
      ```
+   - Setelah tabel dibuat, jalankan `scripts/supabase_migrations/005_secure_waitlist.sql`
+     agar anonymous hanya dapat mendaftar dan tidak dapat membaca daftar email.
    - Update `.env.local` in the project root with your project credentials:
      ```env
      NEXT_PUBLIC_SUPABASE_URL=your-project-url

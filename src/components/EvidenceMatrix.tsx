@@ -1,7 +1,9 @@
 ﻿"use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase-browser";
+import { useCurrentProjectId } from "@/lib/client/use-current-project";
+import { getErrorMessage } from "@/lib/errors";
 
 interface EvidenceRow {
   id: string;
@@ -15,11 +17,12 @@ interface EvidenceRow {
 }
 
 export default function EvidenceMatrix() {
+  const projectId = useCurrentProjectId();
   const [rows, setRows] = useState<EvidenceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const loadEvidence = async () => {
+  const loadEvidence = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -31,7 +34,11 @@ export default function EvidenceMatrix() {
         return;
       }
 
-      const projectId = localStorage.getItem("current_project_id") || "proj_local_1";
+      if (!projectId) {
+        setRows([]);
+        setError("Pilih project terlebih dahulu.");
+        return;
+      }
       const resp = await fetch(`/api/references/evidence?projectId=${encodeURIComponent(projectId)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -40,22 +47,25 @@ export default function EvidenceMatrix() {
         throw new Error(data?.error || "Gagal memuat evidence");
       }
       setRows(Array.isArray(data.data) ? data.data : []);
-    } catch (e: any) {
-      setError(e?.message || "Gagal memuat evidence");
+    } catch (loadError: unknown) {
+      setError(getErrorMessage(loadError, "Gagal memuat evidence"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [projectId]);
 
   useEffect(() => {
-    loadEvidence();
+    const timer = window.setTimeout(() => {
+      void loadEvidence();
+    }, 0);
     window.addEventListener("referenceEvidenceUpdated", loadEvidence);
     window.addEventListener("researchProjectChanged", loadEvidence);
     return () => {
+      window.clearTimeout(timer);
       window.removeEventListener("referenceEvidenceUpdated", loadEvidence);
       window.removeEventListener("researchProjectChanged", loadEvidence);
     };
-  }, []);
+  }, [loadEvidence]);
 
   return (
     <div className="p-4 border rounded-lg bg-white">

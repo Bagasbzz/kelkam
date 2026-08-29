@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GraduationCap, Workflow, BookOpen, FileText, LayoutDashboard, LayoutTemplate, Sparkles, BarChart3 } from "lucide-react";
+import { GraduationCap, Workflow, BookOpen, FileText, LayoutDashboard, LayoutTemplate, Sparkles, BarChart3, BrainCircuit } from "lucide-react";
 import { useState, useEffect } from "react";
+import AuthMenu from "@/components/AuthMenu";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -18,7 +19,22 @@ export default function Navbar() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileMenuOpen(false);
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleEscape);
+    };
+  }, [mobileMenuOpen]);
+
   const navLinks = [
+    { href: "/studio", label: "Studio", icon: BrainCircuit },
     { href: "/dashboard", label: "Laporan", icon: LayoutDashboard },
     { href: "/uml-builder", label: "UML", icon: Workflow },
     { href: "/data-synthesizer", label: "Data", icon: BookOpen },
@@ -69,7 +85,7 @@ export default function Navbar() {
             })}
           </div>
 
-          <div className="hidden xl:flex items-center">
+          <div className="ml-auto mr-2 hidden xl:flex items-center gap-3">
              <a
               href="https://bazzcreate.vercel.app"
               target="_blank"
@@ -78,13 +94,22 @@ export default function Navbar() {
             >
               <span className="opacity-60 group-hover:opacity-100 transition-opacity">by</span>
               <span className="text-slate-900 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-100 group-hover:bg-blue-600 group-hover:text-white group-hover:border-blue-600 transition-all shadow-sm">Bazzcreate</span>
-            </a>
+             </a>
+             <AuthMenu />
+          </div>
+
+          <div className="ml-auto mr-2 xl:hidden">
+            <AuthMenu />
           </div>
 
           {/* Mobile Menu Toggle */}
           <button
+            type="button"
             className="xl:hidden p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            aria-label={mobileMenuOpen ? "Tutup menu navigasi" : "Buka menu navigasi"}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-navigation"
           >
             <div className="w-6 flex flex-col gap-1.5">
               <span className={`w-full h-0.5 bg-current rounded-full transition-all ${mobileMenuOpen ? 'rotate-45 translate-y-2' : ''}`} />
@@ -96,37 +121,42 @@ export default function Navbar() {
       </nav>
 
       {/* Mobile Menu Dropdown */}
-      <div 
-        className={`fixed inset-0 z-[90] bg-slate-900/20 backdrop-blur-sm transition-opacity xl:hidden ${mobileMenuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-        onClick={() => setMobileMenuOpen(false)}
-      >
-        <div 
-          className={`absolute top-[72px] left-4 right-4 bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 flex flex-col gap-2 transition-transform duration-300 ${mobileMenuOpen ? 'translate-y-0 scale-100' : '-translate-y-4 scale-95'}`}
-          onClick={e => e.stopPropagation()}
+      {mobileMenuOpen && (
+        <div
+          className="fixed inset-0 z-[90] bg-slate-900/20 backdrop-blur-sm xl:hidden"
+          onClick={() => setMobileMenuOpen(false)}
         >
-          {navLinks.map((link) => {
-            const isActive = pathname.startsWith(link.href);
-            const Icon = link.icon;
-            return (
-              <Link
-                key={link.href}
-                href={link.href}
-                onClick={() => setMobileMenuOpen(false)}
-                className={`flex items-center gap-3 px-4 py-3.5 rounded-2xl text-base font-bold transition-all ${
-                  isActive
-                    ? "bg-blue-50 text-blue-600"
-                    : "text-slate-600 hover:bg-slate-50"
-                }`}
-              >
-                <div className={`p-2 rounded-xl ${isActive ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
-                   <Icon className="w-5 h-5" />
-                </div>
-                {link.label}
-              </Link>
-            );
-          })}
+          <div
+            id="mobile-navigation"
+            aria-label="Navigasi utama"
+            className="absolute top-[72px] left-4 right-4 bg-white rounded-3xl shadow-2xl border border-slate-100 p-4 flex flex-col gap-2"
+            onClick={e => e.stopPropagation()}
+          >
+            {navLinks.map((link) => {
+              const isActive = pathname.startsWith(link.href);
+              const Icon = link.icon;
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`flex items-center gap-3 px-4 py-3.5 rounded-2xl text-base font-bold transition-all ${
+                    isActive
+                      ? "bg-blue-50 text-blue-600"
+                      : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  <div className={`p-2 rounded-xl ${isActive ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  {link.label}
+                </Link>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
     </>
   );
 }

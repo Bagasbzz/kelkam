@@ -1,5 +1,19 @@
 import { Extension } from '@tiptap/core'
 import Suggestion from '@tiptap/suggestion'
+import type { Editor } from '@tiptap/core'
+
+interface SlashCommandSuggestionProps {
+  editor: Editor;
+  range: { from: number; to: number };
+}
+
+interface SlashCommandItemProps {
+  editor: Editor;
+  range: { from: number; to: number };
+  props: {
+    command: (value: SlashCommandSuggestionProps) => void;
+  };
+}
 
 export const SlashCommand = Extension.create({
   name: 'slashCommand',
@@ -8,7 +22,7 @@ export const SlashCommand = Extension.create({
     return {
       suggestion: {
         char: '/',
-        command: ({ editor, range, props }: any) => {
+        command: ({ editor, range, props }: SlashCommandItemProps) => {
           props.command({ editor, range })
         },
       },

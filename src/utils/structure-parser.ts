@@ -31,7 +31,7 @@ export function parseThesisStructure(text: string): ParseResult {
 
   paragraphs.forEach(p => {
     let level = 0; // 0 = paragraph, 1 = BAB, 2 = 1.1, 3 = 1.1.1
-    let title = p;
+    const title = p;
 
     // 1. Detection Logic
     if (chapterRegex.test(p)) {
@@ -99,6 +99,7 @@ export function parseThesisStructure(text: string): ParseResult {
       const target = currentSubChapter || currentChapter;
       if (target) {
         if (!target.content) target.content = { type: 'doc', content: [] };
+        if (!target.content.content) target.content.content = [];
         target.content.content.push({
           type: 'paragraph',
           content: [{ type: 'text', text: p }]
@@ -117,6 +118,8 @@ export function parseThesisStructure(text: string): ParseResult {
             sections.push(intro);
             currentChapter = intro;
         }
+        if (!currentChapter!.content) currentChapter!.content = { type: 'doc', content: [] };
+        if (!currentChapter!.content.content) currentChapter!.content.content = [];
         currentChapter!.content.content.push({
           type: 'paragraph',
           content: [{ type: 'text', text: p }]

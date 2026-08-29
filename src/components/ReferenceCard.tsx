@@ -49,7 +49,8 @@ export default function ReferenceCard({
     try {
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
-      const projectId = (typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null) || "proj_local_1";
+      const projectId = typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null;
+      if (!projectId) throw new Error("Pilih project terlebih dahulu.");
 
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;

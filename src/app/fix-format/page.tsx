@@ -6,17 +6,49 @@ import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ThesisDocument, THESIS_PRESETS } from "@/lib/types/thesis";
+import {
+  THESIS_PRESETS,
+  type RichTextNode,
+  type ThesisDocument,
+  type ThesisSection,
+} from "@/lib/types/thesis";
+
+interface ImportResult {
+  sections: ThesisSection[];
+  stats: {
+    chapters: number;
+    subChapters: number;
+    paragraphs: number;
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeImportResult(value: unknown): ImportResult | null {
+  if (!isRecord(value) || !Array.isArray(value.sections) || !isRecord(value.stats)) return null;
+  return {
+    sections: value.sections as ThesisSection[],
+    stats: {
+      chapters: Math.max(0, Number(value.stats.chapters) || 0),
+      subChapters: Math.max(0, Number(value.stats.subChapters) || 0),
+      paragraphs: Math.max(0, Number(value.stats.paragraphs) || 0),
+    },
+  };
+}
 
 export default function FixFormatPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [mode, setMode] = useState<"format" | "import">("format");
-  const [parseResult, setParseResult] = useState<any>(null);
+  const [parseResult, setParseResult] = useState<ImportResult | null>(null);
   const [doc, setDoc] = useState<ThesisDocument | null>(null);
 
-  const handleImport = (result: any) => {
-    setParseResult(result);
+  const handleImport = (result: unknown) => {
+    const normalized = normalizeImportResult(result);
+    if (!normalized) return;
+    setParseResult(normalized);
 
     const newDoc: ThesisDocument = {
       id: Date.now().toString(),
@@ -36,7 +68,7 @@ export default function FixFormatPage() {
         problem: "",
       },
       settings: THESIS_PRESETS["Standar Indonesia"],
-      sections: result.sections,
+      sections: normalized.sections,
       content: { type: "doc", content: [] },
     };
 
@@ -48,7 +80,7 @@ export default function FixFormatPage() {
     if (!doc) return;
     setStep(3);
 
-    const allContent: any[] = [];
+    const allContent: RichTextNode[] = [];
     doc.sections.forEach((chapter) => {
       allContent.push({
         type: "heading",
@@ -159,7 +191,7 @@ export default function FixFormatPage() {
             />
           )}
 
-          {step === 2 && doc && mode === "import" && (
+          {step === 2 && doc && parseResult && mode === "import" && (
             <div className="space-y-6 md:space-y-8 animate-in fade-in zoom-in duration-500">
               <Card className="p-5 md:p-8 border-blue-100 bg-blue-50/20">
                 <div className="flex items-center gap-4 mb-6">

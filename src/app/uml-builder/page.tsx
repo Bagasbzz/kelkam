@@ -1,26 +1,184 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import Link from 'next/link';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
-import { Hand, Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X, Upload } from 'lucide-react';
-import { autoLayoutDiagram } from '@/lib/uml/diagram-guard';
+import { Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X, Upload } from 'lucide-react';
+import { autoLayoutDiagram, validateDiagramData } from '@/lib/uml/diagram-guard';
+import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
+import { advanceArtifact } from '@/lib/studio/engine';
+import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-store';
 
 interface DiagramMeta {
   title?: string;
   lanes: string[];
   reportDiagramId?: string;
   reportContext?: {
+    studioProjectId?: string;
     reportTitle?: string;
     topic?: string;
     projectType?: string;
     course?: string;
     citationStyle?: string;
     sources?: { title: string; preview: string }[];
+    specificationVersion?: number;
   };
 }
+
+interface UmlApiPayload {
+  success?: boolean;
+  needsClarification?: boolean;
+  error?: string;
+  clarification?: string;
+  clarificationQuestions?: string[];
+  qualityNotes?: string[];
+  analysisSummary?: string;
+  data?: {
+    nodes?: unknown;
+    edges?: unknown;
+    lanes?: unknown;
+    title?: string;
+  };
+  spec?: {
+    lanes?: unknown;
+    title?: string;
+  };
+  validation?: {
+    errors?: unknown;
+    warnings?: unknown;
+  };
+}
+
+interface LegacyReportDiagram {
+  id: string;
+  title?: string;
+  caption?: string;
+  [key: string]: unknown;
+}
+
+const supportedNodeTypes = new Set<NodeType>([
+  'start',
+  'end',
+  'process',
+  'decision',
+  'actor',
+  'usecase',
+  'system',
+  'activity',
+  'fork',
+  'join',
+  'lifeline',
+]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const isLegacyReportDiagram = (value: unknown): value is LegacyReportDiagram => (
+  isRecord(value) && typeof value.id === 'string'
+);
+
+const stringList = (value: unknown) => (
+  Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : []
+);
+
+async function readUmlApiPayload(response: Response): Promise<UmlApiPayload> {
+  const raw = await response.text();
+  if (!raw) return { success: false, error: `Server mengembalikan respons kosong (${response.status}).` };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed as UmlApiPayload : { success: false, error: 'Format respons server tidak valid.' };
+  } catch {
+    return { success: false, error: `Respons server tidak dapat dibaca (${response.status}).` };
+  }
+}
+
+function normalizeApiEdges(value: unknown): DiagramEdge[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).flatMap((edge, index) => {
+    const fromId = typeof edge.fromId === 'string' ? edge.fromId : '';
+    const toId = typeof edge.toId === 'string' ? edge.toId : '';
+    if (!fromId || !toId) return [];
+    const direction = edge.direction === 'right' || edge.direction === 'left' || edge.direction === 'bottom' || edge.direction === 'straight'
+      ? edge.direction
+      : undefined;
+    return [{
+      id: typeof edge.id === 'string' && edge.id ? edge.id : `edge-api-${index + 1}`,
+      fromId,
+      toId,
+      label: typeof edge.label === 'string' ? edge.label : undefined,
+      dashed: edge.dashed === true,
+      direction,
+      y: typeof edge.y === 'number' && Number.isFinite(edge.y) ? edge.y : undefined,
+    }];
+  });
+}
+
+function normalizeApiNodes(
+  value: unknown,
+  diagramType: DiagramType,
+  wrapText: (text: string, maxCharsPerLine: number) => string[],
+): DiagramNode[] {
+  if (!Array.isArray(value)) return [];
+  const charsPerLine = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
+  const lineHeight = 24;
+  const maxWidth = 250;
+
+  return value.filter(isRecord).map((node, index) => {
+    const rawType = typeof node.type === 'string' ? node.type as NodeType : 'process';
+    const type = supportedNodeTypes.has(rawType) ? rawType : 'process';
+    const text = typeof node.text === 'string' ? node.text.trim().slice(0, 120) : '';
+    const lines = wrapText(text, charsPerLine);
+    let height = 60;
+    let width = 120;
+
+    if (type === 'actor') {
+      height = 80;
+      width = 60;
+    } else if (type === 'fork' || type === 'join') {
+      height = 10;
+      width = 120;
+    } else if (type === 'lifeline') {
+      const longestLine = Math.max(...lines.map((line) => line.length), 1);
+      width = Math.max(130, Math.min(210, longestLine * 9 + 52));
+      height = Math.max(420, typeof node.height === 'number' && Number.isFinite(node.height) ? node.height : 420);
+    } else if (type === 'usecase') {
+      const longestLine = Math.max(...lines.map((line) => line.length), 1);
+      width = Math.max(140, Math.min(280, longestLine * 9 + 60));
+      height = Math.max(70, lines.length * lineHeight + 35);
+    } else if (type === 'decision') {
+      const longestLine = Math.max(...lines.map((line) => line.length), 1);
+      width = Math.min(maxWidth + 60, Math.max(160, longestLine * 11 + 70));
+      height = Math.max(100, lines.length * lineHeight + 60);
+    } else {
+      height = Math.max(60, lines.length * lineHeight + 40);
+      width = lines.length > 1 ? maxWidth : Math.min(maxWidth, Math.max(120, text.length * 10 + 40));
+    }
+
+    return {
+      id: typeof node.id === 'string' && node.id ? node.id : `node-api-${index + 1}`,
+      type,
+      text: text || `Elemen ${index + 1}`,
+      lines: lines.length ? lines : [`Elemen ${index + 1}`],
+      width,
+      height,
+      x: typeof node.x === 'number' && Number.isFinite(node.x) ? node.x : 500,
+      y: typeof node.y === 'number' && Number.isFinite(node.y) ? node.y : 100,
+      lane: typeof node.lane === 'string' ? node.lane : undefined,
+      side: node.side === 'right' || node.side === 'center' ? node.side : node.side === 'left' ? 'left' : undefined,
+      yes: typeof node.yes === 'string' ? node.yes : undefined,
+      no: typeof node.no === 'string' ? node.no : undefined,
+      pinned: node.pinned === true,
+    };
+  });
+}
+
+const IconUndo = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>;
+const IconRedo = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>;
+const IconDownload = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+const IconSave = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
+const IconLayout = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
 
 export default function UMLBuilder() {
   const [diagramType, setDiagramType] = useState<DiagramType>('flowchart');
@@ -30,8 +188,6 @@ export default function UMLBuilder() {
   const [newNodeText, setNewNodeText] = useState('');
   const [parentId, setParentId] = useState<string>('');
   const [branchType, setBranchType] = useState<'main' | 'yes' | 'no'>('main');
-  const [isConnectingExisting, setIsConnectingExisting] = useState(false);
-  const [targetNodeId, setTargetNodeId] = useState<string>('');
   const [history, setHistory] = useState<{ nodes: DiagramNode[]; edges: DiagramEdge[] }[]>([]);
   const [redoStack, setRedoStack] = useState<{ nodes: DiagramNode[]; edges: DiagramEdge[] }[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -53,12 +209,19 @@ export default function UMLBuilder() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiClarification, setAiClarification] = useState('');
+  const [aiClarificationQuestions, setAiClarificationQuestions] = useState<string[]>([]);
+  const [aiClarificationAnswers, setAiClarificationAnswers] = useState<string[]>([]);
+  const [aiMode, setAiMode] = useState<'direct' | 'clarify'>('direct');
+  const [aiStatusText, setAiStatusText] = useState('');
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
   const [umlReferenceImage, setUmlReferenceImage] = useState<File | null>(null);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [diagramMeta, setDiagramMeta] = useState<DiagramMeta>({ lanes: [] });
+  const [isStorageHydrated, setIsStorageHydrated] = useState(false);
   const loadedPrefillRef = useRef(false);
+  const aiNeedsAnswers = aiClarificationQuestions.some((_, index) => !(aiClarificationAnswers[index] || '').trim());
 
   const wrapText = useCallback((text: string, maxCharsPerLine: number) => {
     const words = text.split(' ');
@@ -86,6 +249,22 @@ export default function UMLBuilder() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
+  const resetAiSession = useCallback(() => {
+    setAiClarification('');
+    setAiClarificationQuestions([]);
+    setAiClarificationAnswers([]);
+    setAiStatusText('');
+    setAiWarnings([]);
+    setUmlReferenceImage(null);
+  }, []);
+
+  const matchesDecisionLabel = useCallback((label: string | undefined, kind: 'yes' | 'no') => {
+    const normalized = (label || '').trim().toLowerCase();
+    return kind === 'yes'
+      ? normalized === 'yes' || normalized === 'ya'
+      : normalized === 'no' || normalized === 'tidak';
+  }, []);
+
   const saveToHistory = useCallback(() => {
     setHistory((prev) => [...prev, { nodes: [...nodes], edges: [...edges] }]);
     setRedoStack([]);
@@ -93,8 +272,17 @@ export default function UMLBuilder() {
 
   const handleGenerateAI = useCallback(async () => {
     if (!aiPrompt.trim()) return;
+    if (aiMode === 'clarify' && aiClarificationQuestions.length > 0) {
+      const missingAnswer = aiClarificationQuestions.some((_, index) => !(aiClarificationAnswers[index] || '').trim());
+      if (missingAnswer) {
+        showToast('Isi dulu jawaban untuk pertanyaan AI.');
+        return;
+      }
+    }
     setIsGeneratingAI(true);
-    setToast('AI is thinking...');
+    setAiWarnings([]);
+    setAiStatusText(aiMode === 'clarify' && aiClarificationQuestions.length === 0 ? 'AI sedang mencari pertanyaan paling penting...' : 'AI sedang menyusun diagram final...');
+    showToast('AI sedang menyusun diagram...');
     try {
       const existingSummary = nodes.length > 0 ? {
         nodeCount: nodes.length,
@@ -102,92 +290,93 @@ export default function UMLBuilder() {
         nodes: nodes.slice(0, 12).map((n) => ({ id: n.id, type: n.type, text: n.text })),
       } : null;
 
-      const res = await fetch('/api/ai/generate-uml', {
+      const res = await authenticatedFetch('/api/ai/generate-uml', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: aiPrompt, diagramType, existingSummary, reportContext: diagramMeta.reportContext })
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          diagramType,
+          existingSummary,
+          reportContext: diagramMeta.reportContext,
+          generationMode: aiMode,
+          clarificationQuestions: aiClarificationQuestions,
+          clarificationAnswers: aiClarificationAnswers,
+          clarificationContext: aiClarificationQuestions.map((question, index) => `${question}\nJawaban: ${aiClarificationAnswers[index] || ''}`).join('\n\n'),
+        })
       });
-      const data = await res.json();
+      const data = await readUmlApiPayload(res);
+      if (!res.ok && !data.needsClarification) {
+        showToast(data.error || `Gagal menghubungi AI (${res.status}).`);
+        return;
+      }
       if (data.needsClarification) {
-        setAiClarification(data.clarification || 'Tambahkan detail alur, aktor, dan kondisi penting yang harus masuk diagram.');
-        showToast('AI needs one clarification first.');
+        const nextQuestions = Array.isArray(data.clarificationQuestions) && data.clarificationQuestions.length
+          ? data.clarificationQuestions
+          : [data.clarification || 'Tambahkan detail alur, aktor, dan kondisi penting yang harus masuk diagram.'];
+        setAiClarification(data.clarification || nextQuestions[0]);
+        setAiClarificationQuestions(nextQuestions);
+        setAiClarificationAnswers((prev) => nextQuestions.map((_question: string, index: number) => prev[index] || ''));
+        setAiWarnings(stringList(data.validation?.warnings));
+        showToast('AI butuh detail tambahan dulu.');
         return;
       }
 
-      if (data.success && data.data) {
+      const generatedData = data.data;
+      if (data.success && generatedData) {
         saveToHistory();
         setAiClarification('');
-        const returnedLanes = Array.isArray(data.data.lanes) ? data.data.lanes : Array.isArray(data.spec?.lanes) ? data.spec.lanes : [];
-        const CHARS_PER_LINE = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
-        const LINE_HEIGHT = 24;
-        const PADDING_V = 40;
-        const MAX_WIDTH = 250;
-
-        const generatedNodes = (data.data.nodes || []).map((n: any) => {
-          const text = n.text || '';
-          const lines = wrapText(text, CHARS_PER_LINE);
-          let nodeHeight = 60;
-          let finalWidth = 120;
-
-          if (n.type === 'actor') {
-            nodeHeight = 80; finalWidth = 60;
-          } else if (n.type === 'fork' || n.type === 'join') {
-            nodeHeight = 10; finalWidth = 120;
-          } else if (n.type === 'lifeline') {
-            const longestLine = Math.max(...lines.map((l: string) => l.length), 1);
-            finalWidth = Math.max(130, Math.min(210, longestLine * 9 + 52));
-            nodeHeight = Math.max(420, typeof n.height === 'number' ? n.height : 420);
-          } else if (n.type === 'usecase') {
-            const longestLine = Math.max(...lines.map((l: string) => l.length), 1);
-            finalWidth = Math.max(140, longestLine * 9 + 60);
-            nodeHeight = Math.max(70, lines.length * LINE_HEIGHT + 35);
-          } else if (n.type === 'decision') {
-            const longestLine = Math.max(...lines.map((l: string) => l.length), 1);
-            finalWidth = Math.max(160, longestLine * 11 + 70);
-            nodeHeight = Math.max(100, lines.length * LINE_HEIGHT + 60);
-            if (lines.length > 2) finalWidth = Math.min(MAX_WIDTH + 60, finalWidth);
-          } else {
-            nodeHeight = Math.max(60, lines.length * LINE_HEIGHT + PADDING_V);
-            finalWidth = lines.length > 1 ? MAX_WIDTH : Math.min(MAX_WIDTH, Math.max(120, text.length * 10 + 40));
-          }
-
-          return {
-            ...n,
-            lines,
-            width: finalWidth,
-            height: nodeHeight,
-            x: typeof n.x === 'number' ? n.x : 500,
-            y: typeof n.y === 'number' ? n.y : 100,
-            lane: n.lane,
-            pinned: Boolean(n.pinned)
-          };
-        });
-        const nextEdges = data.data.edges || [];
+        setAiClarificationQuestions([]);
+        setAiClarificationAnswers([]);
+        const serverWarnings = stringList(data.validation?.warnings);
+        setAiWarnings(serverWarnings.length ? serverWarnings : stringList(data.qualityNotes));
+        setAiStatusText('');
+        const returnedLanes = stringList(generatedData.lanes).length ? stringList(generatedData.lanes) : stringList(data.spec?.lanes);
+        const generatedNodes = normalizeApiNodes(generatedData.nodes, diagramType, wrapText);
+        const nextEdges = normalizeApiEdges(generatedData.edges);
+        const renderValidation = validateDiagramData(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
+        if (!renderValidation.ok) {
+          setAiWarnings(renderValidation.errors);
+          setAiClarification('Hasil AI belum lolos pemeriksaan relasi. Lengkapi kebutuhan lalu coba lagi.');
+          showToast('Diagram ditahan karena relasinya belum valid.');
+          return;
+        }
         const autoLaidOutNodes = autoLayoutDiagram(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
         setNodes(autoLaidOutNodes);
         setEdges(nextEdges);
         setDiagramMeta((prev) => ({
           ...prev,
-          title: data.data.title || data.spec?.title || prev.title,
+          title: generatedData.title || data.spec?.title || prev.title,
           lanes: returnedLanes,
         }));
-        setAiPrompt('');
         setIsAiModalOpen(false);
-        showToast('AI diagram generated successfully!');
+        showToast('Diagram AI berhasil dibuat dan lolos pemeriksaan.');
       } else {
-        showToast(data.error || 'Failed to generate diagram.');
+        showToast(data.error || 'Gagal membuat diagram.');
       }
-    } catch (e) {
-      showToast('Error connecting to AI.');
+    } catch {
+      showToast('Terjadi gangguan saat menghubungi AI.');
     } finally {
+      setAiStatusText('');
       setIsGeneratingAI(false);
     }
-  }, [aiPrompt, diagramMeta.reportContext, diagramType, edges.length, nodes, saveToHistory, showToast, wrapText]);
+  }, [aiClarificationAnswers, aiClarificationQuestions, aiMode, aiPrompt, diagramMeta.reportContext, diagramType, edges.length, nodes, saveToHistory, showToast, wrapText]);
 
   const handleAnalyzeReferenceImage = useCallback(async () => {
     if (!umlReferenceImage) return;
+    if (!umlReferenceImage.type.startsWith('image/')) {
+      showToast('File referensi harus berupa gambar.');
+      return;
+    }
+    if (umlReferenceImage.size > 8 * 1024 * 1024) {
+      showToast('Ukuran gambar maksimal 8 MB.');
+      return;
+    }
     setIsAnalyzingImage(true);
     setAiClarification('');
+    setAiClarificationQuestions([]);
+    setAiClarificationAnswers([]);
+    setAiWarnings([]);
+    setAiStatusText('AI sedang membaca struktur diagram referensi...');
     setToast('AI sedang menganalisis diagram referensi...');
     try {
       const formData = new FormData();
@@ -195,31 +384,47 @@ export default function UMLBuilder() {
       formData.append('diagramType', diagramType);
       if (aiPrompt.trim()) formData.append('prompt', aiPrompt.trim());
 
-      const res = await fetch('/api/ai/analyze-uml-image', {
+      const res = await authenticatedFetch('/api/ai/analyze-uml-image', {
         method: 'POST',
         body: formData,
       });
-      const data = await res.json();
-      if (!data.success || !data.data) {
+      const data = await readUmlApiPayload(res);
+      const analysisData = data.data;
+      if (!res.ok || !data.success || !analysisData) {
         setAiClarification(data.error || 'Gagal membaca diagram gambar. Coba gambar yang lebih jelas.');
         showToast(data.error || 'Gagal membaca gambar UML.');
         return;
       }
 
+      const returnedLanes = stringList(analysisData.lanes);
+      const parsedNodes = normalizeApiNodes(analysisData.nodes, diagramType, wrapText);
+      const nextEdges = normalizeApiEdges(analysisData.edges);
+      const referenceValidation = validateDiagramData(parsedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
+      if (!referenceValidation.ok) {
+        setAiWarnings(referenceValidation.errors);
+        setAiClarification('Struktur hasil pembacaan gambar belum valid. Gunakan gambar yang lebih jelas atau tambahkan deskripsi.');
+        showToast('Hasil gambar ditahan karena relasinya belum valid.');
+        return;
+      }
+
       saveToHistory();
-      const returnedLanes = Array.isArray(data.data.lanes) ? data.data.lanes : [];
-      const nextNodes = autoLayoutDiagram(data.data.nodes || [], data.data.edges || [], diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
+      const nextNodes = autoLayoutDiagram(parsedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
       setNodes(nextNodes);
-      setEdges(data.data.edges || []);
-      setDiagramMeta((prev) => ({ ...prev, title: data.data.title || prev.title, lanes: returnedLanes }));
+      setEdges(nextEdges);
+      setDiagramMeta((prev) => ({ ...prev, title: analysisData.title || prev.title, lanes: returnedLanes }));
       setAiClarification(data.analysisSummary || 'Diagram referensi berhasil dibaca dan dirapikan ulang.');
+      setAiWarnings(Array.from(new Set([
+        ...stringList(data.validation?.warnings),
+        ...referenceValidation.warnings,
+      ])));
       showToast('Diagram referensi berhasil diubah ke versi KeluhKampus.');
-    } catch (error) {
-      showToast('Error saat menganalisis gambar UML.');
+    } catch {
+      showToast('Terjadi gangguan saat menganalisis gambar UML.');
     } finally {
+      setAiStatusText('');
       setIsAnalyzingImage(false);
     }
-  }, [aiPrompt, diagramType, saveToHistory, showToast, umlReferenceImage]);
+  }, [aiPrompt, diagramType, saveToHistory, showToast, umlReferenceImage, wrapText]);
 
   const handleNudge = useCallback((id: string, dx: number, dy: number) => {
     setNodes(prev => prev.map(n => n.id === id ? {
@@ -231,55 +436,79 @@ export default function UMLBuilder() {
 
   // --- Layout Engine ---
   useEffect(() => {
-    if (!nodes.length) return;
-    const nextNodes = autoLayoutDiagram(nodes, edges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', diagramMeta.lanes);
-    const changed = nextNodes.some((node, index) => {
-      const prev = nodes[index];
-      return !prev || prev.x !== node.x || prev.y !== node.y || prev.offsetX !== node.offsetX || prev.offsetY !== node.offsetY;
-    });
-    if (changed) {
-      setNodes(nextNodes);
-    }
+    const timer = window.setTimeout(() => {
+      if (!nodes.length || nodes.every((node) => node.pinned)) return;
+      const nextNodes = autoLayoutDiagram(nodes, edges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', diagramMeta.lanes);
+      const changed = nextNodes.some((node, index) => {
+        const prev = nodes[index];
+        return !prev || prev.x !== node.x || prev.y !== node.y || prev.offsetX !== node.offsetX || prev.offsetY !== node.offsetY;
+      });
+      if (changed) {
+        setNodes(nextNodes);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [nodes, edges, diagramMeta.lanes, diagramType]);
 
-  useEffect(() => {
-    if (!localStorage.getItem('uml-onboarding-seen')) {
-      setShowOnboarding(true);
+  const handleAutoLayout = useCallback(() => {
+    if (!nodes.length) {
+      showToast('Belum ada elemen untuk dirapikan.');
+      return;
     }
+    saveToHistory();
+    setNodes(autoLayoutDiagram(
+      nodes,
+      edges,
+      diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence',
+      diagramMeta.lanes,
+    ));
+    showToast('Layout diagram berhasil dirapikan.');
+  }, [diagramMeta.lanes, diagramType, edges, nodes, saveToHistory, showToast]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!localStorage.getItem('uml-onboarding-seen')) {
+        setShowOnboarding(true);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    const prefill = localStorage.getItem('uml-ai-prefill');
-    if (!prefill) return;
+    const timer = window.setTimeout(() => {
+      const prefill = localStorage.getItem('uml-ai-prefill');
+      if (!prefill) return;
 
-    try {
-      const parsed = JSON.parse(prefill);
-      if (parsed.prompt) setAiPrompt(parsed.prompt);
-      if (parsed.diagramType && ['flowchart', 'usecase', 'activity', 'sequence'].includes(parsed.diagramType)) {
-        setDiagramType(parsed.diagramType);
+      try {
+        const parsed = JSON.parse(prefill);
+        if (parsed.prompt) setAiPrompt(parsed.prompt);
+        if (parsed.diagramType && ['flowchart', 'usecase', 'activity', 'sequence'].includes(parsed.diagramType)) {
+          setDiagramType(parsed.diagramType);
+        }
+        loadedPrefillRef.current = true;
+        const restoredNodes = Array.isArray(parsed.diagramData?.nodes) ? parsed.diagramData.nodes : [];
+        const restoredEdges = Array.isArray(parsed.diagramData?.edges) ? parsed.diagramData.edges : [];
+        setNodes(restoredNodes);
+        setEdges(restoredEdges);
+        setSelectedNodeId(null);
+        const restoredLanes = Array.isArray(parsed.diagramData?.meta?.lanes)
+          ? parsed.diagramData.meta.lanes
+          : Array.from(new Set(restoredNodes.map((node: DiagramNode) => node.lane).filter(Boolean))) as string[];
+        setDiagramMeta({
+          title: parsed.diagramData?.meta?.title || parsed.title,
+          lanes: restoredLanes,
+          reportDiagramId: parsed.reportDiagramId,
+          reportContext: parsed.reportContext,
+        });
+        setIsAiModalOpen(restoredNodes.length === 0);
+        setAiClarification('');
+        localStorage.removeItem('uml-ai-prefill');
+      } catch (error) {
+        console.error('Failed to load UML prefill:', error);
+        localStorage.removeItem('uml-ai-prefill');
       }
-      loadedPrefillRef.current = true;
-      const restoredNodes = Array.isArray(parsed.diagramData?.nodes) ? parsed.diagramData.nodes : [];
-      const restoredEdges = Array.isArray(parsed.diagramData?.edges) ? parsed.diagramData.edges : [];
-      setNodes(restoredNodes);
-      setEdges(restoredEdges);
-      setSelectedNodeId(null);
-      const restoredLanes = Array.isArray(parsed.diagramData?.meta?.lanes)
-        ? parsed.diagramData.meta.lanes
-        : Array.from(new Set(restoredNodes.map((node: DiagramNode) => node.lane).filter(Boolean))) as string[];
-      setDiagramMeta({
-        title: parsed.diagramData?.meta?.title || parsed.title,
-        lanes: restoredLanes,
-        reportDiagramId: parsed.reportDiagramId,
-        reportContext: parsed.reportContext,
-      });
-      setIsAiModalOpen(restoredNodes.length === 0);
-      setAiClarification('');
-      localStorage.removeItem('uml-ai-prefill');
-    } catch (error) {
-      console.error('Failed to load UML prefill:', error);
-      localStorage.removeItem('uml-ai-prefill');
-    }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   const handleToggleActorSelection = useCallback((actorId: string) => {
@@ -288,7 +517,7 @@ export default function UMLBuilder() {
     );
   }, []);
 
-  const handleNodeDragStart = useCallback((id: string) => {
+  const handleNodeDragStart = useCallback(() => {
     saveToHistory();
   }, [saveToHistory]);
 
@@ -298,7 +527,7 @@ export default function UMLBuilder() {
     ));
   }, []);
 
-  const handleNodeResizeStart = useCallback((id: string) => {
+  const handleNodeResizeStart = useCallback(() => {
     saveToHistory();
   }, [saveToHistory]);
 
@@ -328,7 +557,7 @@ export default function UMLBuilder() {
     if (connectMode) {
       if (!connectFromId) {
         setConnectFromId(id);
-        showToast('Now click a target node to connect');
+        showToast('Sekarang pilih elemen tujuan.');
       } else {
         if (connectFromId !== id) {
           saveToHistory();
@@ -339,7 +568,7 @@ export default function UMLBuilder() {
             dashed: isDashed,
           };
           setEdges(prev => [...prev, newEdge]);
-          showToast('Connection created!');
+          showToast('Koneksi berhasil dibuat.');
         }
         setConnectFromId(null);
         setConnectMode(false);
@@ -374,19 +603,22 @@ export default function UMLBuilder() {
   }, [isResizing, resize, stopResizing]);
 
   useEffect(() => {
-    if (diagramType === 'usecase') {
-      setNewNodeType('actor');
-      setParentId('');
-    } else if (diagramType === 'flowchart') {
-      setNewNodeType('process');
-      setParentId('');
-    } else if (diagramType === 'activity') {
-      setNewNodeType('activity');
-      setParentId('');
-    } else if (diagramType === 'sequence') {
-      setNewNodeType('lifeline');
-      setParentId('');
-    }
+    const timer = window.setTimeout(() => {
+      if (diagramType === 'usecase') {
+        setNewNodeType('actor');
+        setParentId('');
+      } else if (diagramType === 'flowchart') {
+        setNewNodeType('process');
+        setParentId('');
+      } else if (diagramType === 'activity') {
+        setNewNodeType('activity');
+        setParentId('');
+      } else if (diagramType === 'sequence') {
+        setNewNodeType('lifeline');
+        setParentId('');
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [diagramType]);
 
   const [projects, setProjects] = useState<Record<DiagramType, { nodes: DiagramNode[]; edges: DiagramEdge[] }>>({
@@ -401,40 +633,48 @@ export default function UMLBuilder() {
   const STORAGE_KEY = 'uml-diagram-projects-v2';
 
   useEffect(() => {
-    const savedData = localStorage.getItem(STORAGE_KEY);
-    if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        if (parsed.projects) setProjects(parsed.projects);
-        if (!loadedPrefillRef.current && parsed.activeType) setDiagramType(parsed.activeType);
-        if (parsed.zoomLevel) setZoomLevel(parsed.zoomLevel);
-        const active = parsed.projects[parsed.activeType || 'flowchart'];
-        if (!loadedPrefillRef.current && active) {
-          setNodes(active.nodes || []);
-          setEdges(active.edges || []);
+    const timer = window.setTimeout(() => {
+      const savedData = localStorage.getItem(STORAGE_KEY);
+      if (savedData) {
+        try {
+          const parsed = JSON.parse(savedData);
+          if (parsed.projects) setProjects(parsed.projects);
+          if (!loadedPrefillRef.current && parsed.activeType) setDiagramType(parsed.activeType);
+          if (parsed.zoomLevel) setZoomLevel(parsed.zoomLevel);
+          const active = parsed.projects[parsed.activeType || 'flowchart'];
+          if (!loadedPrefillRef.current && active) {
+            setNodes(active.nodes || []);
+            setEdges(active.edges || []);
+          }
+        } catch (e) {
+          console.error('Failed to load projects:', e);
         }
-      } catch (e) {
-        console.error('Failed to load projects:', e);
       }
-    }
+      setIsStorageHydrated(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    setProjects(prev => ({ ...prev, [diagramType]: { nodes, edges } }));
-  }, [nodes, edges, diagramType]);
+    if (!isStorageHydrated) return;
+    const timer = window.setTimeout(() => {
+      setProjects(prev => ({ ...prev, [diagramType]: { nodes, edges } }));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [nodes, edges, diagramType, isStorageHydrated]);
 
   const handleSwitchDiagram = useCallback((newType: DiagramType) => {
-    saveToHistory();
+    const target = projects[newType] || { nodes: [], edges: [] };
+    setProjects((prev) => ({ ...prev, [diagramType]: { nodes, edges } }));
     setHistory([]);
     setRedoStack([]);
     setParentId('');
-    const target = projects[newType];
     setNodes(target.nodes);
     setEdges(target.edges);
     setDiagramType(newType);
     setSelectedNodeId(null);
     setDiagramMeta((prev) => ({ ...prev, lanes: Array.from(new Set((target.nodes || []).map((node) => node.lane).filter(Boolean))) as string[] }));
-  }, [saveToHistory, projects]);
+  }, [diagramType, edges, nodes, projects]);
 
   const handleApproveToReport = useCallback(() => {
     if (!diagramMeta.reportDiagramId) {
@@ -442,8 +682,69 @@ export default function UMLBuilder() {
       return;
     }
     if (!nodes.length || !edges.length) {
-      showToast('Generate atau buat diagram dulu sebelum approve.');
+      showToast('Buat diagram terlebih dahulu sebelum disetujui.');
       return;
+    }
+
+    const approvalValidation = validateDiagramData(
+      nodes,
+      edges,
+      diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence',
+    );
+    if (!approvalValidation.ok) {
+      showToast(approvalValidation.errors[0] || 'Diagram belum lolos pemeriksaan kualitas.');
+      return;
+    }
+    const overlapWarning = approvalValidation.warnings.find((warning) => warning.includes('bertumpuk'));
+    if (overlapWarning) {
+      showToast('Masih ada elemen bertumpuk. Klik Rapikan Diagram sebelum menyetujui.');
+      return;
+    }
+
+    const studioProjectId = diagramMeta.reportContext?.studioProjectId;
+    if (studioProjectId) {
+      try {
+        const workspace = loadStudioWorkspace(window.localStorage);
+        const studioProject = workspace.projects.find((project) => project.id === studioProjectId);
+        if (!studioProject) {
+          showToast('Project Studio tidak ditemukan di penyimpanan lokal.');
+          return;
+        }
+        const artifact = studioProject.artifacts.find((item) => item.id === diagramMeta.reportDiagramId);
+        if (!artifact) {
+          showToast('Artefak Studio untuk diagram ini tidak ditemukan.');
+          return;
+        }
+        const withPayload = {
+          ...studioProject,
+          artifacts: studioProject.artifacts.map((item) => item.id === artifact.id
+            ? {
+                ...item,
+                payload: {
+                  nodes,
+                  edges,
+                  meta: {
+                    ...diagramMeta,
+                    title: diagramMeta.title || item.title,
+                    lanes: diagramMeta.lanes.length ? diagramMeta.lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))),
+                    diagramType,
+                  },
+                },
+              }
+            : item),
+        };
+        const approved = advanceArtifact(withPayload, artifact.id, 'approve');
+        const nextWorkspace = {
+          ...workspace,
+          projects: workspace.projects.map((project) => project.id === approved.id ? approved : project),
+        };
+        saveStudioWorkspace(window.localStorage, nextWorkspace);
+        showToast('Diagram disetujui dan tersimpan ke Artifact Graph Studio.');
+        return;
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Diagram belum memenuhi gate Studio.');
+        return;
+      }
     }
 
     const reportKey = 'report_builder_project_v1';
@@ -454,10 +755,14 @@ export default function UMLBuilder() {
     }
 
     try {
-      const project = JSON.parse(saved);
+      const parsedProject: unknown = JSON.parse(saved);
+      if (!isRecord(parsedProject)) throw new Error('Format project laporan tidak valid.');
+      const reportDiagrams = Array.isArray(parsedProject.diagrams)
+        ? parsedProject.diagrams.filter(isLegacyReportDiagram)
+        : [];
       const updatedProject = {
-        ...project,
-        diagrams: (project.diagrams || []).map((diagram: any) => {
+        ...parsedProject,
+        diagrams: reportDiagrams.map((diagram) => {
           if (diagram.id !== diagramMeta.reportDiagramId) return diagram;
           return {
             ...diagram,
@@ -478,7 +783,7 @@ export default function UMLBuilder() {
         }),
       };
       localStorage.setItem(reportKey, JSON.stringify(updatedProject));
-      showToast('Diagram approved dan masuk ke Laporan Builder.');
+      showToast('Diagram disetujui dan masuk ke Laporan Builder.');
     } catch (error) {
       console.error('Failed to approve diagram to report:', error);
       showToast('Gagal menyimpan diagram ke laporan.');
@@ -486,15 +791,17 @@ export default function UMLBuilder() {
   }, [diagramMeta, diagramType, edges, nodes, showToast]);
 
   useEffect(() => {
+    if (!isStorageHydrated) return;
     const timer = setTimeout(() => {
       const data = JSON.stringify({ projects, activeType: diagramType, zoomLevel });
       localStorage.setItem(STORAGE_KEY, data);
     }, 1000);
     return () => clearTimeout(timer);
-  }, [projects, diagramType, zoomLevel]);
+  }, [projects, diagramType, zoomLevel, isStorageHydrated]);
 
   const handleSaveProject = useCallback(() => {
-    const dataObj = { projects, activeType: diagramType, zoomLevel };
+    const currentProjects = { ...projects, [diagramType]: { nodes, edges } };
+    const dataObj = { projects: currentProjects, activeType: diagramType, zoomLevel };
     const dataStr = JSON.stringify(dataObj);
     
     // Save internally
@@ -511,12 +818,12 @@ export default function UMLBuilder() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    showToast('Project downloaded to device! ✅');
-  }, [projects, diagramType, zoomLevel, showToast]);
+    showToast('Proyek berhasil disimpan ke perangkat.');
+  }, [projects, diagramType, zoomLevel, showToast, nodes, edges]);
 
 
   const handleClearProject = useCallback(() => {
-    if (confirm(`Clear ${diagramType.toUpperCase()} diagram?`)) {
+    if (confirm(`Kosongkan seluruh diagram ${diagramType.toUpperCase()}? Tindakan ini masih bisa dibatalkan dengan Undo.`)) {
       saveToHistory();
       setNodes([]);
       setEdges([]);
@@ -527,7 +834,6 @@ export default function UMLBuilder() {
 
 
   const handleUpdateNode = useCallback((id: string, newText: string) => {
-    saveToHistory();
     const MAX_WIDTH = 200;
     const CHARS_PER_LINE = 20;
     const LINE_HEIGHT = 24;
@@ -540,7 +846,7 @@ export default function UMLBuilder() {
       if (n.id === id) return { ...n, text: newText, lines, width: finalWidth, height: nodeHeight };
       return n;
     }));
-  }, [saveToHistory, wrapText]);
+  }, [wrapText]);
 
   const handleDeleteNode = useCallback((id: string) => {
     saveToHistory();
@@ -585,22 +891,29 @@ export default function UMLBuilder() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedNodeId) handleDeleteNode(selectedNodeId);
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
+        if (isAiModalOpen && !isGeneratingAI && !isAnalyzingImage) {
+          setIsAiModalOpen(false);
+        }
         setSelectedNodeId(null);
         setConnectMode(false);
         setConnectFromId(null);
+        return;
+      }
+      if (document.activeElement && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (selectedNodeId) handleDeleteNode(selectedNodeId);
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
         if (e.shiftKey) handleRedo(); else handleUndo();
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
         handleRedo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedNodeId, handleUndo, handleRedo, handleDeleteNode]);
+  }, [selectedNodeId, handleUndo, handleRedo, handleDeleteNode, isAiModalOpen, isAnalyzingImage, isGeneratingAI]);
 
   const adjustZoom = useCallback((delta: number) => {
     setZoomLevel(prev => Math.min(200, Math.max(25, prev + delta)));
@@ -609,7 +922,7 @@ export default function UMLBuilder() {
   const handleDownload = useCallback(() => {
     const svg = document.getElementById('diagram-svg');
     if (!svg || nodes.length === 0) {
-      showToast('No elements to export. Add elements first.');
+      showToast('Belum ada elemen untuk diekspor.');
       return;
     }
     const padding = 40;
@@ -679,10 +992,13 @@ export default function UMLBuilder() {
         }
       }
       if (numParts > 1) {
-        showToast(`Diagram was long, automatically saved as ${numParts} separate image parts.`);
+        showToast(`Diagram panjang disimpan otomatis menjadi ${numParts} bagian gambar.`);
       } else {
-        showToast('Diagram exported as PNG! ✅');
+        showToast('Diagram berhasil diekspor sebagai PNG.');
       }
+    };
+    downloadImage.onerror = () => {
+      showToast('Ekspor PNG gagal. Coba rapikan diagram lalu ulangi.');
     };
 
     downloadImage.src = svgUrl;
@@ -692,27 +1008,12 @@ export default function UMLBuilder() {
 
   const handleAddStep = useCallback((e: React.FormEvent) => {
     e.preventDefault();
+    if (!newNodeText.trim()) return;
     saveToHistory();
 
     const newNodeId = `node-${Date.now()}`;
     const actualParentId = parentId || (nodes.length > 0 ? nodes[nodes.length - 1].id : '');
     const parentNode = nodes.find(n => n.id === actualParentId);
-
-    if (isConnectingExisting) {
-      if (!targetNodeId || !parentNode) return;
-      const newEdge: DiagramEdge = {
-        id: `edge-${Date.now()}`,
-        fromId: parentNode.id,
-        toId: targetNodeId,
-        label: ((diagramType === 'flowchart' || diagramType === 'activity') && branchType !== 'main') ? branchType.toUpperCase() : undefined,
-        dashed: (diagramType === 'usecase') ? isDashed : false
-      };
-      setEdges((prev) => [...prev, newEdge]);
-      setIsConnectingExisting(false);
-      return;
-    }
-
-    if (!newNodeText.trim()) return;
 
     const MAX_WIDTH = 250;
     const CHARS_PER_LINE = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
@@ -774,7 +1075,7 @@ export default function UMLBuilder() {
         id: `edge-${Date.now()}`,
         fromId: parentNode.id,
         toId: newNode.id,
-        label: ((diagramType === 'flowchart' || diagramType === 'activity') && branchType !== 'main') ? branchType.toUpperCase() : undefined,
+        label: ((diagramType === 'flowchart' || diagramType === 'activity') && branchType !== 'main') ? (branchType === 'yes' ? 'Ya' : 'Tidak') : undefined,
         direction: edgeDirection,
         dashed: false
       });
@@ -792,35 +1093,30 @@ export default function UMLBuilder() {
     setNewNodeText('');
     setParentId(newNodeId);
     setBranchType('main');
-  }, [saveToHistory, parentId, nodes, isConnectingExisting, targetNodeId, diagramType, branchType, isDashed, newNodeText, newNodeType, nodeSide, selectedActorIds, wrapText, edges]);
-
-  // Icons
-  const IconUndo = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>;
-  const IconRedo = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13"/></svg>;
-  const IconDownload = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
-  const IconSave = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>;
-  const IconLayout = () => <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>;
+  }, [saveToHistory, parentId, nodes, diagramType, branchType, isDashed, newNodeText, newNodeType, nodeSide, selectedActorIds, wrapText, edges]);
 
   const propertiesPanelContent = selectedNodeId ? (
     <>
       <h3 style={{ fontSize: '0.875rem', fontWeight: 700, color: '#1e293b', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4f46e5' }} />
-        Element Properties
+        Properti Elemen
       </h3>
       
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start', marginBottom: '1rem' }}>
         <div className={styles.inputGroup} style={{ flex: 1, minWidth: '200px', marginBottom: 0 }}>
-          <label>Label Text</label>
+          <label htmlFor="selected-node-label">Label Elemen</label>
           <input
+            id="selected-node-label"
             type="text"
             value={nodes.find(n => n.id === selectedNodeId)?.text || ''}
+            onFocus={saveToHistory}
             onChange={(e) => handleUpdateNode(selectedNodeId, e.target.value)}
             style={{ width: '100%', height: '36px' }}
           />
         </div>
 
         <div className={styles.inputGroup} style={{ marginBottom: 0 }}>
-          <label>Position Nudge</label>
+          <label>Geser Posisi</label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 36px)', gap: '4px', justifyContent: 'flex-start' }}>
             <div />
             <button className={styles.umlBtn} style={{ padding: '0', height: '36px', justifyContent: 'center', fontSize: '1rem' }} onClick={() => handleNudge(selectedNodeId, 0, -10)} title="Up">▲</button>
@@ -834,28 +1130,28 @@ export default function UMLBuilder() {
 
 
       <div style={{ marginTop: '1rem', display: 'flex', gap: '8px' }}>
-        <button className={`${styles.umlBtn} ${styles.danger}`} style={{ flex: 1 }} onClick={() => handleDeleteNode(selectedNodeId)}>Delete selected element</button>
+        <button className={`${styles.umlBtn} ${styles.danger}`} style={{ flex: 1 }} onClick={() => handleDeleteNode(selectedNodeId)}>Hapus elemen terpilih</button>
       </div>
 
       {nodes.find(n => n.id === selectedNodeId)?.type === 'decision' && (
         <div style={{ background: '#f8fafc', padding: '10px', borderRadius: '8px', marginTop: '1rem', border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', marginBottom: '8px', textTransform: 'uppercase' }}>Branch Targets</div>
+          <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748b', marginBottom: '8px', textTransform: 'uppercase' }}>Tujuan Cabang</div>
           
           <div style={{ marginBottom: '8px' }}>
             <label style={{ fontSize: '0.65rem', color: '#16a34a' }}>YES Branch</label>
             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexDirection: 'column' }}>
               <select
-                value={edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'YES')?.toId || ''}
+                value={edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'yes'))?.toId || ''}
                 onChange={(e) => {
                   const targetId = e.target.value;
-                  const currentDir = edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'YES')?.direction || 'right';
+                  const currentDir = edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'yes'))?.direction || 'right';
                   saveToHistory();
                   setNodes(prev => prev.map(n => n.id === selectedNodeId ? { ...n, yes: targetId || undefined } : n));
                   setEdges(prev => {
-                    const existing = prev.find(ed => ed.fromId === selectedNodeId && ed.label === 'YES');
+                    const existing = prev.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'yes'));
                     if (existing) return prev.map(ed => (ed.id === existing.id ? { ...ed, toId: targetId } : ed));
                     if (!targetId) return prev;
-                    return [...prev, { id: `edge-${Date.now()}`, fromId: selectedNodeId, toId: targetId, label: 'YES', direction: currentDir }];
+                     return [...prev, { id: `edge-${Date.now()}`, fromId: selectedNodeId, toId: targetId, label: 'Ya', direction: currentDir }];
                   });
                 }}
                 style={{ flex: 2, fontSize: '0.75rem', height: '30px' }}
@@ -864,11 +1160,11 @@ export default function UMLBuilder() {
                 {nodes.map((n, i) => n.id !== selectedNodeId ? <option key={n.id} value={n.id}>[{i + 1}] {n.text}</option> : null)}
               </select>
               <select
-                value={edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'YES')?.direction || 'right'}
+                 value={edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'yes'))?.direction || 'right'}
                 onChange={(e) => {
                   const dir = e.target.value as 'left' | 'right' | 'bottom';
                   saveToHistory();
-                  setEdges(prev => prev.map(ed => (ed.fromId === selectedNodeId && ed.label === 'YES') ? { ...ed, direction: dir } : ed));
+                   setEdges(prev => prev.map(ed => (ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'yes')) ? { ...ed, direction: dir } : ed));
                 }}
                 style={{ flex: 1, fontSize: '0.75rem', height: '30px' }}
               >
@@ -883,17 +1179,17 @@ export default function UMLBuilder() {
             <label style={{ fontSize: '0.65rem', color: '#dc2626' }}>NO Branch</label>
             <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexDirection: 'column' }}>
               <select
-                value={edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'NO')?.toId || ''}
+                value={edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'no'))?.toId || ''}
                 onChange={(e) => {
                   const targetId = e.target.value;
-                  const currentDir = edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'NO')?.direction || 'left';
+                  const currentDir = edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'no'))?.direction || 'left';
                   saveToHistory();
                   setNodes(prev => prev.map(n => n.id === selectedNodeId ? { ...n, no: targetId || undefined } : n));
                   setEdges(prev => {
-                    const existing = prev.find(ed => ed.fromId === selectedNodeId && ed.label === 'NO');
+                    const existing = prev.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'no'));
                     if (existing) return prev.map(ed => (ed.id === existing.id ? { ...ed, toId: targetId } : ed));
                     if (!targetId) return prev;
-                    return [...prev, { id: `edge-${Date.now()}`, fromId: selectedNodeId, toId: targetId, label: 'NO', direction: currentDir }];
+                     return [...prev, { id: `edge-${Date.now()}`, fromId: selectedNodeId, toId: targetId, label: 'Tidak', direction: currentDir }];
                   });
                 }}
                 style={{ flex: 2, fontSize: '0.75rem', height: '30px' }}
@@ -902,11 +1198,11 @@ export default function UMLBuilder() {
                 {nodes.map((n, i) => n.id !== selectedNodeId ? <option key={n.id} value={n.id}>[{i + 1}] {n.text}</option> : null)}
               </select>
               <select
-                value={edges.find(ed => ed.fromId === selectedNodeId && ed.label === 'NO')?.direction || 'left'}
+                 value={edges.find(ed => ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'no'))?.direction || 'left'}
                 onChange={(e) => {
                   const dir = e.target.value as 'left' | 'right' | 'bottom';
                   saveToHistory();
-                  setEdges(prev => prev.map(ed => (ed.fromId === selectedNodeId && ed.label === 'NO') ? { ...ed, direction: dir } : ed));
+                   setEdges(prev => prev.map(ed => (ed.fromId === selectedNodeId && matchesDecisionLabel(ed.label, 'no')) ? { ...ed, direction: dir } : ed));
                 }}
                 style={{ flex: 1, fontSize: '0.75rem', height: '30px' }}
               >
@@ -933,7 +1229,7 @@ export default function UMLBuilder() {
           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: layoutMode === 'side-by-side' ? '1rem' : '0' }}>
             <div>
               <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e293b', letterSpacing: '-0.025em', margin: 0 }}>UML Flow Studio</h1>
-              {layoutMode === 'side-by-side' && <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0, marginTop: '4px' }}>Professional automated diagramming platform.</p>}
+              {layoutMode === 'side-by-side' && <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0, marginTop: '4px' }}>Editor diagram otomatis dengan quality gate.</p>}
             </div>
           </header>
 
@@ -943,12 +1239,12 @@ export default function UMLBuilder() {
             <div style={{ background: 'linear-gradient(to right, #eef2ff, #e0e7ff)', border: '1px solid #c7d2fe', borderRadius: '12px', padding: '12px 16px', fontSize: '0.85rem', color: '#3730a3', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}><Sparkles size={16} /> Cara Pakai:</strong>
-                <button onClick={() => { setShowOnboarding(false); localStorage.setItem('uml-onboarding-seen', '1'); }} style={{ background: 'white', border: '1px solid #c7d2fe', borderRadius: '50%', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#6366f1' }}><X size={14} /></button>
+                <button aria-label="Tutup petunjuk" onClick={() => { setShowOnboarding(false); localStorage.setItem('uml-onboarding-seen', '1'); }} style={{ background: 'white', border: '1px solid #c7d2fe', borderRadius: '50%', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#6366f1' }}><X size={14} /></button>
               </div>
               <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.5 }}>
-                <li>Pilih mode diagram (Flowchart, Use Case).</li>
-                <li>Ketik nama kotak, lalu klik <strong>Add Element</strong>.</li>
-                <li>Atau tekan tombol <strong>AI (✨)</strong> di pojok kanan bawah untuk buat otomatis!</li>
+                <li>Pilih Flowchart, Use Case, Activity, atau Sequence.</li>
+                <li>Ketik label elemen lalu klik <strong>Tambah Elemen</strong>, atau hubungkan elemen yang ada.</li>
+                <li>Untuk hasil otomatis, buka <strong>Asisten AI</strong> dan pilih mode langsung atau tanya dulu.</li>
               </ul>
             </div>
           )}
@@ -960,7 +1256,7 @@ export default function UMLBuilder() {
           )}
 
           {toast && (
-            <div style={{ background: '#1e293b', color: 'white', borderRadius: '8px', padding: '8px 14px', fontSize: '0.8rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div role="status" aria-live="polite" style={{ background: '#1e293b', color: 'white', borderRadius: '8px', padding: '8px 14px', fontSize: '0.8rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <CheckCircle2 size={16} /> {toast}
             </div>
           )}
@@ -978,10 +1274,11 @@ export default function UMLBuilder() {
             </div>
 
             <div className={styles.buttonGroup} style={{ marginTop: '0.5rem' }}>
-              <button className={`${styles.umlBtn} ${styles.primary}`} onClick={handleSaveProject}><IconSave /> Save</button>
-              <button className={styles.umlBtn} onClick={handleDownload}><IconDownload /> PNG</button>
+              <button className={`${styles.umlBtn} ${styles.primary}`} onClick={handleSaveProject}><IconSave /> Simpan Proyek</button>
+              <button className={styles.umlBtn} onClick={handleDownload}><IconDownload /> Ekspor PNG</button>
+              <button className={styles.umlBtn} onClick={handleAutoLayout}><IconLayout /> Rapikan Diagram</button>
               <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
-              <button className={`${styles.umlBtn} ${styles.danger}`} onClick={handleClearProject}>Clear</button>
+              <button className={`${styles.umlBtn} ${styles.danger}`} onClick={handleClearProject}>Kosongkan</button>
 
               <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button
@@ -989,7 +1286,7 @@ export default function UMLBuilder() {
                 onClick={() => { setConnectMode(m => !m); setConnectFromId(null); }}
                 style={{ background: connectMode ? '#fff7ed' : 'white', borderColor: connectMode ? '#ea580c' : '#e2e8f0', color: connectMode ? '#c2410c' : undefined, display: 'flex', alignItems: 'center', gap: '4px' }}
               >
-                {connectMode ? <><Square size={14} /> Stop Connect</> : <><Zap size={14} /> Connect</>}
+                {connectMode ? <><Square size={14} /> Selesai Hubungkan</> : <><Zap size={14} /> Hubungkan</>}
               </button>
               <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button
@@ -997,7 +1294,7 @@ export default function UMLBuilder() {
                 onClick={() => setLayoutMode(layoutMode === 'top-bottom' ? 'side-by-side' : 'top-bottom')}
                 style={{ background: layoutMode === 'side-by-side' ? '#f1f5f9' : 'white' }}
               >
-                <IconLayout /> {layoutMode === 'side-by-side' ? 'Standard' : 'Sidebar'}
+                <IconLayout /> {layoutMode === 'side-by-side' ? 'Tampilan Atas' : 'Panel Samping'}
               </button>
             </div>
           </div>
@@ -1006,8 +1303,8 @@ export default function UMLBuilder() {
           {/* Config Row */}
           <div className={styles.formRow}>
             <div className={styles.inputGroup}>
-              <label>Diagram Mode</label>
-              <select value={diagramType} onChange={(e) => handleSwitchDiagram(e.target.value as DiagramType)}>
+              <label htmlFor="diagram-type">Jenis Diagram</label>
+              <select id="diagram-type" value={diagramType} onChange={(e) => handleSwitchDiagram(e.target.value as DiagramType)}>
                 <option value="flowchart">Flowchart</option>
                 <option value="usecase">Use Case Diagram</option>
                 <option value="activity">Activity Diagram</option>
@@ -1020,9 +1317,9 @@ export default function UMLBuilder() {
             </div>
 
             <div className={styles.inputGroup}>
-              <label>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Continue From' : diagramType === 'sequence' ? 'Participant' : 'Target Actor'}</label>
+              <label htmlFor={(diagramType === 'flowchart' || diagramType === 'activity') ? 'diagram-parent' : undefined}>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Lanjutkan Dari' : diagramType === 'sequence' ? 'Partisipan' : 'Aktor Tujuan'}</label>
               {(diagramType === 'flowchart' || diagramType === 'activity') ? (
-                <select value={parentId} onChange={(e) => { saveToHistory(); setParentId(e.target.value); }}>
+                <select id="diagram-parent" value={parentId} onChange={(e) => setParentId(e.target.value)}>
                   <option value="">(Last Symbol)</option>
                   {nodes.map((n, i) => <option key={n.id} value={n.id}>[{i + 1}] {n.text.substring(0, 30)}</option>)}
                 </select>
@@ -1045,14 +1342,14 @@ export default function UMLBuilder() {
                       {actor.text}
                     </button>
                   ))}
-                  {nodes.filter(n => n.type === 'actor').length === 0 && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>No Actors</span>}
+                  {nodes.filter(n => n.type === 'actor').length === 0 && <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Belum ada aktor</span>}
                 </div>
               )}
             </div>
 
             <div className={styles.inputGroup}>
-              <label>Symbol Type</label>
-              <select value={newNodeType} onChange={(e) => setNewNodeType(e.target.value as NodeType)}>
+              <label htmlFor="node-type">Jenis Simbol</label>
+              <select id="node-type" value={newNodeType} onChange={(e) => setNewNodeType(e.target.value as NodeType)}>
                 {diagramType === 'flowchart' ? (
                   <>
                     <option value="process">Process (Box)</option>
@@ -1085,9 +1382,9 @@ export default function UMLBuilder() {
 
             {diagramType === 'usecase' && (
               <div className={styles.inputGroup}>
-                <label>Position / Style</label>
+                <label htmlFor="actor-side">Posisi / Gaya</label>
                 <div style={{ display: 'flex', gap: '6px' }}>
-                  <select value={nodeSide} onChange={(e) => setNodeSide(e.target.value as 'left' | 'right' | 'center')} style={{ flex: 1 }}>
+                  <select id="actor-side" value={nodeSide} onChange={(e) => setNodeSide(e.target.value as 'left' | 'right' | 'center')} style={{ flex: 1 }}>
                     <option value="left">Left Side</option>
                     <option value="right">Right Side</option>
                   </select>
@@ -1099,19 +1396,20 @@ export default function UMLBuilder() {
             )}
 
             <div className={styles.inputGroup} style={{ flex: 2, minWidth: '300px', maxWidth: '600px' }}>
-              <label>Element Label</label>
+              <label htmlFor="new-node-label">Label Elemen</label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
 
                 <input
+                  id="new-node-label"
                   type="text"
                   value={newNodeText}
                   onChange={(e) => setNewNodeText(e.target.value.slice(0, 80))}
-                  placeholder="Type text here... (max 80 chars)"
+                  placeholder="Tulis label elemen (maks. 80 karakter)"
                   maxLength={80}
                   style={{ flex: 1, minWidth: '200px' }}
-                  onKeyPress={(e) => e.key === 'Enter' && handleAddStep(e)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddStep(e)}
                 />
-                <button className={`${styles.umlBtn} ${styles.primary}`} onClick={handleAddStep} style={{ padding: '0 1.25rem', whiteSpace: 'nowrap' }}>Add Element</button>
+                <button className={`${styles.umlBtn} ${styles.primary}`} onClick={handleAddStep} style={{ padding: '0 1.25rem', whiteSpace: 'nowrap' }}>Tambah Elemen</button>
 
               </div>
             </div>
@@ -1129,7 +1427,7 @@ export default function UMLBuilder() {
 
           {layoutMode === 'side-by-side' && (
             <footer style={{ marginTop: 'auto', padding: '1rem 0', color: '#94a3b8', fontSize: '0.75rem', borderTop: '1px solid #f1f5f9' }}>
-              UML Flow Studio • Professional Edition
+              UML Flow Studio • Editor Diagram Terpandu
             </footer>
           )}
         </div>
@@ -1177,14 +1475,14 @@ export default function UMLBuilder() {
         {layoutMode === 'top-bottom' && (
 
           <footer style={{ marginTop: '2rem', padding: '1rem', textAlign: 'center', color: '#94a3b8', fontSize: '0.75rem', borderTop: '1px solid #e2e8f0' }}>
-            UML Flow Studio • Professional Diagram Studio
+            UML Flow Studio • Diagram Terstruktur dan Terverifikasi
           </footer>
         )}
 
       </main>
 
       {/* AI Floating Button */}
-      <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 100, display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 100, display: 'flex', alignItems: 'center', gap: '12px' }}>
         {diagramMeta.reportDiagramId && (
           <button
             onClick={handleApproveToReport}
@@ -1206,15 +1504,16 @@ export default function UMLBuilder() {
             }}
             title="Setujui diagram dan masukkan ke Laporan Builder"
           >
-            <CheckCircle2 size={18} /> Approve ke Laporan
+            <CheckCircle2 size={18} /> Setujui ke Laporan
           </button>
         )}
         <div style={{ background: 'white', padding: '8px 16px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)', fontSize: '0.85rem', fontWeight: 700, color: '#4f46e5', border: '1px solid #e0e7ff', animation: 'bounce 2s infinite' }}>
-          Mau gampang? Pake AI aja 👉
+          Susun otomatis dengan AI
         </div>
         <button
           onClick={() => {
             setAiClarification('');
+            setAiStatusText('');
             setIsAiModalOpen(true);
           }}
           style={{
@@ -1241,7 +1540,11 @@ export default function UMLBuilder() {
 
       {/* AI Modal */}
       {isAiModalOpen && (
-        <div style={{
+        <div
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isGeneratingAI && !isAnalyzingImage) setIsAiModalOpen(false);
+          }}
+          style={{
           position: 'fixed',
           top: 0, left: 0, right: 0, bottom: 0,
           background: 'rgba(15, 23, 42, 0.6)',
@@ -1252,7 +1555,11 @@ export default function UMLBuilder() {
           zIndex: 200,
           padding: '1rem'
         }}>
-          <div style={{
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="uml-ai-dialog-title"
+            style={{
             background: 'white',
             borderRadius: '16px',
             width: '100%',
@@ -1268,12 +1575,15 @@ export default function UMLBuilder() {
               justifyContent: 'space-between',
               alignItems: 'center'
             }}>
-              <h3 style={{ fontSize: '1rem', fontWeight: 700, color: '#4f46e5', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h3 id="uml-ai-dialog-title" style={{ fontSize: '1rem', fontWeight: 700, color: '#4f46e5', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Sparkles size={18} />
                 AI UML Assistant
               </h3>
               <button 
+                type="button"
+                aria-label="Tutup asisten AI"
                 onClick={() => setIsAiModalOpen(false)}
+                disabled={isGeneratingAI || isAnalyzingImage}
                 style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', display: 'flex' }}
               >
                 <X size={20} />
@@ -1282,8 +1592,76 @@ export default function UMLBuilder() {
             
             <div style={{ padding: '1.5rem' }}>
               <p style={{ fontSize: '0.85rem', color: '#475569', marginBottom: '1rem', lineHeight: 1.5 }}>
-                Gambarkan alur proses yang Anda inginkan (contoh: "buatkan alur login", atau "tambahkan node lupa password di flow yang ada"), AI akan merancang atau memodifikasi diagram Anda secara otomatis.
+                Tulis kebutuhan diagram kamu. Bisa langsung generate, atau pakai mode tanya dulu kalau konteks masih abu-abu.
               </p>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAiMode('direct');
+                    setAiClarificationQuestions([]);
+                    setAiClarificationAnswers([]);
+                    setAiWarnings([]);
+                  }}
+                  style={{
+                    border: '1px solid ' + (aiMode === 'direct' ? '#4f46e5' : '#cbd5e1'),
+                    background: aiMode === 'direct' ? '#eef2ff' : 'white',
+                    color: '#1e293b',
+                    borderRadius: '999px',
+                    padding: '8px 12px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Langsung Generate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAiMode('clarify')}
+                  style={{
+                    border: '1px solid ' + (aiMode === 'clarify' ? '#4f46e5' : '#cbd5e1'),
+                    background: aiMode === 'clarify' ? '#eef2ff' : 'white',
+                    color: '#1e293b',
+                    borderRadius: '999px',
+                    padding: '8px 12px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Tanya Dulu
+                </button>
+                <button
+                  type="button"
+                  onClick={resetAiSession}
+                  style={{
+                    border: '1px solid #e2e8f0',
+                    background: 'white',
+                    color: '#475569',
+                    borderRadius: '999px',
+                    padding: '8px 12px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Reset sesi
+                </button>
+              </div>
+
+              {(isGeneratingAI || isAnalyzingImage || aiStatusText) && (
+                <div role="status" aria-live="polite" style={{ marginBottom: '1rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: '#475569', marginBottom: '6px', fontWeight: 700 }}>
+                    <span>{aiStatusText || (isAnalyzingImage ? 'AI sedang membaca gambar referensi...' : 'AI sedang menyusun diagram...')}</span>
+                    <span>{isGeneratingAI || isAnalyzingImage ? 'Memproses' : 'Siap'}</span>
+                  </div>
+                  <div style={{ height: '6px', background: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: '68%', background: 'linear-gradient(90deg, #4f46e5, #7c3aed)', animation: 'pulse 1.4s ease-in-out infinite' }} />
+                  </div>
+                </div>
+              )}
 
               {aiClarification && (
                 <div style={{
@@ -1301,16 +1679,60 @@ export default function UMLBuilder() {
                 </div>
               )}
 
-              <div style={{ marginBottom: '1rem', border: '1px dashed #cbd5e1', borderRadius: '10px', padding: '12px', background: '#f8fafc' }}>
-                <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Upload size={16} /> Upload diagram referensi
+              {aiWarnings.length > 0 && (
+                <div style={{
+                  background: '#eff6ff',
+                  border: '1px solid #bfdbfe',
+                  color: '#1d4ed8',
+                  borderRadius: '10px',
+                  padding: '12px',
+                  fontSize: '0.82rem',
+                  lineHeight: 1.5,
+                  marginBottom: '1rem'
+                }}>
+                  <strong style={{ display: 'block', marginBottom: '6px' }}>Catatan sistem</strong>
+                  <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                    {aiWarnings.slice(0, 3).map((warning) => <li key={warning}>{warning}</li>)}
+                  </ul>
                 </div>
+              )}
+
+              {aiClarificationQuestions.length > 0 && (
+                <div style={{ marginBottom: '1rem', border: '1px solid #cbd5e1', borderRadius: '10px', padding: '12px', background: '#f8fafc' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '10px' }}>Pertanyaan AI</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {aiClarificationQuestions.map((question, index) => (
+                      <label key={`${index}-${question}`} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0f172a' }}>{index + 1}. {question}</span>
+                        <textarea
+                          value={aiClarificationAnswers[index] || ''}
+                          onChange={(e) => {
+                            const next = [...aiClarificationAnswers];
+                            next[index] = e.target.value;
+                            setAiClarificationAnswers(next);
+                          }}
+                          placeholder="Jawab singkat dan jelas..."
+                          rows={2}
+                          style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #cbd5e1', resize: 'vertical', boxSizing: 'border-box' }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ marginBottom: '1rem', border: '1px dashed #cbd5e1', borderRadius: '10px', padding: '12px', background: '#f8fafc' }}>
+                <label htmlFor="uml-reference-image" style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Upload size={16} /> Upload diagram referensi
+                </label>
                 <div style={{ fontSize: '0.78rem', color: '#64748b', lineHeight: 1.5, marginBottom: '10px' }}>
                   Upload screenshot activity, flowchart, use case, atau sequence yang sudah ada. AI akan baca struktur, deteksi bagian yang kurang rapi, lalu bangun ulang versi KeluhKampus.
                 </div>
                 <input
+                  id="uml-reference-image"
                   type="file"
                   accept="image/*"
+                  aria-label="Pilih gambar diagram referensi"
                   onChange={(e) => setUmlReferenceImage(e.target.files?.[0] || null)}
                   style={{ width: '100%', marginBottom: '10px' }}
                 />
@@ -1344,10 +1766,16 @@ export default function UMLBuilder() {
                 {isAnalyzingImage ? <><BrainCircuit size={18} /> Analisis...</> : <><Upload size={18} /> Analisis Gambar UML</>}
               </button>
               
+              <label htmlFor="uml-ai-prompt" style={{ display: 'block', color: '#334155', fontSize: '0.82rem', fontWeight: 700, marginBottom: '6px' }}>
+                Kebutuhan diagram
+              </label>
               <textarea
+                id="uml-ai-prompt"
                 value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
+                onChange={(e) => setAiPrompt(e.target.value.slice(0, 6000))}
                 placeholder="Deskripsikan diagram atau perubahan yang Anda inginkan..."
+                maxLength={6000}
+                aria-describedby="uml-prompt-counter"
                 disabled={isGeneratingAI}
                 style={{ 
                   width: '100%', 
@@ -1364,12 +1792,15 @@ export default function UMLBuilder() {
                 onFocus={(e) => e.target.style.borderColor = '#6366f1'}
                 onBlur={(e) => e.target.style.borderColor = '#cbd5e1'}
               />
+              <div id="uml-prompt-counter" style={{ marginTop: '-0.7rem', marginBottom: '0.8rem', textAlign: 'right', color: '#64748b', fontSize: '0.72rem' }}>
+                {aiPrompt.length.toLocaleString('id-ID')} / 6.000 karakter
+              </div>
               
               <button 
                 onClick={handleGenerateAI}
-                disabled={isGeneratingAI || !aiPrompt.trim()}
+                disabled={isGeneratingAI || !aiPrompt.trim() || aiNeedsAnswers}
                 style={{ 
-                  background: isGeneratingAI ? '#94a3b8' : 'linear-gradient(to right, #4f46e5, #7c3aed)', 
+                  background: (isGeneratingAI || aiNeedsAnswers) ? '#94a3b8' : 'linear-gradient(to right, #4f46e5, #7c3aed)',
                   border: 'none', 
                   color: 'white', 
                   padding: '0 1.5rem', 
@@ -1382,10 +1813,14 @@ export default function UMLBuilder() {
                   justifyContent: 'center', 
                   alignItems: 'center', 
                   gap: '8px',
-                  cursor: (isGeneratingAI || !aiPrompt.trim()) ? 'not-allowed' : 'pointer'
+                  cursor: (isGeneratingAI || !aiPrompt.trim() || aiNeedsAnswers) ? 'not-allowed' : 'pointer'
                 }}
               >
-                {isGeneratingAI ? <><BrainCircuit size={18} /> Mikirin Diagram...</> : <><Sparkles size={18} /> Generate / Update Diagram</>}
+                {isGeneratingAI
+                  ? <><BrainCircuit size={18} /> Mikirin Diagram...</>
+                  : aiMode === 'clarify' && aiClarificationQuestions.length === 0
+                    ? <><BrainCircuit size={18} /> Tanya Dulu</>
+                    : <><Sparkles size={18} /> {aiMode === 'clarify' ? 'Lanjutkan Generate' : 'Generate / Update Diagram'}</>}
               </button>
             </div>
           </div>

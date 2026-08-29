@@ -1,12 +1,22 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react'
-import { 
-  Heading1, Heading2, Heading3, 
-  Type, Image as ImageIcon, Sparkles, 
-  List, ListOrdered, Quote, Code, 
-  Table as TableIcon, FileText
-} from 'lucide-react'
 
-export const CommandList = forwardRef((props: any, ref) => {
+interface CommandItem {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  command: (...args: never[]) => void;
+}
+
+export interface CommandListProps {
+  items: CommandItem[];
+  command: (item: CommandItem) => void;
+}
+
+export interface CommandListHandle {
+  onKeyDown: (props: { event: KeyboardEvent }) => boolean;
+}
+
+export const CommandList = forwardRef<CommandListHandle, CommandListProps>((props, ref) => {
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   const selectItem = (index: number) => {
@@ -28,10 +38,13 @@ export const CommandList = forwardRef((props: any, ref) => {
     selectItem(selectedIndex)
   }
 
-  useEffect(() => setSelectedIndex(0), [props.items])
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSelectedIndex(0), 0)
+    return () => window.clearTimeout(timer)
+  }, [props.items])
 
   useImperativeHandle(ref, () => ({
-    onKeyDown: ({ event }: any) => {
+    onKeyDown: ({ event }) => {
       if (event.key === 'ArrowUp') {
         upHandler()
         return true
@@ -55,7 +68,7 @@ export const CommandList = forwardRef((props: any, ref) => {
           <p className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-gray-400">
             Perintah Cepat
           </p>
-          {props.items.map((item: any, index: number) => (
+          {props.items.map((item, index: number) => (
             <button
               className={`w-full flex items-center gap-3 px-3 py-2.5 text-left rounded-xl transition-all ${
                 index === selectedIndex 

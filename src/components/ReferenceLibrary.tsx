@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { useCallback, useEffect, useState } from "react";
 import ReferenceCard, { ReferenceItem } from "./ReferenceCard";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { getErrorMessage } from "@/lib/errors";
+
+const STORAGE_KEY = "reference_search_results";
 
 export default function ReferenceLibrary({ initialQuery }: { initialQuery?: string }) {
   const [query, setQuery] = useState(initialQuery || "");
@@ -12,9 +15,7 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
-  const STORAGE_KEY = "reference_search_results";
-
-  const loadFromLocal = () => {
+  const loadFromLocal = useCallback(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       const parsed: ReferenceItem[] = raw ? JSON.parse(raw) : [];
@@ -24,17 +25,18 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
     } catch {
       // ignore
     }
-  };
+  }, []);
 
-  const search = async () => {
-    if (!query.trim()) return;
+  const search = useCallback(async (requestedQuery = query) => {
+    const normalizedQuery = requestedQuery.trim();
+    if (!normalizedQuery) return;
     setLoading(true);
     setError(null);
     try {
-      const resp = await fetch("/api/references/search", {
+      const resp = await authenticatedFetch("/api/references/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, limit: 8, providers: ["semantic-scholar", "openalex"] }),
+        body: JSON.stringify({ query: normalizedQuery, limit: 8, providers: ["semantic-scholar", "openalex"] }),
       });
       const data = await resp.json();
       if (data?.success && Array.isArray(data.data)) {
@@ -45,12 +47,12 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
       } else {
         setError(data?.error || "Gagal mengambil referensi");
       }
-    } catch (e: any) {
-      setError(e?.message || "Network error");
+    } catch (searchError: unknown) {
+      setError(getErrorMessage(searchError, "Network error"));
     } finally {
       setLoading(false);
     }
-  };
+  }, [query]);
 
   const handleSave = (paper: ReferenceItem) => {
     // simple local save into localStorage library for now
@@ -78,8 +80,9 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
     setSaveStatus("Menyimpan ke Supabase...");
       try {
         // projectId from selector (fallback to default)
-        const projectId = (typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null) || "proj_local_1";
-        const resp = await fetch("/api/references/persist", {
+        const projectId = typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null;
+        if (!projectId) throw new Error("Pilih project terlebih dahulu.");
+        const resp = await authenticatedFetch("/api/references/persist", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ projectId, references: results }),
@@ -94,8 +97,8 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
       } else {
         setSaveStatus(`Gagal: ${data?.error || "Unknown error"}`);
       }
-    } catch (e: any) {
-      setSaveStatus(`Network error: ${e?.message || String(e)}`);
+    } catch (saveError: unknown) {
+      setSaveStatus(`Network error: ${getErrorMessage(saveError, "Gagal menyimpan referensi")}`);
     } finally {
       setSaving(false);
       setTimeout(() => setSaveStatus(null), 4000);
@@ -103,45 +106,54 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
   };
 
   useEffect(() => {
-    // load from local aggregated search results if available
-    loadFromLocal();
+    const timer = window.setTimeout(() => {
+      // load from local aggregated search results if available
+      loadFromLocal();
 
-    // also try to load persisted references from Supabase for default project
-    (async () => {
-      try {
-        const projectId = (typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null) || "proj_local_1";
-        const resp = await fetch(`/api/references/list?projectId=${encodeURIComponent(projectId)}`);
-        const j = await resp.json().catch(() => null);
-        if (j?.success && Array.isArray(j.data) && j.data.length) {
-          setResults(j.data);
+      // also try to load persisted references from Supabase for default project
+      void (async () => {
+        try {
+          const projectId = typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null;
+          if (!projectId) return;
+          const resp = await authenticatedFetch(`/api/references/list?projectId=${encodeURIComponent(projectId)}`);
+          const j = await resp.json().catch(() => null);
+          if (j?.success && Array.isArray(j.data) && j.data.length) {
+            setResults(j.data);
+          }
+        } catch {
+          // ignore, keep local results
         }
-      } catch {
-        // ignore, keep local results
-      }
-    })();
+      })();
+    }, 0);
 
     // listen for manual events to reload results after pipeline runs
     const handler = () => loadFromLocal();
     window.addEventListener("referenceResultsUpdated", handler);
-    return () => window.removeEventListener("referenceResultsUpdated", handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("referenceResultsUpdated", handler);
+    };
+  }, [loadFromLocal]);
 
   useEffect(() => {
     if (initialQuery) {
-      setQuery(initialQuery);
-      // automatically search small delay
-      setTimeout(() => search(), 400);
+      const timer = window.setTimeout(() => {
+        setQuery(initialQuery);
+        // automatically search small delay
+        const searchTimer = window.setTimeout(() => void search(initialQuery), 400);
+        window.setTimeout(() => window.clearTimeout(searchTimer), 401);
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialQuery]);
+  }, [initialQuery, search]);
 
   return (
     <div className="p-4 border rounded-lg bg-white">
       <div className="mb-3">
         <div className="flex gap-2">
-          <input value={query} onChange={(e) => setQuery(e.target.value)} className="flex-1 p-2 border rounded" placeholder='Query, mis: "student complaint system" AND (university OR campus)' />
-          <button onClick={search} className="px-3 py-2 bg-blue-600 text-white rounded">Cari</button>
+          <label htmlFor="reference-query" className="sr-only">Query referensi</label>
+          <input id="reference-query" value={query} onChange={(e) => setQuery(e.target.value)} className="flex-1 p-2 border rounded" placeholder='Query, mis: "student complaint system" AND (university OR campus)' />
+          <button type="button" onClick={() => void search()} className="px-3 py-2 bg-blue-600 text-white rounded">Cari</button>
         </div>
         <div className="text-xs text-slate-400 mt-2">Atau jalankan Search Plan di Project Brief untuk mengisi daftar hasil secara otomatis.</div>
       </div>

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { getErrorMessage } from "@/lib/errors";
 import {
   ArrowLeft,
   BookOpen,
@@ -108,6 +110,29 @@ interface ReportDraft {
   revisedAt?: string;
 }
 
+interface ReportJob {
+  id: string;
+  status: "queued" | "running" | "done" | "failed";
+  progress?: number;
+  stage?: string;
+  result?: string;
+  error?: string;
+}
+
+interface ApiPayload<T = unknown> {
+  success?: boolean;
+  error?: string;
+  data?: T;
+  job?: ReportJob;
+}
+
+interface ExtractedSource {
+  kind?: SourceKind;
+  title?: string;
+  content?: string;
+  fileName?: string;
+}
+
 interface ReportProject {
   startMode: StartMode;
   projectType: ProjectType;
@@ -130,6 +155,20 @@ interface ReportProject {
 type RevisionMode = "format" | "expand" | "citation" | "table" | "bibliography" | "diagram" | "custom";
 
 const STORAGE_KEY = "report_builder_project_v1";
+
+async function readApiPayload<T>(response: Response, fallbackError: string): Promise<ApiPayload<T>> {
+  const raw = await response.text();
+  try {
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as ApiPayload<T>;
+    }
+  } catch {
+    // The normalized text below is more useful than a JSON syntax error.
+  }
+  const cleanText = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  throw new Error(cleanText || fallbackError);
+}
 
 const projectTypeLabel: Record<ProjectType, string> = {
   capstone: "Capstone / Projek Akhir",
@@ -441,14 +480,18 @@ export default function ReportBuilderPage() {
   const [revisionLabel, setRevisionLabel] = useState("Menunggu instruksi revisi");
 
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      try {
-        setProject({ ...createDefaultProject(), ...JSON.parse(saved) });
-      } catch {
-        setProject(createDefaultProject());
+    const timer = window.setTimeout(() => {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          setProject({ ...createDefaultProject(), ...JSON.parse(saved) });
+        } catch {
+          setProject(createDefaultProject());
+        }
       }
-    }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -458,8 +501,10 @@ export default function ReportBuilderPage() {
   useEffect(() => {
     if (!isGeneratingReport) return;
 
-    setGenerationProgress(8);
-    setGenerationLabel(loadingSteps[0]);
+    const initTimer = window.setTimeout(() => {
+      setGenerationProgress(8);
+      setGenerationLabel(loadingSteps[0]);
+    }, 0);
 
     const timer = window.setInterval(() => {
       setGenerationProgress((prev) => {
@@ -470,14 +515,19 @@ export default function ReportBuilderPage() {
       });
     }, 900);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initTimer);
+      window.clearInterval(timer);
+    };
   }, [isGeneratingReport]);
 
   useEffect(() => {
     if (!isRevisingReport) return;
 
-    setRevisionProgress(10);
-    setRevisionLabel(revisionSteps[0]);
+    const initTimer = window.setTimeout(() => {
+      setRevisionProgress(10);
+      setRevisionLabel(revisionSteps[0]);
+    }, 0);
 
     const timer = window.setInterval(() => {
       setRevisionProgress((prev) => {
@@ -488,7 +538,10 @@ export default function ReportBuilderPage() {
       });
     }, 800);
 
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initTimer);
+      window.clearInterval(timer);
+    };
   }, [isRevisingReport]);
 
   const checks = useMemo(() => qualityChecks(project), [project]);
@@ -566,13 +619,13 @@ export default function ReportBuilderPage() {
     setReportError("");
 
     try {
-      const startResponse = await fetch("/api/report-jobs/start", {
+      const startResponse = await authenticatedFetch("/api/report-jobs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project }),
       });
 
-      const startData = await startResponse.json().catch(() => null);
+      const startData = await readApiPayload<never>(startResponse, "Gagal memulai job laporan.");
       if (!startResponse.ok || !startData?.success || !startData.job?.id) {
         throw new Error(startData?.error || "Gagal memulai job laporan.");
       }
@@ -581,17 +634,20 @@ export default function ReportBuilderPage() {
       setGenerationProgress(startData.job.progress || 5);
       setGenerationLabel(startData.job.stage || "Job laporan dimulai");
 
-      let finalJob: any = null;
+      let finalJob: ReportJob | null = null;
       for (let attempt = 0; attempt < 1800; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 1200));
-        const statusResponse = await fetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
-        const statusData = await statusResponse.json().catch(() => null);
+        const statusResponse = await authenticatedFetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
+        const statusData = await readApiPayload<never>(statusResponse, "Gagal membaca progres generate laporan.");
 
         if (!statusResponse.ok || !statusData?.success) {
           throw new Error(statusData?.error || "Gagal membaca progres generate laporan.");
         }
 
         const job = statusData.job;
+        if (!job) {
+          throw new Error("Status job tidak ditemukan.");
+        }
         setGenerationProgress(Math.min(100, Math.max(0, Number(job.progress || 0))));
         setGenerationLabel(job.stage || "Generate laporan berjalan");
 
@@ -607,13 +663,13 @@ export default function ReportBuilderPage() {
       setProject((prev) => ({
         ...prev,
         workflowStage: "drafted",
-        reportDraft: { content: finalJob.result || "", generatedAt: new Date().toISOString() },
+        reportDraft: { content: finalJob.result ?? "", generatedAt: new Date().toISOString() },
       }));
       setGenerationProgress(100);
       setGenerationLabel(finalJob.stage || "Laporan selesai disusun");
       setActiveStep("draft");
-    } catch (error: any) {
-      setReportError(error.message || "Gagal generate laporan lengkap.");
+    } catch (error: unknown) {
+      setReportError(getErrorMessage(error, "Gagal generate laporan lengkap."));
     } finally {
       window.setTimeout(() => setIsGeneratingReport(false), 500);
     }
@@ -631,7 +687,7 @@ export default function ReportBuilderPage() {
     setReportError("");
 
     try {
-      const response = await fetch("/api/ai/revise-report", {
+      const response = await authenticatedFetch("/api/ai/revise-report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -643,29 +699,22 @@ export default function ReportBuilderPage() {
         }),
       });
 
-      const rawResponse = await response.text();
-      let data: any = null;
-      try {
-        data = rawResponse ? JSON.parse(rawResponse) : null;
-      } catch {
-        const cleanText = rawResponse.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-        throw new Error(cleanText || "Server mengembalikan respons revisi tidak valid.");
-      }
+      const data = await readApiPayload<string>(response, "Server mengembalikan respons revisi tidak valid.");
 
-      if (!response.ok || !data.success) throw new Error(data.error || "Gagal merevisi laporan.");
+      if (!response.ok || !data.success || typeof data.data !== "string") throw new Error(data.error || "Gagal merevisi laporan.");
 
       setProject((prev) => ({
         ...prev,
         reportDraft: {
-          content: data.data,
+          content: data.data ?? "",
           generatedAt: prev.reportDraft?.generatedAt || new Date().toISOString(),
           revisedAt: new Date().toISOString(),
         },
       }));
       setRevisionProgress(100);
       setRevisionLabel("Revisi selesai dirapikan");
-    } catch (error: any) {
-      setReportError(error.message || "Gagal merevisi laporan.");
+    } catch (error: unknown) {
+      setReportError(getErrorMessage(error, "Gagal merevisi laporan."));
     } finally {
       window.setTimeout(() => setIsRevisingReport(false), 500);
     }
@@ -694,31 +743,26 @@ export default function ReportBuilderPage() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("/api/context/extract", {
+      const response = await authenticatedFetch("/api/context/extract", {
         method: "POST",
         body: formData,
       });
 
-      const raw = await response.text();
-      let data: any = null;
-      try {
-        data = raw ? JSON.parse(raw) : null;
-      } catch {
-        throw new Error(raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Gagal membaca file.");
-      }
+      const data = await readApiPayload<ExtractedSource>(response, "Gagal membaca file.");
 
-      if (!response.ok || !data.success) throw new Error(data.error || "Gagal membaca file.");
+      const extracted = data.data;
+      if (!response.ok || !data.success || !extracted) throw new Error(data.error || "Gagal membaca file.");
 
       setSourceDraft((prev) => ({
         ...prev,
-        kind: (data.data.kind || prev.kind) as SourceKind,
-        title: prev.title || data.data.title || file.name,
-        content: `${prev.content ? `${prev.content}\n\n` : ""}${data.data.content}`,
-        fileName: data.data.fileName || file.name,
+        kind: (extracted.kind || prev.kind) as SourceKind,
+        title: prev.title || extracted.title || file.name,
+        content: `${prev.content ? `${prev.content}\n\n` : ""}${extracted.content || ""}`,
+        fileName: extracted.fileName || file.name,
       }));
       setReportError("");
-    } catch (error: any) {
-      setSourceError(error.message || "Gagal membaca file konteks.");
+    } catch (error: unknown) {
+      setSourceError(getErrorMessage(error, "Gagal membaca file konteks."));
     } finally {
       setIsExtractingSource(false);
     }
@@ -729,27 +773,21 @@ export default function ReportBuilderPage() {
     setReportError("");
 
     try {
-      const response = await fetch("/api/references/search", {
+      const response = await authenticatedFetch("/api/references/search", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: reference.query, limit: 5 }),
       });
-      const raw = await response.text();
-      let data: any = null;
-      try {
-        data = raw ? JSON.parse(raw) : null;
-      } catch {
-        throw new Error(raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Gagal mencari referensi.");
-      }
+      const data = await readApiPayload<ReferenceResult[]>(response, "Gagal mencari referensi.");
 
-      if (!response.ok || !data.success) throw new Error(data.error || "Gagal mencari referensi.");
+      if (!response.ok || !data.success || !Array.isArray(data.data)) throw new Error(data.error || "Gagal mencari referensi.");
 
       setProject((prev) => ({
         ...prev,
         references: prev.references.map((item) => item.id === reference.id ? { ...item, results: data.data } : item),
       }));
-    } catch (error: any) {
-      setReportError(error.message || "Gagal mencari referensi.");
+    } catch (error: unknown) {
+      setReportError(getErrorMessage(error, "Gagal mencari referensi."));
     } finally {
       setSearchingReferenceId(null);
     }

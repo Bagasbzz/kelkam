@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { getErrorMessage } from "@/lib/errors";
 
 export const maxDuration = 60;
 
@@ -74,10 +75,10 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
       success: true, 
       data: aiResponse 
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("API /api/ai/synthesize-data Error:", error);
     return NextResponse.json(
-      { success: false, error: error.message || "Gagal menghasilkan laporan, silakan coba lagi." },
+      { success: false, error: getErrorMessage(error, "Gagal menghasilkan laporan, silakan coba lagi.") },
       { status: 500 }
     );
   }

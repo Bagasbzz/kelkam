@@ -1,18 +1,23 @@
 "use client";
 
-import { LayoutPanelLeft, FileText, ChevronRight } from 'lucide-react';
+import { LayoutPanelLeft } from 'lucide-react';
+import type { RichTextNode } from "@/lib/types/thesis";
 
 interface SidebarStructureProps {
-  content: any;
+  content: RichTextNode;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export default function SidebarStructure({ content }: SidebarStructureProps) {
   // Extract headings for navigation
   const headings = content?.content
-    ?.filter((node: any) => node.type === 'heading')
-    ?.map((node: any, index: number) => ({
-      text: node.content ? node.content[0].text : 'Untitled',
-      level: node.attrs.level,
+    ?.filter((node) => node.type === 'heading')
+    ?.map((node, index: number) => ({
+      text: node.content ? node.content[0]?.text || 'Untitled' : 'Untitled',
+      level: isRecord(node.attrs) && typeof node.attrs.level === "number" ? node.attrs.level : 1,
       id: index
     })) || [];
 
@@ -24,7 +29,7 @@ export default function SidebarStructure({ content }: SidebarStructureProps) {
       </div>
       <div className="flex-1 overflow-y-auto p-4">
         <nav className="space-y-1">
-          {headings.map((heading: any) => (
+          {headings.map((heading) => (
             <div 
               key={heading.id} 
               className={`flex items-center gap-2 p-2 rounded-lg text-sm transition-colors cursor-default

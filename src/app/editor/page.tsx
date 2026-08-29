@@ -6,8 +6,64 @@ import { LayoutPanelLeft, Settings2, Download } from "lucide-react";
 import SkripsiEditor from "@/components/Editor";
 import StructureSidebar from "@/components/editor/StructureSidebar";
 import FormattingPanel from "@/components/editor/FormattingPanel";
-import { ThesisDocument, ThesisSettings } from "@/lib/types/thesis";
+import { RichTextNode, ThesisDocument, ThesisSettings } from "@/lib/types/thesis";
 import { exportToDocx } from "@/utils/docx-exporter";
+
+interface ThesisCheckpoint {
+  id: string;
+  name: string;
+  data: ThesisDocument;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isRichTextNode(value: unknown): value is RichTextNode {
+  if (!isRecord(value) || typeof value.type !== "string") return false;
+  if (value.content !== undefined && (!Array.isArray(value.content) || !value.content.every(isRichTextNode))) return false;
+  return true;
+}
+
+function isThesisDocument(value: unknown): value is ThesisDocument {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    isRecord(value.metadata) &&
+    isRecord(value.settings) &&
+    Array.isArray(value.sections) &&
+    isRichTextNode(value.content)
+  );
+}
+
+function parseStoredDocument(raw: string): ThesisDocument | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isThesisDocument(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseCheckpoints(raw: string | null): ThesisCheckpoint[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((checkpoint): checkpoint is ThesisCheckpoint => {
+      if (!isRecord(checkpoint)) return false;
+      return (
+        typeof checkpoint.id === "string" &&
+        typeof checkpoint.name === "string" &&
+        isThesisDocument(checkpoint.data)
+      );
+    });
+  } catch {
+    return [];
+  }
+}
 
 export default function UnifiedEditorPage() {
   const router = useRouter();
@@ -22,13 +78,20 @@ export default function UnifiedEditorPage() {
       router.push("/template-generator");
       return;
     }
-    try {
-      setDoc(JSON.parse(saved));
-      setIsLoaded(true);
-    } catch (e) {
-      console.error("Failed to parse document", e);
+
+    const parsedDoc = parseStoredDocument(saved);
+    if (!parsedDoc) {
+      console.error("Stored thesis_document is invalid");
       router.push("/template-generator");
+      return;
     }
+
+    const timer = window.setTimeout(() => {
+      setDoc(parsedDoc);
+      setIsLoaded(true);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
   }, [router]);
 
   // 2. Debounced Autosave
@@ -58,13 +121,21 @@ export default function UnifiedEditorPage() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  if (!isLoaded || !doc) return null;
+  if (!isLoaded || !doc) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50 px-6 pt-16">
+        <div className="rounded-lg border border-gray-200 bg-white px-5 py-4 text-sm font-semibold text-gray-600 shadow-sm">
+          Memuat dokumen...
+        </div>
+      </div>
+    );
+  }
 
   const updateSettings = (newSettings: ThesisSettings) => {
     setDoc(prev => prev ? { ...prev, settings: newSettings, updatedAt: new Date().toISOString() } : null);
   };
 
-  const updateContent = (newContent: any) => {
+  const updateContent = (newContent: RichTextNode) => {
     setDoc(prev => prev ? { ...prev, content: newContent, updatedAt: new Date().toISOString() } : null);
   };
 
@@ -138,7 +209,7 @@ export default function UnifiedEditorPage() {
              <button 
                 onClick={() => {
                   if (!doc) return;
-                  const checkpoints = JSON.parse(localStorage.getItem("thesis_checkpoints") || "[]");
+                  const checkpoints = parseCheckpoints(localStorage.getItem("thesis_checkpoints"));
                   const newCheckpoint = {
                     id: Date.now().toString(),
                     name: `Checkpoint ${new Date().toLocaleString('id-ID')}`,

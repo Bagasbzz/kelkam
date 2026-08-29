@@ -14,7 +14,7 @@
   sourceProviders?: string[];
   pdfStatus?: "verified" | "landing_page" | "closed" | "broken" | "unknown";
   doiVerified?: boolean;
-  raw?: any;
+  raw?: unknown;
 }
 
 export interface SearchOptions {

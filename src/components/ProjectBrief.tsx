@@ -2,6 +2,23 @@
 
 import { useEffect, useState } from "react";
 import type { ResearchBrief } from "@/lib/types/research-project";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import type { ReferenceItem } from "./ReferenceCard";
+import { getErrorMessage } from "@/lib/errors";
+
+interface SearchPlanGroup {
+  queries: string[];
+  targetCount: number;
+  yearFrom: number | null;
+  yearTo: number | null;
+  openAccessOnly: boolean;
+}
+
+function isSearchPlanGroup(value: unknown): value is SearchPlanGroup {
+  if (!value || typeof value !== "object") return false;
+  const group = value as Partial<SearchPlanGroup>;
+  return Array.isArray(group.queries) && group.queries.every((query) => typeof query === "string");
+}
 
 const emptyBrief: Partial<ResearchBrief> = {
   title: "",
@@ -23,16 +40,32 @@ export default function ProjectBrief({
   onChange?: (brief: Partial<ResearchBrief>) => void;
 }) {
   const storageKey = `research_brief_${projectId || "local"}`;
-
-  const [brief, setBrief] = useState<Partial<ResearchBrief>>(emptyBrief);
+  const brief = value || emptyBrief;
   const [isRunningSearchPlan, setIsRunningSearchPlan] = useState(false);
   const [searchPlanStatus, setSearchPlanStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          onChange?.({ ...emptyBrief, ...parsed });
+        }
+      } catch {
+        // ignore
+      }
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [onChange, storageKey]);
 
   async function runSearchPlan() {
     try {
       setIsRunningSearchPlan(true);
       setSearchPlanStatus("Menghasilkan search plan...");
-      const resp = await fetch("/api/research/search-plan", {
+      const resp = await authenticatedFetch("/api/research/search-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ brief }),
@@ -41,10 +74,10 @@ export default function ProjectBrief({
       if (!data?.success || !Array.isArray(data.data)) {
         throw new Error(data?.error || "Gagal membuat search plan");
       }
-      const plan = data.data as any[];
+      const plan = data.data.filter(isSearchPlanGroup);
 
       setSearchPlanStatus("Menjalankan query provider...");
-      const aggregated: any[] = [];
+      const aggregated: ReferenceItem[] = [];
       const seen = new Set<string>();
 
       for (const group of plan) {
@@ -53,7 +86,7 @@ export default function ProjectBrief({
         for (const q of queries) {
           setSearchPlanStatus(`Mencari: ${q}`);
           try {
-            const r = await fetch("/api/references/search", {
+            const r = await authenticatedFetch("/api/references/search", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -89,8 +122,8 @@ export default function ProjectBrief({
       } catch {
         setSearchPlanStatus("Gagal menyimpan hasil ke localStorage");
       }
-    } catch (error: any) {
-      setSearchPlanStatus(String(error?.message || error));
+    } catch (searchError: unknown) {
+      setSearchPlanStatus(getErrorMessage(searchError, "Gagal menjalankan search plan"));
     } finally {
       setIsRunningSearchPlan(false);
     }
@@ -98,33 +131,20 @@ export default function ProjectBrief({
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        setBrief((prev) => ({ ...prev, ...(JSON.parse(raw) || {}) }));
-      } else {
-        setBrief(emptyBrief);
-      }
-    } catch {
-      // ignore
-    }
-  }, [storageKey]);
-
-  useEffect(() => {
-    if (!value || Object.keys(value).length === 0) return;
-    setBrief((prev) => ({ ...prev, ...value }));
-  }, [value]);
-
-  useEffect(() => {
-    try {
       localStorage.setItem(storageKey, JSON.stringify(brief));
     } catch {
       // ignore
     }
-    if (onChange) onChange(brief);
-  }, [brief, storageKey, onChange]);
+  }, [brief, storageKey]);
 
   const update = (patch: Partial<ResearchBrief>) => {
-    setBrief((b) => ({ ...(b || {}), ...patch }));
+    const next = { ...(brief || {}), ...patch };
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    onChange?.(next);
   };
 
   return (
@@ -171,7 +191,7 @@ export default function ProjectBrief({
         <button
           onClick={() => {
             localStorage.removeItem(storageKey);
-            setBrief(emptyBrief);
+            onChange?.(emptyBrief);
           }}
           className="px-3 py-1 border rounded text-sm"
         >

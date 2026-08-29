@@ -1,7 +1,7 @@
 "use client";
 
-import { ThesisDocument, ThesisSettings, THESIS_PRESETS } from "@/lib/types/thesis";
-import { Settings2, ShieldCheck, Type, Maximize2, AlignJustify, AlignLeft, AlignCenter, ChevronDown } from "lucide-react";
+import { ThesisSettings, THESIS_PRESETS } from "@/lib/types/thesis";
+import { ShieldCheck, Type, Maximize2, AlignJustify, AlignLeft, AlignCenter, ChevronDown } from "lucide-react";
 import Input from "@/components/ui/Input";
 import { useState } from "react";
 
@@ -22,15 +22,18 @@ export default function FormattingPanel({ settings, onUpdate }: FormattingPanelP
     }
   };
 
-  const updateNested = (path: string, value: any) => {
-    const newSettings = { ...settings };
-    const keys = path.split('.');
-    let current: any = newSettings;
-    for (let i = 0; i < keys.length - 1; i++) {
-        current = current[keys[i]];
+  const updateNested = (
+    path: "font.family" | "font.sizeBody" | "font.lineSpacing" | "margins.top" | "margins.left" | "margins.bottom" | "margins.right",
+    value: string | number
+  ) => {
+    if (path.startsWith("font.")) {
+      const key = path.slice("font.".length) as keyof ThesisSettings["font"];
+      onUpdate({ ...settings, font: { ...settings.font, [key]: value } });
+      return;
     }
-    current[keys[keys.length - 1]] = value;
-    onUpdate(newSettings);
+
+    const key = path.slice("margins.".length) as keyof ThesisSettings["margins"];
+    onUpdate({ ...settings, margins: { ...settings.margins, [key]: value } });
   };
 
   return (
@@ -115,14 +118,14 @@ export default function FormattingPanel({ settings, onUpdate }: FormattingPanelP
             <AlignJustify className="w-3 h-3" /> Perataan
         </label>
         <div className="flex gap-2 p-1 bg-gray-50 border border-gray-100 rounded-xl">
-            {[
+            {([
                 { id: 'left', icon: AlignLeft },
                 { id: 'center', icon: AlignCenter },
                 { id: 'justify', icon: AlignJustify }
-            ].map((align) => (
+            ] as Array<{ id: ThesisSettings["alignment"]; icon: typeof AlignLeft }>).map((align) => (
                 <button 
                     key={align.id}
-                    onClick={() => onUpdate({ ...settings, alignment: align.id as any })}
+                    onClick={() => onUpdate({ ...settings, alignment: align.id })}
                     className={`flex-1 py-2 flex items-center justify-center rounded-lg transition-all ${settings.alignment === align.id ? 'bg-white shadow-sm text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
                 >
                     <align.icon className="w-4 h-4" />

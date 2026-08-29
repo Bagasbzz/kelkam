@@ -1,20 +1,19 @@
 ﻿"use client";
 
 import { useEffect, useState } from "react";
+import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase-browser";
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export default function Auth() {
   const [email, setEmail] = useState("");
-  const [user, setUser] = useState<any | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [projectIdInput, setProjectIdInput] = useState("");
-  const [currentProject, setCurrentProject] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem("current_project_id") || null;
-    } catch {
-      return null;
-    }
-  });
+  const [currentProject, setCurrentProject] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -23,16 +22,31 @@ export default function Auth() {
       try {
         const { data } = await supabase.auth.getUser();
         if (!mounted) return;
-        setUser(data?.user ?? null);
+        window.setTimeout(() => {
+          if (mounted) setUser(data?.user ?? null);
+        }, 0);
       } catch {
         // ignore
       }
     }
 
+    try {
+      const current = localStorage.getItem("current_project_id") || null;
+      window.setTimeout(() => {
+        if (mounted) setCurrentProject(current);
+      }, 0);
+    } catch {
+      window.setTimeout(() => {
+        if (mounted) setCurrentProject(null);
+      }, 0);
+    }
+
     loadUser();
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      window.setTimeout(() => {
+        if (mounted) setUser(session?.user ?? null);
+      }, 0);
     });
 
     return () => {
@@ -50,8 +64,8 @@ export default function Auth() {
       } else {
         setStatus("Magic link dikirim. Cek inbox email Anda.");
       }
-    } catch (e: any) {
-      setStatus("Network error: " + String(e?.message || e));
+    } catch (error) {
+      setStatus("Network error: " + getErrorMessage(error));
     }
   };
 
@@ -68,14 +82,15 @@ export default function Auth() {
 
   const saveProject = () => {
     try {
-      if (!projectIdInput) {
-        setStatus("Masukkan projectId terlebih dahulu");
+      const projectId = projectIdInput.trim();
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{2,79}$/.test(projectId)) {
+        setStatus("Project ID harus 3–80 karakter dan hanya memakai huruf, angka, _ atau -.");
         return;
       }
-      localStorage.setItem("current_project_id", projectIdInput);
-      setCurrentProject(projectIdInput);
+      localStorage.setItem("current_project_id", projectId);
+      setCurrentProject(projectId);
       setProjectIdInput("");
-      setStatus("Project dipilih: " + projectIdInput);
+      setStatus("Project dipilih: " + projectId);
       notifyProjectChanged();
     } catch {
       setStatus("Gagal menyimpan projectId");
@@ -117,7 +132,7 @@ export default function Auth() {
           <button onClick={saveProject} className="px-3 py-1 bg-green-600 text-white rounded text-sm">Pilih</button>
         </div>
         <div className="text-xs mb-2">
-          Current project: <strong>{currentProject || "proj_local_1 (default)"}</strong>
+          Current project: <strong>{currentProject || "belum dipilih"}</strong>
         </div>
         <div className="flex gap-2">
           <button onClick={clearProject} className="px-2 py-1 border rounded text-xs">Clear project</button>

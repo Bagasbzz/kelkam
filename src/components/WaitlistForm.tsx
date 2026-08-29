@@ -1,20 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { supabase } from "@/lib/supabase";
+import { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 
 export default function WaitlistForm() {
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">(() => {
+    try {
+      return localStorage.getItem("thesis_flow_joined_waitlist") ? "success" : "idle";
+    } catch {
+      return "idle";
+    }
+  });
   const [errorMessage, setErrorMessage] = useState("");
-
-  useEffect(() => {
-    const hasJoined = localStorage.getItem("thesis_flow_joined_waitlist");
-    if (hasJoined) setStatus("success");
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -22,14 +22,21 @@ export default function WaitlistForm() {
     setErrorMessage("");
 
     try {
-      const { error } = await supabase.from("waitlist").insert([{ email }]);
-      if (error && error.code !== "23505") throw error;
+      const response = await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "Pendaftaran gagal.");
+      }
       localStorage.setItem("thesis_flow_joined_waitlist", "true");
       setStatus("success");
       setEmail("");
-    } catch (err: any) {
+    } catch (err: unknown) {
       setStatus("error");
-      setErrorMessage(err.message || "Terjadi kesalahan. Coba lagi.");
+      setErrorMessage(err instanceof Error ? err.message : "Terjadi kesalahan. Coba lagi.");
     }
   };
 

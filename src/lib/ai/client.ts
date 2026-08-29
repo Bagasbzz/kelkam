@@ -18,15 +18,35 @@ export const AI_MODEL_FAST = process.env.AI_MODEL_FAST || process.env.AI_MODEL_M
 export const AI_MODEL_REVIEW = process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE || AI_MODEL_DEFAULT;
 export const AI_MODEL = AI_MODEL_DEFAULT;
 
-const apiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || process.env.GROK_API_KEY || "";
-const baseURL =
-  process.env.AI_BASE_URL ||
-  process.env.OPENAI_BASE_URL ||
-  (hasGroqFallback ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
+function getAiRuntimeConfig() {
+  const apiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || process.env.GROK_API_KEY || "";
+  const baseURL =
+    process.env.AI_BASE_URL ||
+    process.env.OPENAI_BASE_URL ||
+    (process.env.GROK_API_KEY && !(process.env.AI_API_KEY || process.env.OPENAI_API_KEY) ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
 
-export const aiClient = new OpenAI({
-  apiKey,
-  baseURL,
+  return { apiKey, baseURL };
+}
+
+let runtimeClient: OpenAI | null = null;
+
+export function getAiClient() {
+  const { apiKey, baseURL } = getAiRuntimeConfig();
+  if (!apiKey) {
+    throw new Error("AI_API_KEY belum diatur di environment variables.");
+  }
+
+  if (!runtimeClient) {
+    runtimeClient = new OpenAI({ apiKey, baseURL });
+  }
+
+  return runtimeClient;
+}
+
+export const aiClient = new Proxy({} as OpenAI, {
+  get(_target, prop, receiver) {
+    return Reflect.get(getAiClient(), prop, receiver);
+  },
 });
 
 /** Small helper to choose model by purpose */
@@ -37,6 +57,7 @@ export function getModelForPurpose(purpose?: "fast" | "review" | "default") {
 }
 
 export function assertAiConfigured() {
+  const { apiKey } = getAiRuntimeConfig();
   if (!apiKey) {
     throw new Error("AI_API_KEY belum diatur di environment variables.");
   }

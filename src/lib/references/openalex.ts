@@ -1,5 +1,6 @@
 import { ProviderPaper, SearchOptions } from "./types";
-import { fetchWithRetryAndCache } from "./provider-client";
+import { fetchWithRetryAndCache, isRecord } from "./provider-client";
+import { getErrorMessage } from "@/lib/errors";
 
 const OPENALEX_BASE = "https://api.openalex.org/works";
 
@@ -22,32 +23,42 @@ export async function searchOpenAlex(query: string, options: SearchOptions = {})
       headers: { Accept: "application/json" },
     });
 
-    const results = Array.isArray(json.results) ? json.results : [];
+    const payload = isRecord(json) ? json : {};
+    const results = Array.isArray(payload.results) ? payload.results.filter(isRecord) : [];
 
-    const papers: ProviderPaper[] = results.map((r: any) => {
+    const papers: ProviderPaper[] = results.map((r) => {
+      const hostVenue = isRecord(r.host_venue) ? r.host_venue : {};
+      const ids = isRecord(r.ids) ? r.ids : {};
+      const primaryLocation = isRecord(r.primary_location) ? r.primary_location : {};
+      const openAccess = isRecord(r.open_access) ? r.open_access : {};
       const id = r.id || r.openalex_id || "";
       const title = r.title || "";
       const year = r.publication_year || null;
-      const venue = r.host_venue?.display_name || r.host_venue?.publisher || null;
-      const abstract = r.abstract_inverted_index ? Object.keys(r.abstract_inverted_index).join(" ") : r.abstract || null;
-      const doi = r.doi || (r.ids && r.ids.doi) || null;
-      const urlCanonical = r.primary_location?.url || r.id;
-      const pdfUrl = r.primary_location?.url || null;
+      const venue = hostVenue.display_name || hostVenue.publisher || null;
+      const abstract = isRecord(r.abstract_inverted_index) ? Object.keys(r.abstract_inverted_index).join(" ") : r.abstract || null;
+      const doi = r.doi || ids.doi || null;
+      const urlCanonical = primaryLocation.url || r.id;
+      const pdfUrl = primaryLocation.url || null;
       const citationCount = r.cited_by_count || 0;
-      const isOpenAccess = Boolean(r.open_access?.is_oa);
-      const authors = Array.isArray(r.authorships) ? r.authorships.map((a: any) => a.author?.display_name).filter(Boolean) : [];
+      const isOpenAccess = Boolean(openAccess.is_oa);
+      const authors = Array.isArray(r.authorships)
+        ? r.authorships
+            .filter(isRecord)
+            .map((authorship) => isRecord(authorship.author) ? authorship.author.display_name : "")
+            .filter((author): author is string => typeof author === "string" && Boolean(author))
+        : [];
 
       return {
         id: String(id),
-        title,
+        title: String(title),
         authors,
-        year,
-        venue,
-        abstract,
-        url: urlCanonical,
-        pdfUrl,
-        doi,
-        citationCount,
+        year: typeof year === "number" ? year : null,
+        venue: venue ? String(venue) : null,
+        abstract: abstract ? String(abstract) : null,
+        url: urlCanonical ? String(urlCanonical) : null,
+        pdfUrl: pdfUrl ? String(pdfUrl) : null,
+        doi: doi ? String(doi) : null,
+        citationCount: Number(citationCount) || 0,
         isOpenAccess,
         source: "openalex",
         raw: r,
@@ -61,8 +72,8 @@ export async function searchOpenAlex(query: string, options: SearchOptions = {})
       if (options.openAccessOnly && !paper.isOpenAccess) return false;
       return true;
     });
-  } catch (error: any) {
-    console.error("searchOpenAlex error:", error?.message || error);
+  } catch (error: unknown) {
+    console.error("searchOpenAlex error:", getErrorMessage(error, "Unknown provider error"));
     return [];
   }
 }

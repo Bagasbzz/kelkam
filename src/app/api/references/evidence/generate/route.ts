@@ -1,157 +1,107 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-client";
 import { sendToAIForPurpose } from "@/lib/ai/client";
+import { authenticateRequest, ensureOwnedProject, isValidProjectId } from "@/lib/server/auth";
+import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 
-/**
- * POST /api/references/evidence/generate
- * Body: {
- *   projectId: string,
- *   referenceId: string,
- *   title?: string,
- *   authors?: string[],
- *   year?: number,
- *   venue?: string,
- *   abstract?: string,
- *   url?: string
- * }
- *
- * Server behavior:
- * - Requires Authorization: Bearer <access_token>
- * - Verifies user & project ownership (creates project mapping if missing)
- * - Calls AI (FAST model) to extract structured evidence fields:
- *   summary, methods, results, limitations, keywords, citation_sentence
- * - Persists evidence to public.reference_evidence
- * - Returns the saved evidence row
- */
+function clamp(value: unknown, max: number) {
+  return String(value || "").replace(/\u0000/g, "").trim().slice(0, max);
+}
+
 export async function POST(req: Request) {
+  const authentication = await authenticateRequest(req);
+  if (!authentication.ok) return authentication.response;
+  const { supabase, user } = authentication.auth;
+
+  const rateLimit = enforceRateLimit(`evidence-generate:${user.id}`, {
+    limit: 12,
+    windowMs: 10 * 60 * 1000,
+  });
+  if (rateLimit) return rateLimit;
+
   try {
-    const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+    const body = await readJsonBody<Record<string, unknown>>(req, 100_000);
+    const projectId = body.projectId;
+    const referenceId = clamp(body.referenceId, 300);
 
-    if (!token) {
-      return NextResponse.json({ success: false, error: "Missing Authorization Bearer token" }, { status: 401 });
+    if (!isValidProjectId(projectId)) {
+      return NextResponse.json({ success: false, error: "Project ID tidak valid." }, { status: 400 });
+    }
+    if (!referenceId) {
+      return NextResponse.json({ success: false, error: "Reference ID wajib diisi." }, { status: 400 });
     }
 
-    const userRes = await supabaseAdmin.auth.getUser(token);
-    const user = userRes?.data?.user;
-    if (!user) {
-      console.error("Invalid user token", userRes?.error);
-      return NextResponse.json({ success: false, error: "Invalid user token" }, { status: 401 });
+    const project = await ensureOwnedProject(supabase, user.id, projectId);
+    if (!project.ok) {
+      const conflict = project.reason === "already_owned";
+      return NextResponse.json(
+        { success: false, error: conflict ? "Project ID sudah digunakan." : "Gagal menyiapkan proyek." },
+        { status: conflict ? 409 : 500 },
+      );
     }
 
-    const body = await req.json().catch(() => ({}));
-    const { projectId, referenceId, title, authors, year, venue, abstract, url } = body as any;
+    const title = clamp(body.title, 500);
+    const authors = Array.isArray(body.authors)
+      ? body.authors.slice(0, 30).map((item) => clamp(item, 150))
+      : [];
+    const abstract = clamp(body.abstract, 12_000);
 
-    if (!projectId) return NextResponse.json({ success: false, error: "projectId required" }, { status: 400 });
-    if (!referenceId) return NextResponse.json({ success: false, error: "referenceId required" }, { status: 400 });
-
-    // verify or create project ownership mapping
-    const { data: projectRow, error: projectErr } = await supabaseAdmin
-      .from("projects")
-      .select("*")
-      .eq("project_id", projectId)
-      .limit(1)
-      .maybeSingle();
-
-    if (projectErr) {
-      console.error("Supabase project lookup error:", projectErr);
-      return NextResponse.json({ success: false, error: projectErr.message || "Project lookup failed" }, { status: 500 });
-    }
-
-    if (!projectRow) {
-      const { data: inserted, error: insertErr } = await supabaseAdmin
-        .from("projects")
-        .insert({ project_id: projectId, owner_id: user.id })
-        .select("*");
-      if (insertErr) {
-        console.error("Failed creating project mapping:", insertErr);
-        return NextResponse.json({ success: false, error: insertErr.message || "Failed to create project mapping" }, { status: 500 });
-      }
-    } else {
-      if (String(projectRow.owner_id) !== String(user.id)) {
-        return NextResponse.json({ success: false, error: "You are not the owner of this project" }, { status: 403 });
-      }
-    }
-
-    // Build prompt for AI (FAST purpose)
-    const promptParts = [
-      `Ringkas dan ekstrak informasi penting dari referensi akademik berikut:`,
+    const prompt = [
+      "Ringkas dan ekstrak informasi penting dari referensi akademik berikut:",
       `Title: ${title || "N/A"}`,
-      `Authors: ${Array.isArray(authors) ? authors.join(", ") : authors || "N/A"}`,
-      `Year: ${year || "N/A"}`,
-      `Venue: ${venue || "N/A"}`,
+      `Authors: ${authors.join(", ") || "N/A"}`,
+      `Year: ${clamp(body.year, 10) || "N/A"}`,
+      `Venue: ${clamp(body.venue, 300) || "N/A"}`,
       `Abstract: ${abstract || "N/A"}`,
-      `URL: ${url || "N/A"}`,
+      `URL: ${clamp(body.url, 2_000) || "N/A"}`,
       "",
-      "Keluarkan hasil sebagai JSON dengan field berikut:",
-      "- summary: ringkasan singkat (3-6 kalimat) dalam Bahasa Indonesia",
-      "- methods: deskripsikan metode yang digunakan (kalimat pendek)",
-      "- results: temuan utama (kalimat pendek)",
-      "- limitations: keterbatasan yang disebutkan (kalimat pendek)",
-      "- keywords: array kata kunci (5-12 kata/phrase)",
-      "- citation_sentence: satu kalimat yang bisa dipakai sebagai sitasi di teks (contoh: 'Menurut X et al. (2021), ...')",
-      "",
-      "Jika informasi tidak tersedia, masukkan nilai kosong atau null. Balas HANYA JSON tanpa teks tambahan."
-    ];
-    const prompt = promptParts.join("\n");
+      "Keluarkan hasil sebagai JSON dengan field: summary, methods, results, limitations, keywords, citation_sentence.",
+      "Jika informasi tidak tersedia, gunakan null. Balas hanya JSON tanpa teks tambahan.",
+    ].join("\n");
 
-    // Call AI (FAST)
     let aiResponseText = "";
     try {
       aiResponseText = await sendToAIForPurpose(prompt, undefined, "fast");
-    } catch (aiErr: any) {
-      console.error("AI extraction error:", aiErr);
-      return NextResponse.json({ success: false, error: "AI extraction failed: " + String(aiErr?.message || aiErr) }, { status: 500 });
+    } catch (error) {
+      console.error("Evidence AI extraction failed:", error);
+      return NextResponse.json({ success: false, error: "AI gagal mengekstrak evidence." }, { status: 502 });
     }
 
-    // Attempt to parse AI JSON
-    let parsed: any = {};
+    let parsed: Record<string, unknown> = {};
     try {
-      // AI may return code block; try to extract first JSON object
       const jsonMatch = aiResponseText.match(/\{[\s\S]*\}/);
-      const jsonText = jsonMatch ? jsonMatch[0] : aiResponseText;
-      parsed = JSON.parse(jsonText);
-    } catch (parseErr) {
-      console.warn("Failed to parse AI response as JSON. Returning raw AI text.", parseErr);
-      // fallback: store raw in summary field
-      parsed = {
-        summary: aiResponseText,
-        methods: null,
-        results: null,
-        limitations: null,
-        keywords: null,
-        citation_sentence: null,
-      };
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiResponseText);
+    } catch {
+      parsed = { summary: clamp(aiResponseText, 8_000) };
     }
 
-    // Normalize parsed fields
     const evidenceRow = {
       project_id: projectId,
       reference_id: referenceId,
-      summary: parsed.summary || null,
-      methods: parsed.methods || null,
-      results: parsed.results || null,
-      limitations: parsed.limitations || null,
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords : parsed.keywords ? [parsed.keywords] : null,
-      citation_sentence: parsed.citation_sentence || null,
+      summary: clamp(parsed.summary, 8_000) || null,
+      methods: clamp(parsed.methods, 4_000) || null,
+      results: clamp(parsed.results, 4_000) || null,
+      limitations: clamp(parsed.limitations, 4_000) || null,
+      keywords: Array.isArray(parsed.keywords)
+        ? parsed.keywords.slice(0, 20).map((item) => clamp(item, 100))
+        : null,
+      citation_sentence: clamp(parsed.citation_sentence, 2_000) || null,
       model_used: "FAST",
     };
 
-    const { data: insertData, error: insertErr } = await supabaseAdmin
+    const { data, error } = await supabase
       .from("reference_evidence")
       .insert(evidenceRow)
       .select("*")
-      .limit(1)
       .maybeSingle();
 
-    if (insertErr) {
-      console.error("Failed inserting evidence:", insertErr);
-      return NextResponse.json({ success: false, error: insertErr.message || "Failed to save evidence" }, { status: 500 });
+    if (error) {
+      console.error("Evidence insert failed:", error.code || "unknown");
+      return NextResponse.json({ success: false, error: "Gagal menyimpan evidence." }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, data: insertData });
-  } catch (err: any) {
-    console.error("API /api/references/evidence/generate Error:", err);
-    return NextResponse.json({ success: false, error: err?.message || "Failed to generate evidence" }, { status: 500 });
+    return NextResponse.json({ success: true, data });
+  } catch (error) {
+    console.error("API /api/references/evidence/generate failed:", error);
+    return publicErrorResponse(error, "Gagal membuat evidence.");
   }
 }

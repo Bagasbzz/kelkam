@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { BookOpen, CheckCircle2, ClipboardCopy, Loader2, Sparkles, MessageSquare, ListTree, FileText } from 'lucide-react';
 import styles from './synthesizer.module.css';
+import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
 
 type DataType = 'kuesioner' | 'wawancara' | 'observasi';
 
@@ -38,7 +39,7 @@ export default function DataSynthesizerPage() {
     setResult('');
 
     try {
-      const response = await fetch('/api/ai/synthesize-data', {
+      const response = await authenticatedFetch('/api/ai/synthesize-data', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -71,7 +72,7 @@ export default function DataSynthesizerPage() {
     setError('');
 
     try {
-      const response = await fetch('/api/ai/synthesize-data', {
+      const response = await authenticatedFetch('/api/ai/synthesize-data', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

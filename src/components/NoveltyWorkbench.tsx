@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase-browser";
 import type { ResearchBrief } from "@/lib/types/research-project";
+import { useCurrentProjectId } from "@/lib/client/use-current-project";
+import { getErrorMessage } from "@/lib/errors";
 
 interface NoveltyCandidate {
   id: string;
@@ -20,17 +22,26 @@ export default function NoveltyWorkbench({ brief }: { brief?: Partial<ResearchBr
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [source, setSource] = useState<string | null>(null);
 
-  const projectId = useMemo(() => {
+  const projectId = useCurrentProjectId();
+
+  const storageKey = `research_novelty_${projectId || "unselected"}`;
+
+  const loadStoredNovelty = useCallback(() => {
     try {
-      return localStorage.getItem("current_project_id") || "proj_local_1";
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const nextCandidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+      const nextSelectedId = typeof parsed?.selectedId === "string" ? parsed.selectedId : nextCandidates[0]?.id || null;
+      setCandidates(nextCandidates);
+      setSelectedId(nextSelectedId);
+      setSource(typeof parsed?.source === "string" ? parsed.source : null);
     } catch {
-      return "proj_local_1";
+      // ignore cache parse errors
     }
-  }, []);
+  }, [storageKey]);
 
-  const storageKey = `research_novelty_${projectId}`;
-
-  const dispatchNoveltyUpdate = (nextCandidates: NoveltyCandidate[], nextSelectedId: string | null, nextSource: string | null) => {
+  const dispatchNoveltyUpdate = useCallback((nextCandidates: NoveltyCandidate[], nextSelectedId: string | null, nextSource: string | null) => {
     const selectedCandidate = nextCandidates.find((item) => item.id === nextSelectedId) || null;
 
     try {
@@ -53,32 +64,25 @@ export default function NoveltyWorkbench({ brief }: { brief?: Partial<ResearchBr
         source: nextSource,
       },
     }));
-  };
+  }, [projectId, storageKey]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const nextCandidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
-      const nextSelectedId = typeof parsed?.selectedId === "string" ? parsed.selectedId : nextCandidates[0]?.id || null;
-      setCandidates(nextCandidates);
-      setSelectedId(nextSelectedId);
-      setSource(typeof parsed?.source === "string" ? parsed.source : null);
-    } catch {
-      // ignore cache parse errors
-    }
-  }, [storageKey]);
+    const timer = window.setTimeout(() => {
+      loadStoredNovelty();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadStoredNovelty]);
 
   useEffect(() => {
     if (candidates.length === 0) return;
     dispatchNoveltyUpdate(candidates, selectedId || candidates[0]?.id || null, source);
-  }, [candidates, selectedId, source]);
+  }, [candidates, dispatchNoveltyUpdate, selectedId, source]);
 
   const generateCandidates = async () => {
     setLoading(true);
     setError(null);
     try {
+      if (!projectId) throw new Error("Pilih project terlebih dahulu.");
       const session = await supabase.auth.getSession();
       const token = session?.data?.session?.access_token;
       if (!token) {
@@ -103,8 +107,8 @@ export default function NoveltyWorkbench({ brief }: { brief?: Partial<ResearchBr
       setSource(data.source || null);
       setSelectedId(nextSelectedId);
       dispatchNoveltyUpdate(nextCandidates, nextSelectedId, data.source || null);
-    } catch (e: any) {
-      setError(e?.message || "Gagal membuat novelty candidates");
+    } catch (generationError: unknown) {
+      setError(getErrorMessage(generationError, "Gagal membuat novelty candidates"));
     } finally {
       setLoading(false);
     }

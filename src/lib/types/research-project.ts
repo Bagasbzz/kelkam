@@ -78,7 +78,7 @@ export interface AcademicReference {
   relevanceReasons?: string[];
   selected?: boolean;
   createdAt?: string;
-  raw?: any; // raw provider payload (JSONB)
+  raw?: unknown; // raw provider payload (JSONB)
 }
 
 export interface EvidenceItem {
@@ -121,11 +121,23 @@ export interface ResearchProject {
   selectedNoveltyId?: string | null;
   outline?: ReportSectionBrief[];
   citationMap?: Record<string, string[]>; // sectionId -> referenceIds
-  diagrams?: { id: string; type: string; title?: string; caption?: string; approved?: boolean; diagramData?: any }[];
+  diagrams?: {
+    id: string;
+    type: string;
+    title?: string;
+    caption?: string;
+    approved?: boolean;
+    diagramData?: {
+      nodes?: DiagramNode[];
+      edges?: DiagramEdge[];
+      meta?: Record<string, unknown>;
+    };
+  }[];
   tables?: { id: string; title?: string; purpose?: string; columns?: string[]; status?: string }[];
   sections?: ReportSectionBrief[];
-  documentSettings?: any;
+  documentSettings?: Record<string, unknown>;
   workflowStage?: "intake" | "planned" | "searching" | "evidence" | "drafting" | "review" | "exported";
   qualityReport?: { errors: string[]; warnings: string[]; checkedAt?: string } | null;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
+import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";

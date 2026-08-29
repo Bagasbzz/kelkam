@@ -1,55 +1,26 @@
 import { NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabase-client";
+import { authenticateRequest, isValidProjectId, ownsProject } from "@/lib/server/auth";
 
-/**
- * GET /api/references/evidence?projectId=...
- * Requires Authorization: Bearer <access_token>
- * Only project owner may read evidence rows.
- */
 export async function GET(req: Request) {
+  const authentication = await authenticateRequest(req);
+  if (!authentication.ok) return authentication.response;
+  const { supabase, user } = authentication.auth;
+
   try {
-    const authHeader = req.headers.get("authorization") || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-
-    if (!token) {
-      return NextResponse.json({ success: false, error: "Missing Authorization Bearer token" }, { status: 401 });
+    const projectId = new URL(req.url).searchParams.get("projectId");
+    if (!isValidProjectId(projectId)) {
+      return NextResponse.json({ success: false, error: "Project ID tidak valid." }, { status: 400 });
     }
 
-    const userRes = await supabaseAdmin.auth.getUser(token);
-    const user = userRes?.data?.user;
-    if (!user) {
-      console.error("Invalid user token", userRes?.error);
-      return NextResponse.json({ success: false, error: "Invalid user token" }, { status: 401 });
+    const ownership = await ownsProject(supabase, user.id, projectId);
+    if (!ownership.ok) {
+      return NextResponse.json(
+        { success: false, error: ownership.reason === "lookup_failed" ? "Gagal memeriksa proyek." : "Proyek tidak ditemukan." },
+        { status: ownership.reason === "lookup_failed" ? 500 : 404 },
+      );
     }
 
-    const url = new URL(req.url);
-    const projectId = url.searchParams.get("projectId");
-    if (!projectId) {
-      return NextResponse.json({ success: false, error: "projectId query param is required" }, { status: 400 });
-    }
-
-    // verify ownership
-    const { data: projectRow, error: projectErr } = await supabaseAdmin
-      .from("projects")
-      .select("*")
-      .eq("project_id", projectId)
-      .limit(1)
-      .maybeSingle();
-
-    if (projectErr) {
-      console.error("Supabase project lookup error:", projectErr);
-      return NextResponse.json({ success: false, error: projectErr.message || "Project lookup failed" }, { status: 500 });
-    }
-
-    if (!projectRow) {
-      return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
-    }
-
-    if (String(projectRow.owner_id) !== String(user.id)) {
-      return NextResponse.json({ success: false, error: "You are not the owner of this project" }, { status: 403 });
-    }
-
-    const { data, error } = await supabaseAdmin
+    const { data, error } = await supabase
       .from("reference_evidence")
       .select("*")
       .eq("project_id", projectId)
@@ -57,13 +28,16 @@ export async function GET(req: Request) {
       .limit(500);
 
     if (error) {
-      console.error("Supabase select error:", error);
-      return NextResponse.json({ success: false, error: error.message || "Failed to fetch evidence" }, { status: 500 });
+      console.error("Evidence list query failed:", error.code || "unknown");
+      return NextResponse.json({ success: false, error: "Gagal mengambil evidence." }, { status: 500 });
     }
 
-    return NextResponse.json({ success: true, data });
-  } catch (err: any) {
-    console.error("API /api/references/evidence Error:", err);
-    return NextResponse.json({ success: false, error: err?.message || "Failed to fetch evidence" }, { status: 500 });
+    return NextResponse.json(
+      { success: true, data },
+      { headers: { "Cache-Control": "private, no-store" } },
+    );
+  } catch (error) {
+    console.error("API /api/references/evidence failed:", error);
+    return NextResponse.json({ success: false, error: "Gagal mengambil evidence." }, { status: 500 });
   }
 }

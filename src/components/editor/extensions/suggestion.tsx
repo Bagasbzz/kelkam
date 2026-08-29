@@ -2,13 +2,36 @@ import { ReactRenderer } from '@tiptap/react'
 import tippy from 'tippy.js'
 import 'tippy.js/dist/tippy.css' // Add CSS for tippy
 import { CommandList } from '../CommandList'
+import type { CommandListHandle, CommandListProps } from '../CommandList'
 import React from 'react'
+import type { Editor, JSONContent, Range } from '@tiptap/core'
+import type { Instance } from 'tippy.js'
+import type { SuggestionKeyDownProps, SuggestionProps } from '@tiptap/suggestion'
 import { 
-  Heading1, Heading2, Heading3, 
-  Type, Image as ImageIcon, Sparkles, 
-  List, ListOrdered, Quote, Code, 
-  Table as TableIcon, FileText
+  Heading1, Heading2, Heading3,
+  Type, Image as ImageIcon, Sparkles,
+  Quote, FileText
 } from 'lucide-react'
+
+interface CommandItem {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  command: (props: { editor: Editor; range: Range }) => void;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getTextFromNode(node: JSONContent | null | undefined): string {
+  if (!node || !Array.isArray(node.content)) return "";
+  return node.content.map((child) => (typeof child.text === "string" ? child.text : "")).join("");
+}
+
+function getNodeAttr(node: JSONContent, key: string): unknown {
+  return isRecord(node.attrs) ? node.attrs[key] : undefined;
+}
 
 export const suggestion = {
   items: ({ query }: { query: string }) => {
@@ -17,7 +40,7 @@ export const suggestion = {
         title: 'Heading 1',
         description: 'Judul Bab Utama (BAB I, dst)',
         icon: <Heading1 className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           editor.chain().focus().deleteRange(range).setNode('heading', { level: 1 }).run()
         },
       },
@@ -25,7 +48,7 @@ export const suggestion = {
         title: 'Heading 2',
         description: 'Sub-bab (1.1, dst)',
         icon: <Heading2 className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           editor.chain().focus().deleteRange(range).setNode('heading', { level: 2 }).run()
         },
       },
@@ -33,7 +56,7 @@ export const suggestion = {
         title: 'Heading 3',
         description: 'Sub-sub-bab (1.1.1, dst)',
         icon: <Heading3 className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           editor.chain().focus().deleteRange(range).setNode('heading', { level: 3 }).run()
         },
       },
@@ -41,7 +64,7 @@ export const suggestion = {
         title: 'Paragraf',
         description: 'Teks biasa',
         icon: <Type className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           editor.chain().focus().deleteRange(range).setNode('paragraph').run()
         },
       },
@@ -49,7 +72,7 @@ export const suggestion = {
         title: 'Gambar',
         description: 'Sisipkan gambar dari komputer',
         icon: <ImageIcon className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           const input = document.createElement('input')
           input.type = 'file'
           input.accept = 'image/*'
@@ -70,15 +93,13 @@ export const suggestion = {
         title: 'Daftar Isi Otomatis',
         description: 'Update daftar isi berdasarkan judul bab',
         icon: <FileText className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           const json = editor.getJSON()
-          const headings = json.content?.filter((n: any) => n.type === 'heading') || []
+          const headings = (Array.isArray(json.content) ? json.content : []).filter((node) => node.type === 'heading') as JSONContent[]
           
-          let chapterCount = 0
-          const tocContent = headings.map((h: any) => {
-            const level = h.attrs.level
-            const text = h.content?.[0]?.text || ''
-            if (level === 1) chapterCount++
+          const tocContent = headings.map((heading) => {
+            const level = typeof getNodeAttr(heading, 'level') === 'number' ? Number(getNodeAttr(heading, 'level')) : 1
+            const text = getTextFromNode(heading)
             const indent = level > 1 ? '      ' : ''
             return { type: 'paragraph', content: [{ type: 'text', text: `${indent}${text}` }] }
           })
@@ -95,12 +116,14 @@ export const suggestion = {
         title: 'Daftar Gambar',
         description: 'Hasilkan daftar gambar otomatis',
         icon: <ImageIcon className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           const json = editor.getJSON()
-          const images = json.content?.filter((n: any) => n.type === 'smartImage') || []
+          const images = (Array.isArray(json.content) ? json.content : []).filter((node) => node.type === 'smartImage') as JSONContent[]
           
-          const listContent = images.map((img: any) => {
-            return { type: 'paragraph', content: [{ type: 'text', text: `${img.attrs.label} ${img.attrs.caption || ''}` }] }
+          const listContent = images.map((image) => {
+            const label = typeof getNodeAttr(image, 'label') === 'string' ? String(getNodeAttr(image, 'label')) : 'Gambar'
+            const caption = typeof getNodeAttr(image, 'caption') === 'string' ? String(getNodeAttr(image, 'caption')) : ''
+            return { type: 'paragraph', content: [{ type: 'text', text: `${label} ${caption}`.trim() }] }
           })
 
           editor.chain().focus().deleteRange(range)
@@ -115,7 +138,7 @@ export const suggestion = {
         title: 'AI Paraphrase',
         description: 'Perbaiki kalimat agar lebih akademis',
         icon: <Sparkles className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
           const text = prompt("Masukkan kalimat yang ingin diperbaiki:")
           if (text) {
              editor.chain().focus().deleteRange(range)
@@ -133,7 +156,7 @@ export const suggestion = {
         title: 'Smart DOI Fetcher',
         description: 'Buat sitasi dari link atau DOI',
         icon: <Quote className="w-4 h-4" />,
-        command: ({ editor, range }: any) => {
+        command: ({ editor, range }: { editor: Editor; range: Range }) => {
            const doi = prompt("Masukkan DOI atau URL Jurnal:")
            if (doi) {
               editor.chain().focus().deleteRange(range)
@@ -147,15 +170,15 @@ export const suggestion = {
            }
         },
       },
-    ].filter(item => item.title.toLowerCase().includes(query.toLowerCase()))
+    ].filter((item) => item.title.toLowerCase().includes(query.toLowerCase()))
   },
 
   render: () => {
-    let component: any
-    let popup: any
+    let component: ReactRenderer<CommandListHandle, CommandListProps> | null = null
+    let popup: Instance | null = null
 
     return {
-      onStart: (props: any) => {
+      onStart: (props: SuggestionProps<CommandItem, CommandItem>) => {
         component = new ReactRenderer(CommandList, {
           props,
           editor: props.editor,
@@ -165,8 +188,8 @@ export const suggestion = {
           return
         }
 
-        popup = tippy('body', {
-          getReferenceClientRect: props.clientRect,
+        popup = tippy(document.body, {
+          getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect(),
           appendTo: () => document.body,
           content: component.element,
           showOnCreate: true,
@@ -176,29 +199,29 @@ export const suggestion = {
         })
       },
 
-      onUpdate(props: any) {
-        component.updateProps(props)
+      onUpdate(props: SuggestionProps<CommandItem, CommandItem>) {
+        component?.updateProps(props)
 
         if (!props.clientRect) {
           return
         }
 
-        popup[0].setProps({
-          getReferenceClientRect: props.clientRect,
+        popup?.setProps({
+          getReferenceClientRect: () => props.clientRect?.() ?? new DOMRect(),
         })
       },
 
-      onKeyDown(props: any) {
+      onKeyDown(props: SuggestionKeyDownProps) {
         if (props.event.key === 'Escape') {
-          popup[0].hide()
+          popup?.hide()
           return true
         }
-        return component.ref?.onKeyDown(props)
+        return component?.ref?.onKeyDown(props) ?? false
       },
 
       onExit() {
-        popup[0].destroy()
-        component.destroy()
+        popup?.destroy()
+        component?.destroy()
       },
     }
   },

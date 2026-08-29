@@ -2,11 +2,21 @@ const CACHE_TTL_MS = Number(process.env.REFERENCE_CACHE_TTL_MS || 120 * 1000); /
 const DEFAULT_RETRIES = Number(process.env.REFERENCE_DEFAULT_RETRIES || 4);
 const DEFAULT_BACKOFF_MS = Number(process.env.REFERENCE_DEFAULT_BACKOFF_MS || 500);
 
-type CacheEntry = { ts: number; data: any };
+type CacheEntry = { ts: number; data: unknown };
 
 const cache = new Map<string, CacheEntry>();
 
-export async function fetchWithRetryAndCache(url: string, options: RequestInit = {}, retries = DEFAULT_RETRIES, backoffMs = DEFAULT_BACKOFF_MS, useCache = true) {
+export const isRecord = (value: unknown): value is Record<string, unknown> => (
+  typeof value === "object" && value !== null && !Array.isArray(value)
+);
+
+export async function fetchWithRetryAndCache(
+  url: string,
+  options: RequestInit = {},
+  retries = DEFAULT_RETRIES,
+  backoffMs = DEFAULT_BACKOFF_MS,
+  useCache = true,
+): Promise<unknown> {
   const key = `${url}|${JSON.stringify(options || {})}`;
 
   if (useCache) {
@@ -17,7 +27,7 @@ export async function fetchWithRetryAndCache(url: string, options: RequestInit =
   }
 
   let attempt = 0;
-  let lastError: any = null;
+  let lastError: unknown = null;
 
   while (attempt <= retries) {
     try {
@@ -32,7 +42,7 @@ export async function fetchWithRetryAndCache(url: string, options: RequestInit =
         // Non-retriable - throw immediately
         throw err;
       }
-      const data = await resp.json().catch(async () => {
+      const data: unknown = await resp.json().catch(async () => {
         // fallback: try text
         const t = await resp.text();
         try { return JSON.parse(t); } catch { return t; }
@@ -40,7 +50,7 @@ export async function fetchWithRetryAndCache(url: string, options: RequestInit =
 
       if (useCache) cache.set(key, { ts: Date.now(), data });
       return data;
-    } catch (err: any) {
+    } catch (err: unknown) {
       lastError = err;
       attempt += 1;
       if (attempt > retries) break;

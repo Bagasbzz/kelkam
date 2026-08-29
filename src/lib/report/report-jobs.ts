@@ -1,5 +1,7 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateReportDraft } from "@/lib/report/generate-report";
+import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
+import { createUserScopedSupabase } from "@/lib/server/auth";
 
 export type ReportJobStatus = "queued" | "running" | "done" | "failed";
 
@@ -17,6 +19,7 @@ export interface ReportJob {
 
 type ReportJobRow = {
   id: string;
+  owner_id: string;
   status: ReportJobStatus;
   progress: number;
   stage: string;
@@ -25,22 +28,28 @@ type ReportJobRow = {
   result: string | null;
   source: string | null;
   error: string | null;
-  project?: any;
+  project?: unknown;
 };
 
 const globalForJobs = globalThis as typeof globalThis & {
   __reportJobs?: Map<string, ReportJob>;
-  __reportJobProjects?: Map<string, any>;
+  __reportJobProjects?: Map<string, unknown>;
+  __reportJobOwners?: Map<string, string>;
   __reportJobRunners?: Set<string>;
 };
+
 const jobs = globalForJobs.__reportJobs || new Map<string, ReportJob>();
-const jobProjects = globalForJobs.__reportJobProjects || new Map<string, any>();
+const jobProjects = globalForJobs.__reportJobProjects || new Map<string, unknown>();
+const jobOwners = globalForJobs.__reportJobOwners || new Map<string, string>();
 const jobRunners = globalForJobs.__reportJobRunners || new Set<string>();
 globalForJobs.__reportJobs = jobs;
 globalForJobs.__reportJobProjects = jobProjects;
+globalForJobs.__reportJobOwners = jobOwners;
 globalForJobs.__reportJobRunners = jobRunners;
 
 const STALE_JOB_MS = 20_000;
+const MEMORY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
+const MAX_MEMORY_JOBS = 100;
 
 const stages = [
   { progress: 8, stage: "Menyiapkan job laporan" },
@@ -51,15 +60,32 @@ const stages = [
   { progress: 92, stage: "Merapikan hasil akhir" },
 ];
 
-function getSupabaseAdmin(): SupabaseClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-  const key =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+function pruneMemoryJobs() {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    const updatedAt = new Date(job.updatedAt).getTime();
+    if (!Number.isFinite(updatedAt) || now - updatedAt > MEMORY_JOB_TTL_MS) {
+      jobs.delete(id);
+      jobProjects.delete(id);
+      jobOwners.delete(id);
+      jobRunners.delete(id);
+    }
+  }
 
-  if (!url || !key) return null;
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
+  if (jobs.size <= MAX_MEMORY_JOBS) return;
+  const oldest = [...jobs.values()]
+    .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
+    .slice(0, jobs.size - MAX_MEMORY_JOBS);
+  for (const job of oldest) {
+    jobs.delete(job.id);
+    jobProjects.delete(job.id);
+    jobOwners.delete(job.id);
+    jobRunners.delete(job.id);
+  }
+}
+
+function getUserClient(accessToken: string): SupabaseClient {
+  return createUserScopedSupabase(accessToken);
 }
 
 function fromRow(row: ReportJobRow): ReportJob {
@@ -77,32 +103,42 @@ function fromRow(row: ReportJobRow): ReportJob {
 }
 
 function toRowPatch(patch: Partial<ReportJob>) {
-  return {
-    status: patch.status,
-    progress: patch.progress,
-    stage: patch.stage,
-    updated_at: new Date().toISOString(),
-    result: patch.result,
-    source: patch.source,
-    error: patch.error,
-  };
+  return Object.fromEntries(
+    Object.entries({
+      status: patch.status,
+      progress: patch.progress,
+      stage: patch.stage,
+      updated_at: new Date().toISOString(),
+      result: patch.result,
+      source: patch.source,
+      error: patch.error,
+    }).filter(([, value]) => value !== undefined),
+  );
 }
 
-async function readJobRow(id: string) {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return null;
+async function readJobRow(id: string, ownerId: string, accessToken: string) {
+  const supabase = getUserClient(accessToken);
+  const { data, error } = await supabase
+    .from("report_jobs")
+    .select("*")
+    .eq("id", id)
+    .eq("owner_id", ownerId)
+    .maybeSingle<ReportJobRow>();
 
-  const { data, error } = await supabase.from("report_jobs").select("*").eq("id", id).maybeSingle<ReportJobRow>();
-  if (error) console.warn("Supabase report_jobs read skipped:", error.message);
+  if (error) console.error("report_jobs read failed:", error.code || "unknown");
   return data || null;
 }
 
-async function saveJob(job: ReportJob, project?: any) {
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return;
-
+async function saveJob(
+  job: ReportJob,
+  project: unknown,
+  ownerId: string,
+  accessToken: string,
+) {
+  const supabase = getUserClient(accessToken);
   const { error } = await supabase.from("report_jobs").upsert({
     id: job.id,
+    owner_id: ownerId,
     status: job.status,
     progress: job.progress,
     stage: job.stage,
@@ -111,34 +147,54 @@ async function saveJob(job: ReportJob, project?: any) {
     result: job.result || null,
     source: job.source || null,
     error: job.error || null,
-    project: project || null,
+    project,
   });
 
-  if (error) console.warn("Supabase report_jobs upsert skipped:", error.message);
+  if (error) console.error("report_jobs upsert failed:", error.code || "unknown");
 }
 
-async function patchJob(id: string, patch: Partial<ReportJob>) {
+async function patchJob(
+  id: string,
+  ownerId: string,
+  accessToken: string,
+  patch: Partial<ReportJob>,
+) {
   const current = jobs.get(id);
   const updatedAt = new Date().toISOString();
 
-  if (current) jobs.set(id, { ...current, ...patch, updatedAt });
+  if (current && jobOwners.get(id) === ownerId) {
+    jobs.set(id, { ...current, ...patch, updatedAt });
+  }
 
-  const supabase = getSupabaseAdmin();
-  if (!supabase) return;
+  const supabase = getUserClient(accessToken);
+  const { error } = await supabase
+    .from("report_jobs")
+    .update(toRowPatch(patch))
+    .eq("id", id)
+    .eq("owner_id", ownerId);
 
-  const { error } = await supabase.from("report_jobs").update(toRowPatch(patch)).eq("id", id);
-  if (error) console.warn("Supabase report_jobs update skipped:", error.message);
+  if (error) console.error("report_jobs update failed:", error.code || "unknown");
 }
 
-export async function getReportJob(id: string) {
-  const row = await readJobRow(id);
+function getOwnedMemoryJob(id: string, ownerId: string) {
+  return jobOwners.get(id) === ownerId ? jobs.get(id) || null : null;
+}
+
+export async function getReportJob(id: string, ownerId: string, accessToken: string) {
+  pruneMemoryJobs();
+  const row = await readJobRow(id, ownerId, accessToken);
   if (row) return fromRow(row);
-  return jobs.get(id) || null;
+  return getOwnedMemoryJob(id, ownerId);
 }
 
-export async function ensureReportJobRunning(id: string) {
-  const row = await readJobRow(id);
-  const job = row ? fromRow(row) : jobs.get(id) || null;
+export async function ensureReportJobRunning(
+  id: string,
+  ownerId: string,
+  accessToken: string,
+) {
+  pruneMemoryJobs();
+  const row = await readJobRow(id, ownerId, accessToken);
+  const job = row ? fromRow(row) : getOwnedMemoryJob(id, ownerId);
   if (!job || job.status === "done" || job.status === "failed") return job;
   if (jobRunners.has(id)) return job;
 
@@ -148,11 +204,17 @@ export async function ensureReportJobRunning(id: string) {
 
   if (!project || !shouldResume) return job;
 
-  await runReportJob(id, project);
-  return getReportJob(id);
+  await runReportJob(id, project, ownerId, accessToken);
+  return getReportJob(id, ownerId, accessToken);
 }
 
-export async function startReportJob(project: any) {
+export async function startReportJob(
+  project: unknown,
+  ownerId: string,
+  accessToken: string,
+) {
+  pruneMemoryJobs();
+  const safeProject = sanitizeForPersistence(project);
   const id = `report_${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   const job: ReportJob = {
@@ -163,47 +225,76 @@ export async function startReportJob(project: any) {
     createdAt: now,
     updatedAt: now,
   };
-  jobs.set(id, job);
-  jobProjects.set(id, project);
-  await saveJob(job, project);
 
-  void runReportJob(id, project);
+  jobs.set(id, job);
+  jobProjects.set(id, safeProject);
+  jobOwners.set(id, ownerId);
+  await saveJob(job, safeProject, ownerId, accessToken);
+
+  void runReportJob(id, safeProject, ownerId, accessToken);
   return job;
 }
 
-async function runReportJob(id: string, project: any) {
+async function runReportJob(
+  id: string,
+  project: unknown,
+  ownerId: string,
+  accessToken: string,
+) {
   if (jobRunners.has(id)) return;
   jobRunners.add(id);
 
   try {
     jobProjects.set(id, project);
-    await patchJob(id, { status: "running", progress: stages[0].progress, stage: stages[0].stage });
+    jobOwners.set(id, ownerId);
+    await patchJob(id, ownerId, accessToken, {
+      status: "running",
+      progress: stages[0].progress,
+      stage: stages[0].stage,
+    });
 
     for (const item of stages.slice(1, 4)) {
       await new Promise((resolve) => setTimeout(resolve, 350));
-      await patchJob(id, { progress: item.progress, stage: item.stage });
+      await patchJob(id, ownerId, accessToken, {
+        progress: item.progress,
+        stage: item.stage,
+      });
     }
 
-    await patchJob(id, { progress: stages[4].progress, stage: stages[4].stage });
+    await patchJob(id, ownerId, accessToken, {
+      progress: stages[4].progress,
+      stage: stages[4].stage,
+    });
     const draft = await generateReportDraft(project);
-    await patchJob(id, { progress: stages[5].progress, stage: stages[5].stage });
+    await patchJob(id, ownerId, accessToken, {
+      progress: stages[5].progress,
+      stage: stages[5].stage,
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 250));
-    await patchJob(id, {
+    await patchJob(id, ownerId, accessToken, {
       status: "done",
       progress: 100,
-      stage: draft.source === "fallback-timeout" ? "Draft cepat selesai, siap direvisi/diperpanjang" : "Laporan selesai disusun",
+      stage:
+        draft.source === "fallback-timeout"
+          ? "Draft cepat selesai, siap direvisi/diperpanjang"
+          : "Laporan selesai disusun",
       result: draft.content,
       source: draft.source,
     });
-  } catch (error: any) {
-    await patchJob(id, {
+  } catch (error) {
+    console.error("Report job failed:", error);
+    await patchJob(id, ownerId, accessToken, {
       status: "failed",
       progress: 100,
       stage: "Generate laporan gagal",
-      error: error.message || "Gagal membuat laporan.",
+      error: "Laporan gagal dibuat. Periksa bahan proyek lalu coba lagi.",
     });
   } finally {
     jobRunners.delete(id);
+    const finalJob = jobs.get(id);
+    if (finalJob?.status === "done" || finalJob?.status === "failed") {
+      jobProjects.delete(id);
+    }
   }
 }

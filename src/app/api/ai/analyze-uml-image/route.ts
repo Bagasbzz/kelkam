@@ -1,7 +1,17 @@
 import { NextResponse } from "next/server";
+import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
 import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
 
 export const maxDuration = 60;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+function validImageSignature(bytes: Buffer, type: string) {
+  if (type === "image/png") return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (type === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (type === "image/webp") return bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP";
+  return false;
+}
 
 function extractJson(text: string) {
   let json = text.trim();
@@ -20,17 +30,24 @@ export async function POST(req: Request) {
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
     const diagramType = String(formData.get("diagramType") || "flowchart");
-    const prompt = String(formData.get("prompt") || "").trim();
+    const prompt = String(formData.get("prompt") || "").trim().slice(0, 2_000);
 
     if (!file) {
       return NextResponse.json({ success: false, error: "File gambar tidak ditemukan." }, { status: 400 });
     }
 
-    if (!file.type.startsWith("image/")) {
-      return NextResponse.json({ success: false, error: "Upload harus berupa gambar diagram UML." }, { status: 400 });
+    if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
+      return NextResponse.json({ success: false, error: "Gunakan gambar PNG, JPEG, atau WebP." }, { status: 415 });
+    }
+
+    if (file.size <= 0 || file.size > MAX_IMAGE_BYTES) {
+      return NextResponse.json({ success: false, error: "Ukuran gambar harus di bawah 5 MB." }, { status: 413 });
     }
 
     const bytes = Buffer.from(await file.arrayBuffer());
+    if (!validImageSignature(bytes, file.type)) {
+      return NextResponse.json({ success: false, error: "Isi file gambar tidak valid." }, { status: 415 });
+    }
     const dataUrl = `data:${file.type};base64,${bytes.toString("base64")}`;
 
     const analysisPrompt = [
@@ -42,6 +59,14 @@ export async function POST(req: Request) {
       "reconstructionPrompt harus berupa instruksi teks yang siap dikirim ke generator UML agar hasilnya rapi, formal, garis tegas, dan sesuai isi diagram.",
     ].filter(Boolean).join("\n");
 
+    const userMessage: ChatCompletionUserMessageParam = {
+      role: "user",
+      content: [
+        { type: "text", text: analysisPrompt },
+        { type: "image_url", image_url: { url: dataUrl } },
+      ],
+    };
+
     const analysis = await aiClient.chat.completions.create({
       model: AI_MODEL,
       messages: [
@@ -49,13 +74,7 @@ export async function POST(req: Request) {
           role: "system",
           content: "Anda adalah analis diagram UML. Baca gambar, pahami struktur, dan ubah ke instruksi teks yang rapi untuk direkonstruksi ulang.",
         },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: analysisPrompt },
-            { type: "image_url", image_url: { url: dataUrl } },
-          ] as any,
-        },
+        userMessage,
       ],
       temperature: 0.1,
       max_tokens: 900,
@@ -70,7 +89,10 @@ export async function POST(req: Request) {
     const url = new URL("/api/ai/generate-uml", req.url);
     const regeneration = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: req.headers.get("authorization") || "",
+      },
       body: JSON.stringify({
         prompt: reconstructionPrompt,
         diagramType,
@@ -98,8 +120,8 @@ export async function POST(req: Request) {
       spec: data.spec,
       validation: data.validation,
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("API /api/ai/analyze-uml-image Error:", error);
-    return NextResponse.json({ success: false, error: error.message || "Gagal menganalisis gambar UML." }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Gagal menganalisis gambar UML." }, { status: 500 });
   }
 }

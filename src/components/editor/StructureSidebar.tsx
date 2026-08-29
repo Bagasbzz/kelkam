@@ -1,6 +1,7 @@
 "use client";
-import { GripVertical, Plus, Trash2, ChevronUp, ChevronDown, FileText } from "lucide-react";
+import { Plus, Trash2, ChevronUp, ChevronDown, FileText } from "lucide-react";
 import { v4 as uuidv4 } from 'uuid';
+import type { RichTextNode } from "@/lib/types/thesis";
 
 interface StructureItem {
   id: string;
@@ -11,8 +12,22 @@ interface StructureItem {
 }
 
 interface StructureSidebarProps {
-  content: any; // Direct Tiptap JSON
-  onUpdate: (newContent: any) => void;
+  content: RichTextNode;
+  onUpdate: (newContent: RichTextNode) => void;
+}
+
+function getHeadingLevel(node: RichTextNode) {
+  const level = node.attrs?.level;
+  return typeof level === "number" ? level : 1;
+}
+
+function getHeadingTitle(node: RichTextNode) {
+  return node.content?.find((child) => typeof child.text === "string")?.text || "Tanpa Judul";
+}
+
+function getHeadingId(node: RichTextNode) {
+  const id = node.attrs?.id;
+  return typeof id === "string" && id.trim() ? id : `h-${Math.random().toString(36).slice(2, 11)}`;
 }
 
 export default function StructureSidebar({ content, onUpdate }: StructureSidebarProps) {
@@ -22,16 +37,16 @@ export default function StructureSidebar({ content, onUpdate }: StructureSidebar
     return roman[num - 1] || num.toString();
   };
 
-  const extractHeadings = (json: any): StructureItem[] => {
+  const extractHeadings = (json: RichTextNode): StructureItem[] => {
     if (!json || !json.content) return [];
     
     let chapterCount = 0;
     let subchapterCount = 0;
     
     return json.content
-      .filter((node: any) => node.type === 'heading')
-      .map((node: any) => {
-        const level = node.attrs?.level || 1;
+      .filter((node) => node.type === 'heading')
+      .map((node) => {
+        const level = getHeadingLevel(node);
         let label = "";
         
         if (level === 1) {
@@ -44,9 +59,9 @@ export default function StructureSidebar({ content, onUpdate }: StructureSidebar
         }
 
         return {
-          id: node.attrs?.id || `h-${Math.random().toString(36).substr(2, 9)}`,
+          id: getHeadingId(node),
           type: level === 1 ? 'chapter' : 'subchapter',
-          title: node.content?.[0]?.text || "Tanpa Judul",
+          title: getHeadingTitle(node),
           level: level,
           displayLabel: label
         };
@@ -133,7 +148,7 @@ export default function StructureSidebar({ content, onUpdate }: StructureSidebar
   return (
     <div className="flex-1 flex flex-col">
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        {headings.map((item, idx) => (
+        {headings.map((item) => (
           <div 
             key={item.id}
             className={`group flex items-center gap-3 p-3 rounded-2xl transition-all border cursor-pointer ${

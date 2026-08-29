@@ -37,11 +37,19 @@ export interface ThesisSettings {
   alignment: "justify" | "left" | "center";
 }
 
+export interface RichTextNode {
+  type: string;
+  attrs?: Record<string, unknown>;
+  text?: string;
+  marks?: Array<{ type: string; attrs?: Record<string, unknown> }>;
+  content?: RichTextNode[];
+}
+
 export interface ThesisSection {
   id: string;
   title: string;
   level: number;
-  content?: any; // Content specifically for this section
+  content?: RichTextNode; // Content specifically for this section
   children: ThesisSection[];
 }
 
@@ -52,7 +60,7 @@ export interface ThesisDocument {
   metadata: ThesisMetadata;
   settings: ThesisSettings;
   sections: ThesisSection[]; // Tree structure for stability
-  content: any; // Full ProseMirror/Tiptap JSON for the editor
+  content: RichTextNode; // Full ProseMirror/Tiptap JSON for the editor
 }
 
 export const THESIS_PRESETS: Record<string, ThesisSettings> = {

@@ -45,31 +45,68 @@ const INITIAL_CHAPTERS: ChapterProgress[] = [
   { id: "6", name: "Kesimpulan / Finalisasi", status: "Belum mulai" },
 ];
 
+const progressStatuses = new Set<ProgressStatus>(["Belum mulai", "Sedang dikerjakan", "Selesai"]);
+const revisionStatuses = new Set<Revision["status"]>(["Belum dikerjakan", "Sudah dikerjakan"]);
+
+function loadStoredArray<T>(key: string, guard: (value: unknown) => value is T, fallback: T[]): T[] {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every(guard) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const isChapterProgress = (value: unknown): value is ChapterProgress => (
+  typeof value === "object"
+  && value !== null
+  && typeof (value as ChapterProgress).id === "string"
+  && typeof (value as ChapterProgress).name === "string"
+  && progressStatuses.has((value as ChapterProgress).status)
+);
+
+const isTask = (value: unknown): value is Task => (
+  typeof value === "object"
+  && value !== null
+  && typeof (value as Task).id === "string"
+  && typeof (value as Task).text === "string"
+  && typeof (value as Task).completed === "boolean"
+);
+
+const isRevision = (value: unknown): value is Revision => (
+  typeof value === "object"
+  && value !== null
+  && typeof (value as Revision).id === "string"
+  && typeof (value as Revision).note === "string"
+  && revisionStatuses.has((value as Revision).status)
+);
+
 export default function TrackerPage() {
   const [chapters, setChapters] = useState<ChapterProgress[]>(INITIAL_CHAPTERS);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [revisions, setRevisions] = useState<Revision[]>([]);
   const [newTask, setNewTask] = useState("");
   const [newRevision, setNewRevision] = useState("");
-  const [isMounted, setIsMounted] = useState(false);
+  const [hasLoadedStorage, setHasLoadedStorage] = useState(false);
 
   useEffect(() => {
-    setIsMounted(true);
-    const savedChapters = localStorage.getItem("thesis_chapters");
-    const savedTasks = localStorage.getItem("thesis_tasks");
-    const savedRevisions = localStorage.getItem("thesis_revisions");
-
-    if (savedChapters) setChapters(JSON.parse(savedChapters));
-    if (savedTasks) setTasks(JSON.parse(savedTasks));
-    if (savedRevisions) setRevisions(JSON.parse(savedRevisions));
+    const timer = window.setTimeout(() => {
+      setChapters(loadStoredArray("thesis_chapters", isChapterProgress, INITIAL_CHAPTERS));
+      setTasks(loadStoredArray("thesis_tasks", isTask, []));
+      setRevisions(loadStoredArray("thesis_revisions", isRevision, []));
+      setHasLoadedStorage(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, []);
 
   useEffect(() => {
-    if (!isMounted) return;
+    if (!hasLoadedStorage) return;
     localStorage.setItem("thesis_chapters", JSON.stringify(chapters));
     localStorage.setItem("thesis_tasks", JSON.stringify(tasks));
     localStorage.setItem("thesis_revisions", JSON.stringify(revisions));
-  }, [chapters, tasks, revisions, isMounted]);
+  }, [chapters, tasks, revisions, hasLoadedStorage]);
 
   const updateChapterStatus = (id: string, status: ProgressStatus) => {
     setChapters(prev => prev.map(ch => ch.id === id ? { ...ch, status } : ch));
@@ -115,8 +152,6 @@ export default function TrackerPage() {
     if (progressPercentage > 0) return "Awal yang baik! Terus konsisten menyelesaikan bagian demi bagian.";
     return "Mulai langkah pertama hari ini. Pecah tugas besar jadi checklist kecil.";
   };
-
-  if (!isMounted) return null;
 
   return (
     <div className="min-h-screen bg-white text-slate-800 font-sans">
@@ -189,7 +224,10 @@ export default function TrackerPage() {
                       {(["Belum mulai", "Sedang dikerjakan", "Selesai"] as ProgressStatus[]).map(s => (
                         <button
                           key={s}
+                          type="button"
                           onClick={() => updateChapterStatus(ch.id, s)}
+                          aria-pressed={ch.status === s}
+                          aria-label={`${ch.name}: ${s}`}
                           className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-wider rounded-xl transition-all
                             ${ch.status === s 
                               ? (s === 'Selesai' ? 'bg-green-500 text-white shadow-sm' : s === 'Sedang dikerjakan' ? 'bg-amber-500 text-white shadow-sm' : 'bg-slate-800 text-white shadow-sm')
@@ -220,20 +258,24 @@ export default function TrackerPage() {
               <div className="p-8">
                 <div className="flex gap-2 mb-8">
                   <Input
+                    label="Tugas baru"
                     value={newTask}
                     onChange={(e) => setNewTask(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && addTask()}
                     placeholder="Tambah tugas (Cari jurnal, revisi bab 1, dll)..."
                     className="bg-white border-slate-200 focus:border-blue-400"
                   />
-                  <Button onClick={addTask} size="md" className="h-[56px] w-[56px] p-0 shadow-sm" variant="primary" icon={Plus} />
+                  <Button aria-label="Tambah tugas" onClick={addTask} size="md" className="h-[56px] w-[56px] p-0 shadow-sm" variant="primary" icon={Plus} />
                 </div>
 
                 <div className="space-y-2 max-h-[350px] overflow-y-auto pr-2 scrollbar-thin">
                   {tasks.map(task => (
                     <div key={task.id} className="group flex items-center gap-4 p-4 rounded-2xl hover:bg-slate-50 transition-all border border-transparent hover:border-slate-100">
                       <button 
+                        type="button"
                         onClick={() => toggleTask(task.id)}
+                        aria-label={task.completed ? `Tandai ${task.text} belum selesai` : `Tandai ${task.text} selesai`}
+                        aria-pressed={task.completed}
                         className={`shrink-0 w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all
                           ${task.completed ? 'bg-blue-600 border-blue-600 text-white' : 'border-slate-200 bg-white'}`}
                       >
@@ -243,7 +285,9 @@ export default function TrackerPage() {
                         {task.text}
                       </span>
                       <button 
+                        type="button"
                         onClick={() => deleteTask(task.id)}
+                        aria-label={`Hapus tugas ${task.text}`}
                         className="opacity-0 group-hover:opacity-100 p-2 text-slate-300 hover:text-red-500 transition-all"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -267,12 +311,13 @@ export default function TrackerPage() {
               <div className="p-8">
                 <div className="flex gap-2 mb-8 items-end">
                   <Textarea
+                    label="Catatan revisi baru"
                     value={newRevision}
                     onChange={(e) => setNewRevision(e.target.value)}
                     placeholder="Instruksi dari dosen pembimbing..."
                     className="h-24 bg-white border-slate-200 focus:border-blue-400"
                   />
-                  <Button onClick={addRevision} size="md" className="h-[56px] w-[56px] p-0 shadow-sm" variant="primary" icon={Plus} />
+                  <Button aria-label="Tambah catatan revisi" onClick={addRevision} size="md" className="h-[56px] w-[56px] p-0 shadow-sm" variant="primary" icon={Plus} />
                 </div>
 
                 <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2 scrollbar-thin">
@@ -291,13 +336,18 @@ export default function TrackerPage() {
                         </span>
                         <div className="flex gap-2">
                           <button 
+                            type="button"
                             onClick={() => toggleRevision(rev.id)}
+                            aria-label={rev.status === "Sudah dikerjakan" ? "Tandai revisi belum dikerjakan" : "Tandai revisi sudah dikerjakan"}
+                            aria-pressed={rev.status === "Sudah dikerjakan"}
                             className={`p-1.5 rounded-lg transition-all ${rev.status === 'Sudah dikerjakan' ? 'text-slate-300' : 'text-blue-600 hover:bg-blue-100'}`}
                           >
                             <CheckCircle2 className="w-5 h-5" />
                           </button>
                           <button 
+                            type="button"
                             onClick={() => deleteRevision(rev.id)}
+                            aria-label="Hapus catatan revisi"
                             className="p-1.5 text-slate-300 hover:text-red-500 transition-all"
                           >
                             <Trash2 className="w-4 h-4" />

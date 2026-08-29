@@ -2,11 +2,18 @@
 
 import { useState } from "react";
 import type { ResearchBrief } from "@/lib/types/research-project";
+import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+}
+
+interface FollowupQuestion {
+  id: string;
+  field: string;
+  text: string;
 }
 
 export default function ResearchChat({
@@ -21,7 +28,7 @@ export default function ResearchChat({
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [followups, setFollowups] = useState<any[]>([]);
+  const [followups, setFollowups] = useState<FollowupQuestion[]>([]);
   const [summary, setSummary] = useState("");
 
   const savePatchLocally = (patch: Partial<ResearchBrief>) => {
@@ -43,7 +50,7 @@ export default function ResearchChat({
     setInput("");
     setLoading(true);
     try {
-      const response = await fetch("/api/research/chat", {
+      const response = await authenticatedFetch("/api/research/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -87,6 +94,11 @@ export default function ResearchChat({
       </div>
 
       <div className="h-64 overflow-auto border rounded p-2 mb-3 bg-white">
+        {messages.length === 0 && (
+          <p className="p-4 text-center text-sm text-slate-400">
+            Ceritakan kebutuhan, aturan dosen, bahan yang sudah ada, dan bagian yang masih membingungkan.
+          </p>
+        )}
         {messages.map((m) => (
           <div key={m.id} className={`mb-2 ${m.role === "user" ? "text-right" : "text-left"}`}>
             <div className={`inline-block p-2 rounded ${m.role === "user" ? "bg-blue-100" : "bg-gray-100"}`}>{m.content}</div>
@@ -95,7 +107,16 @@ export default function ResearchChat({
       </div>
 
       <div className="mb-3">
-        <textarea value={input} onChange={(e) => setInput(e.target.value)} className="w-full p-2 border rounded" placeholder="Tulis kebutuhan singkat, mis: 'Butuh makalah tentang sistem pengaduan mahasiswa, rentang 2018-2024, minimal 10 referensi'" />
+        <label htmlFor="research-chat-input" className="sr-only">Pesan konsultasi akademik</label>
+        <textarea
+          id="research-chat-input"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          maxLength={4_000}
+          className="w-full p-2 border rounded"
+          placeholder="Tulis kebutuhan, aturan dosen, bahan mentah, atau keputusan yang perlu dibahas"
+        />
+        <p className="mt-1 text-right text-[10px] text-slate-400">{input.length}/4000</p>
       </div>
 
       <div className="flex gap-2">
@@ -109,12 +130,12 @@ export default function ResearchChat({
         <div className="mt-3">
           <div className="font-bold mb-2">Pertanyaan lanjutan</div>
           <ul className="list-disc pl-5">
-            {followups.map((q: any) => (
+            {followups.map((q) => (
               <li key={q.id} className="mb-2">
                 <div className="mb-1">{q.text}</div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setInput(q.text); }} className="px-3 py-1 border rounded text-sm">Jawab</button>
-                  <button onClick={() => { /* mark skipped */ }} className="px-3 py-1 border rounded text-sm">Lewati</button>
+                  <button type="button" onClick={() => setInput(`Jawaban untuk "${q.text}": `)} className="px-3 py-1 border rounded text-sm">Jawab</button>
+                  <button type="button" onClick={() => setFollowups((items) => items.filter((item) => item.id !== q.id))} className="px-3 py-1 border rounded text-sm">Lewati</button>
                 </div>
               </li>
             ))}
