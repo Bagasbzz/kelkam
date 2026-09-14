@@ -5,7 +5,7 @@ import { Sparkles, FileSearch, Type, Copy, Check } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Textarea from "@/components/ui/Textarea";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 import { getErrorMessage } from "@/lib/errors";
 
 export default function AIToolsPage() {

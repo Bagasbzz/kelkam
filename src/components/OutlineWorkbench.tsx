@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { useAuth, authenticatedFetch } from "@/components/AuthProvider";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
 import { getErrorMessage } from "@/lib/errors";
@@ -29,6 +29,7 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
   const [novelty, setNovelty] = useState<NoveltyCandidate | null>(null);
 
   const projectId = useCurrentProjectId();
+  const { user } = useAuth();
 
   const storageKey = `research_outline_${projectId || "unselected"}`;
 
@@ -119,18 +120,11 @@ export default function OutlineWorkbench({ brief }: { brief?: Partial<ResearchBr
     setError(null);
     try {
       if (!projectId) throw new Error("Pilih project terlebih dahulu.");
-      const session = await supabase.auth.getSession();
-      const token = session?.data?.session?.access_token;
-      if (!token) {
-        throw new Error("Login dulu untuk membuat outline otomatis.");
-      }
+      if (!user) throw new Error("Login dulu untuk membuat outline otomatis.");
 
-      const resp = await fetch("/api/research/outline", {
+      const resp = await authenticatedFetch("/api/research/outline", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, brief: brief || {}, novelty }),
       });
       const data = await resp.json().catch(() => null);

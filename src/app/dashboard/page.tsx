@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 import { getErrorMessage } from "@/lib/errors";
 import {
   ArrowLeft,
@@ -278,7 +278,7 @@ const tableStatusLabel: Record<TablePlan["status"], string> = {
 
 const getProjectContext = (project: ReportProject) => `${project.title} ${project.topic} ${project.course} ${project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ")}`;
 
-const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres|supabase/i.test(getProjectContext(project));
+const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres/i.test(getProjectContext(project));
 
 function plannerMessage(project: ReportProject, activeStep: BuilderStep) {
   if (activeStep === "setup") {

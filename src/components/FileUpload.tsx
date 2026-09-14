@@ -5,7 +5,7 @@ import { Upload, File, X, CheckCircle2 } from 'lucide-react';
 import Button from '@/components/ui/Button';
 import Card from '@/components/ui/Card';
 import Link from 'next/link';
-import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
+import { authenticatedFetch } from "@/components/AuthProvider";
 import { getErrorMessage } from '@/lib/errors';
 
 interface FileUploadProps {

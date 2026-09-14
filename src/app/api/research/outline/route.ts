@@ -1,7 +1,40 @@
+/**
+ * POST /api/research/outline
+ * -----------------------------------------------------------------------------
+ * Generate outline laporan (struktur section + target words + citation map).
+ *
+ * Flow:
+ *   1. Auth + rate limit.
+ *   2. Validasi projectId & ownership.
+ *   3. Ambil evidence (max 40 dari DB, compact 12 ke prompt).
+ *   4. Susun prompt dengan brief, novelty, evidence.
+ *   5. AI call (model "review") → parse JSON → normalize.
+ *   6. Fallback template kalau AI gagal.
+ *
+ * Section shape:
+ *   - id: section-<n> atau dari AI
+ *   - title: string
+ *   - purpose: penjelasan section
+ *   - targetWords: number (capped 5000)
+ *   - allowedReferenceIds: string[] (filter ke evidence yang ada)
+ *   - requiredClaimIds: string[]
+ *   - status: "planned" | "draft" | "review" | "approved"
+ *
+ * Response shape:
+ *   - 200 { success: true, data: { sections, citationMap }, source: "ai" | "fallback" }
+ * -----------------------------------------------------------------------------
+ */
+
 import { NextResponse } from "next/server";
+import { prisma } from "@/lib/db/prisma";
 import { sendToAIForPurpose } from "@/lib/ai/client";
-import { authenticateRequest, isValidProjectId, ownsProject } from "@/lib/server/auth";
+import { authenticateRequestFromCookie } from "@/lib/server/auth";
+import { isValidProjectId, ownsProject } from "@/lib/server/projects";
 import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+
+// ---------------------------------------------------------------------------
+// Types & helpers
+// ---------------------------------------------------------------------------
 
 type JsonRecord = Record<string, unknown>;
 
@@ -30,17 +63,24 @@ function stringList(value: unknown, limit: number) {
     .slice(0, limit);
 }
 
-function evidenceRows(value: unknown): EvidenceRow[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isRecord).map((item) => ({
-    reference_id: textValue(item.reference_id, 120) || undefined,
-    summary: textValue(item.summary, 1_000) || undefined,
-    methods: textValue(item.methods, 600) || undefined,
-    results: textValue(item.results, 800) || undefined,
-    limitations: textValue(item.limitations, 800) || undefined,
+function evidenceRows(value: EvidenceRow[]): EvidenceRow[] {
+  return value.map((item) => ({
+    reference_id: item.reference_id,
+    summary: item.summary,
+    methods: item.methods,
+    results: item.results,
+    limitations: item.limitations,
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Fallback outline (template standar 5-section)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default outline structure untuk laporan akademik Indonesia.
+ * Digunakan saat AI gagal / tidak available.
+ */
 function fallbackOutline(brief: JsonRecord, evidence: EvidenceRow[], novelty: JsonRecord | null) {
   const topic = textValue(brief.title || brief.topic, 180) || "topik riset";
   const focusRefs = evidence.slice(0, 6).map((item) => item.reference_id).filter((id): id is string => Boolean(id));
@@ -98,6 +138,10 @@ function fallbackOutline(brief: JsonRecord, evidence: EvidenceRow[], novelty: Js
   };
 }
 
+// ---------------------------------------------------------------------------
+// AI response parsers
+// ---------------------------------------------------------------------------
+
 function parseAiJson(response: string): unknown {
   const match = response.match(/\{[\s\S]*\}/);
   try {
@@ -107,6 +151,10 @@ function parseAiJson(response: string): unknown {
   }
 }
 
+/**
+ * Normalize AI output → validasi, dedup IDs, filter references ke evidence.
+ * Return null kalau hasil tidak valid (caller pakai fallback).
+ */
 function normalizeOutline(value: unknown, validReferenceIds: Set<string>) {
   if (!isRecord(value) || !Array.isArray(value.sections)) return null;
   const seenIds = new Set<string>();
@@ -144,14 +192,23 @@ function normalizeOutline(value: unknown, validReferenceIds: Set<string>) {
   return { sections, citationMap };
 }
 
+// ---------------------------------------------------------------------------
+// Main handler
+// ---------------------------------------------------------------------------
+
 export async function POST(req: Request) {
-  const authentication = await authenticateRequest(req);
-  if (!authentication.ok) return authentication.response;
-  const { supabase, user } = authentication.auth;
-  const rateLimit = enforceRateLimit(`research-outline:${user.id}`, { limit: 8, windowMs: 10 * 60 * 1_000 });
+  // -------------------------------------------------------------------------
+  // Auth + rate limit
+  // -------------------------------------------------------------------------
+  const auth = await authenticateRequestFromCookie();
+  if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+  const rateLimit = enforceRateLimit(`research-outline:${auth.user.id}`, { limit: 8, windowMs: 10 * 60 * 1_000 });
   if (rateLimit) return rateLimit;
 
   try {
+    // -------------------------------------------------------------------------
+    // Parse & validasi
+    // -------------------------------------------------------------------------
     const rawBody = await readJsonBody<unknown>(req, 120_000);
     const body = isRecord(rawBody) ? rawBody : {};
     const projectId = typeof body.projectId === "string" ? body.projectId : undefined;
@@ -161,30 +218,39 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Project ID tidak valid." }, { status: 400 });
     }
 
-    const ownership = await ownsProject(supabase, user.id, projectId);
+    const ownership = await ownsProject(auth.user.id, projectId);
     if (!ownership.ok) {
       return NextResponse.json(
         { success: false, error: ownership.reason === "lookup_failed" ? "Gagal memeriksa proyek." : "Proyek tidak ditemukan." },
-        { status: ownership.reason === "lookup_failed" ? 500 : 404 },
+        { status: ownership.reason === "lookup_failed" ? 500 : 404 }
       );
     }
 
-    const { data: evidenceData, error: evidenceError } = await supabase
-      .from("reference_evidence")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(40);
-    if (evidenceError) {
-      console.error("Outline evidence lookup failed:", evidenceError.code || "unknown");
-      return NextResponse.json({ success: false, error: "Gagal mengambil evidence proyek." }, { status: 500 });
-    }
+    // -------------------------------------------------------------------------
+    // Ambil evidence dari DB
+    // -------------------------------------------------------------------------
+    const evidenceRowsRaw = await prisma.referenceEvidence.findMany({
+      where: { projectId, ownerId: auth.user.id },
+      orderBy: { createdAt: "desc" },
+      take: 40,
+    });
+    const evidence = evidenceRows(
+      evidenceRowsRaw.map((r) => ({
+        reference_id: r.referenceId,
+        summary: r.summary ?? undefined,
+        methods: r.methods ?? undefined,
+        results: r.results ?? undefined,
+        limitations: r.limitations ?? undefined,
+      }))
+    );
 
-    const evidence = evidenceRows(evidenceData);
     if (!evidence.length) {
       return NextResponse.json({ success: false, error: "Belum ada evidence. Ekstrak evidence dari referensi dulu." }, { status: 400 });
     }
 
+    // -------------------------------------------------------------------------
+    // Build prompt
+    // -------------------------------------------------------------------------
     const compactEvidence = evidence.slice(0, 12).map((item) => ({
       referenceId: item.reference_id,
       summary: textValue(item.summary, 280),
@@ -203,6 +269,9 @@ export async function POST(req: Request) {
       `Evidence: ${JSON.stringify(compactEvidence)}`,
     ].join("\n");
 
+    // -------------------------------------------------------------------------
+    // AI call dengan fallback
+    // -------------------------------------------------------------------------
     let outline: ReturnType<typeof normalizeOutline> = null;
     try {
       const response = await sendToAIForPurpose(prompt, undefined, "review");

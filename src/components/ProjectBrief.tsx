@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ResearchBrief } from "@/lib/types/research-project";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 import type { ReferenceItem } from "./ReferenceCard";
 import { getErrorMessage } from "@/lib/errors";
 

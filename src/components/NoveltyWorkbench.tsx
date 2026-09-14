@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { useAuth, authenticatedFetch } from "@/components/AuthProvider";
 import type { ResearchBrief } from "@/lib/types/research-project";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
 import { getErrorMessage } from "@/lib/errors";
@@ -23,6 +23,7 @@ export default function NoveltyWorkbench({ brief }: { brief?: Partial<ResearchBr
   const [source, setSource] = useState<string | null>(null);
 
   const projectId = useCurrentProjectId();
+  const { user } = useAuth();
 
   const storageKey = `research_novelty_${projectId || "unselected"}`;
 
@@ -83,18 +84,11 @@ export default function NoveltyWorkbench({ brief }: { brief?: Partial<ResearchBr
     setError(null);
     try {
       if (!projectId) throw new Error("Pilih project terlebih dahulu.");
-      const session = await supabase.auth.getSession();
-      const token = session?.data?.session?.access_token;
-      if (!token) {
-        throw new Error("Login dulu untuk membuat kandidat novelty.");
-      }
+      if (!user) throw new Error("Login dulu untuk membuat kandidat novelty.");
 
-      const resp = await fetch("/api/research/novelty", {
+      const resp = await authenticatedFetch("/api/research/novelty", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, brief: brief || {} }),
       });
       const data = await resp.json().catch(() => null);

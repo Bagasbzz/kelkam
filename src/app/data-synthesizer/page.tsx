@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { BookOpen, CheckCircle2, ClipboardCopy, Loader2, Sparkles, MessageSquare, ListTree, FileText } from 'lucide-react';
 import styles from './synthesizer.module.css';
-import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
+import { authenticatedFetch } from "@/components/AuthProvider";
 
 type DataType = 'kuesioner' | 'wawancara' | 'observasi';
 

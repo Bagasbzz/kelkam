@@ -1,0 +1,106 @@
+name: Deploy to JKC (FTPS)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma generate
+
+      - name: Build Next.js standalone
+        env:
+          NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_MODEL_FAST: ${{ secrets.AI_MODEL_FAST }}
+          AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
+          AI_REPORT_TIMEOUT_MS: "25000"
+          REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
+        run: npm run build
+
+      - name: Prepare deploy bundle
+        run: |
+          mkdir -p deploy
+          cp -r .next/standalone/. deploy/
+          cp -r .next/static deploy/.next/static
+          cp -r public deploy/public
+          cp -r prisma deploy/prisma
+          cp package.json deploy/package.json
+          cp server.js deploy/server.js
+          mkdir -p deploy/tmp
+          touch deploy/tmp/restart.txt
+          echo "Bundle: $(du -sh deploy | cut -f1)"
+
+      - name: Upload via FTPS to JKC
+        uses: SamKirkland/FTP-Deploy-Action@v4
+        with:
+          server: ${{ secrets.JKC_FTP_HOST }}
+          username: ${{ secrets.JKC_FTP_USER }}
+          password: ${{ secrets.JKC_FTP_PASSWORD }}
+          server-dir: ${{ secrets.JKC_FTP_DIR }}
+          local-dir: deploy/
+          protocol: ftps
+          port: 21
+          ssl-options: |
+            rejectUnauthorized: false
+          dangerous-clean-slate: false
+          exclude: |
+            **/.git*
+            **/node_modules/**
+            **/.env*
+
+      - name: Trigger Passenger restart (touch restart.txt)
+        env:
+          FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
+          FTP_USER: ${{ secrets.JKC_FTP_USER }}
+          FTP_PASSWORD: ${{ secrets.JKC_FTP_PASSWORD }}
+          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+        run: |
+          curl -sS --ftp-method singlecwd --ssl -k \
+            -u "$FTP_USER:$FTP_PASSWORD" \
+            "ftp://${FTP_HOST}/$FTP_DIR/tmp/restart.txt" \
+            -o /dev/null -w "Restart trigger: HTTP %{http_code} (%{time_total}s)\n" || true
+
+      - name: Health check
+        run: |
+          sleep 10
+          echo "Checking https://keluhkampus.my.id/"
+          curl -sf -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
+            https://keluhkampus.my.id/ \
+            || echo "::warning::Health check failed (app may still be starting or env vars missing)"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Deploy summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch: ${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- Commit: ${GITHUB_SHA::7}" >> $GITHUB_STEP_SUMMARY
+          echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If failed, check:" >> $GITHUB_STEP_SUMMARY
+          echo "- FTP credentials (JKC_FTP_*)" >> $GITHUB_STEP_SUMMARY
+          echo "- Server dir: ${{ secrets.JKC_FTP_DIR }}" >> $GITHUB_STEP_SUMMARY
+          echo "- cPanel Application Manager app exists and is running" >> $GITHUB_STEP_SUMMARY

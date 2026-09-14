@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { useAuth, authenticatedFetch } from "@/components/AuthProvider";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -18,6 +18,7 @@ interface EvidenceRow {
 
 export default function EvidenceMatrix() {
   const projectId = useCurrentProjectId();
+  const { user } = useAuth();
   const [rows, setRows] = useState<EvidenceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -26,9 +27,7 @@ export default function EvidenceMatrix() {
     setLoading(true);
     setError(null);
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data?.session?.access_token;
-      if (!token) {
+      if (!user) {
         setRows([]);
         setError("Login dulu untuk melihat evidence yang tersimpan.");
         return;
@@ -39,9 +38,7 @@ export default function EvidenceMatrix() {
         setError("Pilih project terlebih dahulu.");
         return;
       }
-      const resp = await fetch(`/api/references/evidence?projectId=${encodeURIComponent(projectId)}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const resp = await authenticatedFetch(`/api/references/evidence?projectId=${encodeURIComponent(projectId)}`);
       const data = await resp.json().catch(() => null);
       if (!data?.success) {
         throw new Error(data?.error || "Gagal memuat evidence");
@@ -52,7 +49,7 @@ export default function EvidenceMatrix() {
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, user]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {

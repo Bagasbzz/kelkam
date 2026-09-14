@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ResearchBrief } from "@/lib/types/research-project";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 
 interface Message {
   id: string;

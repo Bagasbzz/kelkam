@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { AuthProvider } from "@/components/AuthProvider";
 import Navbar from "@/components/ui/Navbar";
 import "./globals.css";
 
@@ -17,10 +18,12 @@ export default function RootLayout({
       <body
         className="antialiased bg-slate-50 text-slate-900 min-h-screen flex flex-col selection:bg-blue-200 selection:text-blue-900"
       >
-        <Navbar />
-        <div className="flex-1 flex flex-col mt-[72px]">
-          {children}
-        </div>
+        <AuthProvider>
+          <Navbar />
+          <div className="flex-1 flex flex-col mt-[72px]">
+            {children}
+          </div>
+        </AuthProvider>
       </body>
     </html>
   );

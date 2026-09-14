@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
 import { exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
 
 interface NoveltyCandidate {

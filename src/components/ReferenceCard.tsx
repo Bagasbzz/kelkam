@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import React, { useState } from "react";
-import { supabase } from "@/lib/supabase-browser";
+import { authenticatedFetch } from "@/components/AuthProvider";
 
 export interface ReferenceItem {
   id: string;
@@ -47,17 +47,12 @@ export default function ReferenceCard({
     setExtracting(true);
     setExtractStatus("Menjalankan ekstraksi...");
     try {
-      const session = await supabase.auth.getSession();
-      const token = session?.data?.session?.access_token;
       const projectId = typeof window !== "undefined" ? localStorage.getItem("current_project_id") : null;
       if (!projectId) throw new Error("Pilih project terlebih dahulu.");
 
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-
-      const resp = await fetch("/api/references/evidence/generate", {
+      const resp = await authenticatedFetch("/api/references/evidence/generate", {
         method: "POST",
-        headers,
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId,
           referenceId: paper.doi || paper.id,
@@ -76,8 +71,8 @@ export default function ReferenceCard({
       } else {
         setExtractStatus("Gagal: " + (j?.error || "Unknown"));
       }
-    } catch {
-      setExtractStatus("Network error");
+    } catch (error) {
+      setExtractStatus("Network error: " + (error instanceof Error ? error.message : "unknown"));
     } finally {
       setExtracting(false);
       setTimeout(() => setExtractStatus(null), 4000);

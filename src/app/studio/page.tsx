@@ -31,7 +31,7 @@ import {
   Workflow,
   XCircle,
 } from "lucide-react";
-import { authenticatedFetch } from "@/lib/client/authenticated-fetch";
+import { authenticatedFetch } from "@/components/AuthProvider";
 import {
   addStudioDecision,
   addStudioQuestion,

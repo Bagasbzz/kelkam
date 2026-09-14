@@ -1,0 +1,430 @@
+// =============================================================================
+// Prisma schema untuk keluhkampus.my.id
+// -----------------------------------------------------------------------------
+// DATABASE: PostgreSQL JKC cPanel (lihat DEPLOYMENT.md untuk setup).
+//
+// ARSITEKTUR:
+//   - 13 model (users, sessions, projects, reference_library, reference_evidence,
+//     report_jobs, file_uploads, studio_*, waitlist).
+//   - Semua tabel user-scoped punya kolom owner_id + index (anti data leak).
+//   - Cascade delete di semua FK (hapus user → hapus semua miliknya).
+//
+// CARA GENERATE MIGRATION:
+//   1. Edit schema.prisma.
+//   2. `npx prisma migrate dev --name <deskripsi>` (dev) ATAU
+//      `npx prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script`
+//      (untuk generate SQL tanpa DB aktif).
+//   3. Hasil SQL di prisma/migrations/<timestamp>_<name>/migration.sql.
+//   4. Apply ke production: `node scripts/migrate.js`.
+//
+// KONVENSI NAMING:
+//   - camelCase di kode TypeScript.
+//   - snake_case di kolom DB (lihat @map di setiap field).
+//   - @@map("<snake_name>") untuk nama tabel.
+//
+// INDEXING:
+//   - Setiap tabel punya minimal 1 index untuk query utama.
+//   - Composite index (a, b) untuk query yang filter by keduanya.
+// =============================================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = []
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ===========================================================================
+// USERS & SESSIONS (pengganti Supabase auth)
+// ===========================================================================
+
+/**
+ * User account. Email unique, passwordHash via argon2id.
+ * Cascade delete ke semua tabel yang reference user.
+ */
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Reverse relations (lihat @relation di model lain).
+  sessions          Session[]
+  projects          Project[]
+  referenceLibrary    ReferenceLibrary[]
+  referenceEvidence   ReferenceEvidence[]
+  reportJobs          ReportJob[]
+  fileUploads         FileUpload[]
+  studioProjects      StudioProject[]
+  studioSources       StudioSource[]
+  studioQuestions     StudioQuestion[]
+  studioDecisions     StudioDecision[]
+  studioArtifacts     StudioArtifact[]
+  studioRevisions     StudioProjectRevision[]
+
+  @@map("users")
+}
+
+/**
+ * Session token (JWT disimpan sebagai primary key).
+ * Saat logout, row dihapus → token tidak valid lagi (lihat getCurrentUser di auth.ts).
+ * expires_at untuk cleanup job (cron sweep) — bisa pakai TTL lebih pendek dari JWT expiry.
+ */
+model Session {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+// ===========================================================================
+// PROJECTS (multi-tenant owner scoping)
+// ===========================================================================
+
+/**
+ * Project container. projectId di-generate user (lihat isValidProjectId format).
+ * ownerId reference ke User.id. metadata JSON untuk info tambahan (icon, color, dll).
+ */
+model Project {
+  projectId String   @id @map("project_id")
+  ownerId   String   @map("owner_id")
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  referenceLibrary  ReferenceLibrary[]
+  referenceEvidence ReferenceEvidence[]
+  reportJobs        ReportJob[]
+  studioProject     StudioProject?
+
+  @@index([ownerId])
+  @@map("projects")
+}
+
+// ===========================================================================
+// REFERENCE LIBRARY & EVIDENCE (jurnal yang disimpan user)
+// ===========================================================================
+
+/**
+ * Raw reference (dari Semantic Scholar, OpenAlex, Crossref).
+ * abstract bisa panjang — JSON truncate di saveUpload() ke 10k char.
+ * citation_apa untuk insert ke laporan tanpa generate ulang.
+ */
+model ReferenceLibrary {
+  id              String   @id @default(cuid())
+  projectId       String   @map("project_id")
+  project         Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId         String   @map("owner_id")
+  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  referenceId     String?  @map("reference_id")
+  title           String?
+  authors         Json?
+  year            Int?
+  venue           String?
+  abstract        String?
+  url             String?
+  pdfUrl          String?  @map("pdf_url")
+  doi             String?
+  citationCount   Int?     @map("citation_count")
+  isOpenAccess    Boolean  @default(false) @map("is_open_access")
+  source          String?
+  citationApa     String?  @map("citation_apa")
+  raw             Json?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([projectId])
+  @@index([ownerId])
+  @@index([doi])
+  @@index([createdAt])
+  @@map("reference_library")
+}
+
+/**
+ * AI-extracted evidence untuk reference. 1 reference → 1+ evidence row.
+ * summary/methods/results/limitations siap-pakai di laporan.
+ */
+model ReferenceEvidence {
+  id               String   @id @default(cuid())
+  projectId        String   @map("project_id")
+  project          Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId          String   @map("owner_id")
+  owner            User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  referenceId      String   @map("reference_id")
+  summary          String?
+  methods          String?
+  results          String?
+  limitations      String?
+  keywords         Json?
+  citationSentence String?  @map("citation_sentence")
+  modelUsed        String?  @map("model_used")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([projectId])
+  @@index([ownerId])
+  @@index([referenceId])
+  @@index([createdAt])
+  @@map("reference_evidence")
+}
+
+// ===========================================================================
+// REPORT JOBS (async job queue untuk AI draft generation)
+// ===========================================================================
+
+/**
+ * Async job untuk generate laporan.
+ * id di-generate aplikasi dengan format "report_<uuid>".
+ * payload berisi project yang sudah di-sanitize (lihat redact-secrets).
+ * Lifecycle: queued → running → done | failed.
+ */
+model ReportJob {
+  id        String   @id // "report_<uuid>" dari aplikasi
+  ownerId   String   @map("owner_id")
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  projectId String   @map("project_id")
+  project   Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  status    String   // "queued" | "running" | "done" | "failed"
+  progress  Int      @default(0)
+  stage     String   @default("")
+  result    String?
+  source    String?
+  error     String?
+  payload   Json?    // SanitizedForPersistence project
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@index([projectId])
+  @@index([status])
+  @@map("report_jobs")
+}
+
+// ===========================================================================
+// FILE UPLOADS (SHA256 dedup)
+// ===========================================================================
+
+/**
+ * Catatan file yang di-upload user. Bytes-nya disimpan di filesystem,
+ * bukan di DB (lihat src/lib/storage/upload.ts).
+ * sha256 unique → kalau user upload file yang sama (byte-identical), reuse row.
+ */
+model FileUpload {
+  id           String   @id @default(cuid())
+  sha256       String   @unique
+  ownerId      String   @map("owner_id")
+  owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  filePath     String   @map("file_path")
+  mime         String
+  size         Int
+  originalName String   @map("original_name")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([ownerId])
+  @@index([createdAt])
+  @@map("file_uploads")
+}
+
+// ===========================================================================
+// PROJECT STUDIO (research workflow terstruktur)
+// ===========================================================================
+
+/**
+ * StudioProject: workspace utama untuk research workflow.
+ * projectId sama dengan Project.projectId (1:1 relationship).
+ * intake/specification/formatProfile/readiness disimpan sebagai JSON
+ * untuk fleksibilitas tanpa migrasi schema tiap ada field baru.
+ */
+model StudioProject {
+  projectId          String   @id @map("project_id")
+  ownerId            String   @map("owner_id")
+  owner              User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent             Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  schemaVersion      Int      @default(1) @map("schema_version")
+  name               String
+  revision           Int      @default(1)
+  importedFromLegacy Boolean @default(false) @map("imported_from_legacy")
+  intake             Json     @default("{}")
+  specification      Json     @default("{}")
+  formatProfile      Json     @default("{}") @map("format_profile")
+  readiness          Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  sources   StudioSource[]
+  questions StudioQuestion[]
+  decisions StudioDecision[]
+  artifacts StudioArtifact[]
+  revisions StudioProjectRevision[]
+
+  @@index([ownerId])
+  @@map("studio_projects")
+}
+
+/**
+ * Sumber konteks: brief user, file upload, jurnal, dll.
+ * authority menandakan trust level (binding/primary/supporting/dll).
+ */
+model StudioSource {
+  id         String   @id @default(cuid())
+  projectId  String   @map("project_id")
+  project    StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId    String   @map("owner_id")
+  owner      User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  kind       String
+  authority  String
+  title      String
+  content    String   @db.Text  // Bisa panjang (PDF text, dll) → TEXT type
+  fileName   String?  @map("file_name")
+  provenance String?
+  notes      String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([ownerId])
+  @@index([projectId, authority])
+  @@map("studio_sources")
+}
+
+/**
+ * Pertanyaan terbuka dari Question Engine.
+ * questionKey unik per project (lihat @@unique).
+ * Status: unanswered | answered | waived.
+ */
+model StudioQuestion {
+  id                  String   @id @default(cuid())
+  projectId           String   @map("project_id")
+  project             StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId             String   @map("owner_id")
+  owner               User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  questionKey         String   @map("question_key")
+  category            String
+  questionClass       String   @map("question_class")
+  prompt              String
+  why                 String   @default("")
+  answerHint          String   @default("") @map("answer_hint")
+  status              String   @default("unanswered")
+  answer              String   @default("")
+  waiverReason        String?  @map("waiver_reason")
+  priority            Int      @default(1)
+  affectedArtifactIds Json     @default("[]") @map("affected_artifact_ids")
+  sourceIds           Json     @default("[]") @map("source_ids")
+  origin              String   @default("system")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@unique([projectId, questionKey])
+  @@index([projectId, status])
+  @@index([ownerId])
+  @@map("studio_questions")
+}
+
+/**
+ * Keputusan terkunci (fakta final). Berbeda dengan Question yang open-ended.
+ * Status: suggested | draft | confirmed | locked | superseded | rejected.
+ * history menyimpan trail perubahan (JSON array).
+ */
+model StudioDecision {
+  id                  String   @id @default(cuid())
+  projectId           String   @map("project_id")
+  project             StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId             String   @map("owner_id")
+  owner               User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  decisionKey         String   @map("decision_key")
+  category            String
+  statement           String
+  value               String
+  rationale           String   @default("")
+  status              String   @default("draft")
+  origin              String   @default("user")
+  questionId          String?  @map("question_id")
+  sourceIds           Json     @default("[]") @map("source_ids")
+  affectedArtifactIds Json     @default("[]") @map("affected_artifact_ids")
+  version             Int      @default(1)
+  history             Json     @default("[]")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId, status])
+  @@index([ownerId])
+  @@map("studio_decisions")
+}
+
+/**
+ * Artifact deliverable: project-spec, requirements, use-case diagram, dll.
+ * Composite primary key (projectId, artifactId).
+ * payload menyimpan diagram data / draft content.
+ */
+model StudioArtifact {
+  projectId        String   @map("project_id")
+  project          StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  artifactId       String   @map("artifact_id")
+  ownerId          String   @map("owner_id")
+  owner            User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  kind             String
+  title            String
+  description      String   @default("")
+  status           String   @default("not_started")
+  dependencyIds    Json     @default("[]") @map("dependency_ids")
+  decisionIds      Json     @default("[]") @map("decision_ids")
+  currentVersion   Int      @default(0) @map("current_version")
+  approvedVersion  Int?     @map("approved_version")
+  payload          Json?
+  validationIssues Json     @default("[]") @map("validation_issues")
+  lockedAt         DateTime? @map("locked_at")
+  generatedAt      DateTime? @map("generated_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@id([projectId, artifactId])
+  @@index([projectId, status])
+  @@index([ownerId])
+  @@map("studio_artifacts")
+}
+
+/**
+ * Snapshot history project. Setiap user "lock" atau perubahan besar,
+ * client POST snapshot lengkap ke sini. Bisa di-restore di frontend.
+ */
+model StudioProjectRevision {
+  id        String   @id @default(cuid())
+  projectId String   @map("project_id")
+  project   StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId   String   @map("owner_id")
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  revision  Int
+  reason    String   @default("")
+  snapshot  Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([projectId, revision])
+  @@index([projectId, revision])
+  @@index([ownerId])
+  @@map("studio_project_revisions")
+}
+
+// ===========================================================================
+// WAITLIST (publik, tanpa user relation)
+// ===========================================================================
+
+/**
+ * Landing page waitlist. Insert-only dari publik, lihat /api/waitlist.
+ * id pakai BigInt untuk handle skala besar.
+ */
+model Waitlist {
+  id        BigInt   @id @default(autoincrement())
+  email     String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("waitlist")
+}

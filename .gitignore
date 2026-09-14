@@ -32,6 +32,24 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.local.example
+
+# next.js standalone build
+.next/standalone/
+.next/server/
+
+# uploads folder (user-uploaded files)
+/uploads/
+
+# Prisma generated artifacts (regenerate via prisma generate)
+src/generated/
+
+# Deployment artifacts
+/deploy/
+
+# Local backups & dumps (may contain secrets)
+/backups/
+*.bak
 
 # vercel
 .vercel

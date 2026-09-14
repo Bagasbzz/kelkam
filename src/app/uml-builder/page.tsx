@@ -6,7 +6,7 @@ import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
 import { Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X, Upload } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData } from '@/lib/uml/diagram-guard';
-import { authenticatedFetch } from '@/lib/client/authenticated-fetch';
+import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
 import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-store';
 

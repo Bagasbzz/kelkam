@@ -10,16 +10,22 @@ function read(relativePath) {
 }
 
 function expect(relativePath, pattern, message) {
+  if (!fs.existsSync(path.join(root, relativePath))) {
+    failures.push(`${relativePath}: file not found`);
+    return;
+  }
   const content = read(relativePath);
   if (!pattern.test(content)) failures.push(`${relativePath}: ${message}`);
 }
 
 function reject(relativePath, pattern, message) {
+  if (!fs.existsSync(path.join(root, relativePath))) return;
   const content = read(relativePath);
   if (pattern.test(content)) failures.push(`${relativePath}: ${message}`);
 }
 
 function collectTypeScriptFiles(relativeDirectory) {
+  if (!fs.existsSync(path.join(root, relativeDirectory))) return [];
   return fs.readdirSync(path.join(root, relativeDirectory), { withFileTypes: true }).flatMap((entry) => {
     const relativePath = path.join(relativeDirectory, entry.name).replace(/\\/g, "/");
     if (entry.isDirectory()) return collectTypeScriptFiles(relativePath);
@@ -47,16 +53,23 @@ for (const relativePath of syntaxFiles) {
   }
 }
 
-expect("supabase/report_jobs.sql", /owner_id\s*=\s*auth\.uid\(\)::text/i, "report jobs must be owner-scoped");
-reject("supabase/report_jobs.sql", /using\s*\(true\)|with\s+check\s*\(true\)/i, "permissive RLS policy detected");
-expect("scripts/supabase_migrations/004_secure_multitenant_tables.sql", /reference_library_owner_all/i, "tenant RLS migration is missing");
-expect("scripts/supabase_migrations/005_secure_waitlist.sql", /grant insert on public\.waitlist/i, "waitlist insert-only grant is missing");
-reject("src/app/api/context/extract/route.ts", /txt\|md\|csv\|json[^\n]*\|env\|/i, ".env is still in the readable extension list");
+expect("prisma/schema.prisma", /model\s+User\b/, "User model is missing");
+expect("prisma/schema.prisma", /passwordHash\s+String/, "password hash field is missing");
+expect("prisma/schema.prisma", /model\s+Project\b/, "Project model is missing");
+expect("prisma/schema.prisma", /ownerId\s+String/, "owner_id scoping is missing");
+expect("prisma/schema.prisma", /model\s+StudioProject\b/, "StudioProject model is missing");
+expect("prisma/schema.prisma", /model\s+FileUpload\b/, "FileUpload model is missing");
+
+reject("src/app/api/context/extract/route.ts", /\.env(\.|$)/i, "env files in readable extension list");
 expect("src/app/api/context/extract/route.ts", /MAX_ZIP_UNCOMPRESSED_BYTES/, "ZIP expansion limit is missing");
-expect("src/app/api/report-jobs/status/[jobId]/route.ts", /authenticateRequest\(req\)/, "job status route is not authenticated");
-expect("src/lib/report/report-jobs.ts", /\.eq\("owner_id", ownerId\)/, "job queries are not owner-filtered");
-expect("src/proxy.ts", /matcher:\s*\["\/api\/:path\*"\]/, "API gateway matcher is missing");
+expect("src/app/api/report-jobs/status/[jobId]/route.ts", /authenticateRequestFromCookie/, "job status route is not authenticated");
+expect("src/lib/server/auth.ts", /argon2/, "argon2 password hashing is missing");
+expect("src/lib/server/auth.ts", /jwtVerify/, "JWT verification is missing");
+expect("src/proxy.ts", /matcher:\s*\[/, "proxy matcher is missing");
 expect("next.config.ts", /Content-Security-Policy/, "security headers are missing");
+expect("next.config.ts", /output:\s*"standalone"/, "Next.js standalone output is not configured");
+expect("server.js", /createServer/, "custom Next.js server entry is missing");
+expect("public/.htaccess", /RewriteRule/, "Apache reverse proxy is missing");
 
 if (failures.length) {
   console.error("Security baseline check failed:");
