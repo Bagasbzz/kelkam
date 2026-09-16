@@ -55,7 +55,7 @@ jobs:
           echo "Bundle: $(du -sh deploy | cut -f1)"
 
       - name: Upload via FTPS to JKC
-        uses: SamKirkland/FTP-Deploy-Action@v4
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.JKC_FTP_HOST }}
           username: ${{ secrets.JKC_FTP_USER }}
