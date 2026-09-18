@@ -70,9 +70,9 @@ jobs:
             set ssl:verify-certificate no
             set ftp:ssl-force true
             set ftp:ssl-protect-data true
-            set ftp:passive-mode true
-            set net:timeout 120
-            set net:max-retries 3
+            set ftp:passive-mode false
+            set net:timeout 60
+            set net:max-retries 2
             set net:reconnect-interval-base 5
             cd ${FTP_DIR}
             mirror --reverse \
