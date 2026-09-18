@@ -1,4 +1,4 @@
-name: Deploy to JKC (FTPS)
+name: Deploy to JKC (cPanel UAPI)
 
 on:
   push:
@@ -43,66 +43,86 @@ jobs:
 
       - name: Prepare deploy bundle
         run: |
-          mkdir -p deploy
+          rm -rf deploy
+          mkdir -p deploy/tmp
+          touch deploy/tmp/restart.txt
           cp -r .next/standalone/. deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
           cp -r prisma deploy/prisma
           cp package.json deploy/package.json
           cp server.js deploy/server.js
-          mkdir -p deploy/tmp
-          touch deploy/tmp/restart.txt
           echo "Bundle: $(du -sh deploy | cut -f1)"
+          echo "Files: $(find deploy -type f | wc -l)"
 
-      - name: Install lftp
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq lftp
-
-      - name: Upload via FTPS to JKC
+      - name: Upload via cPanel UAPI
         env:
-          FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
-          FTP_USER: ${{ secrets.JKC_FTP_USER }}
-          FTP_PASSWORD: ${{ secrets.JKC_FTP_PASSWORD }}
-          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+          CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          lftp -u "${FTP_USER},${FTP_PASSWORD}" \
-               -p 21 \
-               "${FTP_HOST}" <<LFTP_EOF
-            set ssl:verify-certificate no
-            set ftp:ssl-force true
-            set ftp:ssl-protect-data true
-            set ftp:passive-mode false
-            set net:timeout 60
-            set net:max-retries 2
-            set net:reconnect-interval-base 5
-            cd ${FTP_DIR}
-            mirror --reverse \
-                   --delete \
-                   --verbose=1 \
-                   --exclude-glob .git/ \
-                   --exclude-glob .git* \
-                   --exclude-glob node_modules/ \
-                   --exclude-glob .env* \
-                   --exclude-glob tmp/ \
-                   --continue \
-                   ./deploy/ ./
-            bye
-          LFTP_EOF
+          set -e
+          cd deploy
 
-      - name: Trigger Passenger restart (touch restart.txt)
+          # Build list of relative file paths
+          mapfile -t FILES < <(find . -type f -not -path './tmp/*' | sed 's|^\./||')
+          echo "Uploading ${#FILES[@]} files to ${CPANEL_HOST}${CPANEL_DIR}"
+
+          i=0
+          for rel in "${FILES[@]}"; do
+            i=$((i+1))
+            dir=$(dirname "$rel")
+            http_code=$(curl -sS -o /tmp/last_resp -w "%{http_code}" \
+              "https://${CPANEL_HOST}:2083/cpanel" \
+              -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
+              --data-urlencode "cpanel_jsonapi_user=${CPANEL_USER}" \
+              --data-urlencode "cpanel_jsonapi_apiversion=2" \
+              --data-urlencode "cpanel_jsonapi_module=Fileman" \
+              --data-urlencode "cpanel_jsonapi_func=upload_files" \
+              --data-urlencode "dir=${CPANEL_DIR}/${dir}" \
+              --data-urlencode "file-1=@${rel};filename=${rel##*/}" \
+              --data-urlencode "file-1-encoded=base64" \
+              --data-urlencode "overwrite=1")
+
+            if [[ "$http_code" != "200" ]]; then
+              echo "FAIL ($i/${#FILES[@]}): $rel (HTTP $http_code)"
+              cat /tmp/last_resp
+              echo ""
+              exit 1
+            fi
+
+            if (( i % 50 == 0 )); then
+              echo "  $i/${#FILES[@]} uploaded..."
+            fi
+          done
+
+          echo "Upload complete: $i files"
+
+      - name: Trigger Passenger restart
         env:
-          FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
-          FTP_USER: ${{ secrets.JKC_FTP_USER }}
-          FTP_PASSWORD: ${{ secrets.JKC_FTP_PASSWORD }}
-          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+          CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          curl -sS --ftp-method singlecwd --ssl -k \
-            -u "$FTP_USER:$FTP_PASSWORD" \
-            "ftp://${FTP_HOST}/$FTP_DIR/tmp/restart.txt" \
-            -o /dev/null -w "Restart trigger: HTTP %{http_code} (%{time_total}s)\n" || true
+          echo "Triggering Passenger restart (touch tmp/restart.txt)..."
+          curl -sS -o /tmp/restart_resp -w "HTTP %{http_code}\n" \
+            "https://${CPANEL_HOST}:2083/cpanel" \
+            -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --data-urlencode "cpanel_jsonapi_user=${CPANEL_USER}" \
+            --data-urlencode "cpanel_jsonapi_apiversion=2" \
+            --data-urlencode "cpanel_jsonapi_module=Fileman" \
+            --data-urlencode "cpanel_jsonapi_func=upload_files" \
+            --data-urlencode "dir=${CPANEL_DIR}/tmp" \
+            --data-urlencode "file-1=@/dev/null;filename=restart.txt" \
+            --data-urlencode "file-1-encoded=base64" \
+            --data-urlencode "overwrite=1" || true
+          cat /tmp/restart_resp 2>/dev/null || true
 
       - name: Health check
         run: |
-          sleep 10
+          sleep 15
           echo "Checking https://keluhkampus.my.id/"
           curl -sf -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" \
             https://keluhkampus.my.id/ \
@@ -115,8 +135,3 @@ jobs:
           echo "- Branch: ${GITHUB_REF_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "- Commit: ${GITHUB_SHA::7}" >> $GITHUB_STEP_SUMMARY
           echo "- Status: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "If failed, check:" >> $GITHUB_STEP_SUMMARY
-          echo "- FTP credentials (JKC_FTP_*)" >> $GITHUB_STEP_SUMMARY
-          echo "- Server dir: ${{ secrets.JKC_FTP_DIR }}" >> $GITHUB_STEP_SUMMARY
-          echo "- cPanel Application Manager app exists and is running" >> $GITHUB_STEP_SUMMARY
