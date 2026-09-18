@@ -64,13 +64,13 @@ jobs:
           local-dir: deploy/
           protocol: ftps
           port: 21
-          ssl-options: |
-            rejectUnauthorized: false
+          security: loose
           dangerous-clean-slate: false
           exclude: |
             **/.git*
             **/node_modules/**
             **/.env*
+          timeout: 120
 
       - name: Trigger Passenger restart (touch restart.txt)
         env:
