@@ -148,28 +148,30 @@ jobs:
           UPLOAD_DIR: /home/keluhkam/keluhkampus.my.id/uploads
         run: |
           echo "Writing .env to ${CPANEL_DIR}/.env..."
-          ENV_CONTENT=$(cat <<EOF
-NODE_ENV=${NODE_ENV}
-DATABASE_URL=${DATABASE_URL}
-DIRECT_URL=${DIRECT_URL}
-AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
-NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
-AI_API_KEY=${AI_API_KEY}
-AI_BASE_URL=${AI_BASE_URL}
-AI_MODEL=${AI_MODEL}
-AI_MODEL_FAST=${AI_MODEL_FAST}
-AI_MODEL_REVIEW=${AI_MODEL_REVIEW}
-REFERENCE_CACHE_ADMIN_TOKEN=${REFERENCE_CACHE_ADMIN_TOKEN}
-UPLOAD_DIR=${UPLOAD_DIR}
-PORT=3000
-HOSTNAME=0.0.0.0
-EOF
-)
+          {
+            echo "NODE_ENV=${NODE_ENV}"
+            echo "DATABASE_URL=${DATABASE_URL}"
+            echo "DIRECT_URL=${DIRECT_URL}"
+            echo "AUTH_JWT_SECRET=${AUTH_JWT_SECRET}"
+            echo "NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}"
+            echo "AI_API_KEY=${AI_API_KEY}"
+            echo "AI_BASE_URL=${AI_BASE_URL}"
+            echo "AI_MODEL=${AI_MODEL}"
+            echo "AI_MODEL_FAST=${AI_MODEL_FAST}"
+            echo "AI_MODEL_REVIEW=${AI_MODEL_REVIEW}"
+            echo "REFERENCE_CACHE_ADMIN_TOKEN=${REFERENCE_CACHE_ADMIN_TOKEN}"
+            echo "UPLOAD_DIR=${UPLOAD_DIR}"
+            echo "PORT=3000"
+            echo "HOSTNAME=0.0.0.0"
+          } > /tmp/env_content
+          echo "--- env preview ---"
+          cat /tmp/env_content
+          echo "--- end ---"
           http_code=$(curl -sS -o /tmp/env_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             --data-urlencode "dir=${CPANEL_DIR}" \
             --data-urlencode "file=.env" \
-            --data-urlencode "content=${ENV_CONTENT}" \
+            --data-urlencode "content@/tmp/env_content" \
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
           echo "HTTP $http_code"
