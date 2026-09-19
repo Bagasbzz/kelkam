@@ -43,7 +43,7 @@ jobs:
 
       - name: Prepare & zip deploy bundle
         run: |
-          rm -rf deploy
+          rm -rf deploy bundle.zip
           mkdir -p deploy/tmp
           touch deploy/tmp/restart.txt
           cp -r .next/standalone/. deploy/
@@ -52,6 +52,13 @@ jobs:
           cp -r prisma deploy/prisma
           cp package.json deploy/package.json
           cp server.js deploy/server.js
+          # Include production node_modules so app can run without SSH install
+          if [ -d "node_modules" ]; then
+            cp -r node_modules deploy/node_modules
+            echo "node_modules included"
+          else
+            echo "::warning::node_modules not found, app won't start"
+          fi
           cd deploy
           zip -qr ../bundle.zip .
           cd ..
@@ -120,6 +127,54 @@ jobs:
             --data-urlencode "content=" \
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file" || true
+
+      - name: Write .env to server
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+          CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+          AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+          NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_MODEL_FAST: ${{ secrets.AI_MODEL_FAST }}
+          AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
+          REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
+          UPLOAD_DIR: /home/keluhkam/keluhkampus.my.id/uploads
+        run: |
+          echo "Writing .env to ${CPANEL_DIR}/.env..."
+          ENV_CONTENT=$(cat <<EOF
+NODE_ENV=${NODE_ENV}
+DATABASE_URL=${DATABASE_URL}
+DIRECT_URL=${DIRECT_URL}
+AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
+NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+AI_API_KEY=${AI_API_KEY}
+AI_BASE_URL=${AI_BASE_URL}
+AI_MODEL=${AI_MODEL}
+AI_MODEL_FAST=${AI_MODEL_FAST}
+AI_MODEL_REVIEW=${AI_MODEL_REVIEW}
+REFERENCE_CACHE_ADMIN_TOKEN=${REFERENCE_CACHE_ADMIN_TOKEN}
+UPLOAD_DIR=${UPLOAD_DIR}
+PORT=3000
+HOSTNAME=0.0.0.0
+EOF
+)
+          http_code=$(curl -sS -o /tmp/env_resp -w "%{http_code}" \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --data-urlencode "dir=${CPANEL_DIR}" \
+            --data-urlencode "file=.env" \
+            --data-urlencode "content=${ENV_CONTENT}" \
+            --data-urlencode "encoding=utf-8" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+          echo "HTTP $http_code"
+          cat /tmp/env_resp
+          echo ""
 
       - name: Health check
         run: |
