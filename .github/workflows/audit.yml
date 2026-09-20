@@ -1,0 +1,93 @@
+name: Audit JKC Server (read-only)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: List Application Manager apps
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== Application Manager apps ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/ApplicationManager/list_apps" \
+            | python3 -m json.tool 2>&1 | head -80
+
+      - name: List FTP home directory
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== /home/keluhkam listing ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=/home/keluhkam&limit=500" \
+            | python3 -m json.tool 2>&1 | head -80
+
+      - name: List public_html
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== /home/keluhkam/public_html listing ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=/home/keluhkam/public_html&limit=500" \
+            | python3 -m json.tool 2>&1 | head -80
+
+      - name: Inspect app directory
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== /home/keluhkam/public_html/keluhkampus.my.id listing ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=/home/keluhkam/public_html/keluhkampus.my.id&limit=500" \
+            | python3 -m json.tool 2>&1 | head -120
+
+      - name: Read .env
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== .env content ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/get_file?dir=/home/keluhkam/public_html/keluhkampus.my.id&file=.env" \
+            2>&1 | head -40
+
+      - name: Read public_html/.htaccess
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== public_html/.htaccess content ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/get_file?dir=/home/keluhkam/public_html&file=.htaccess" \
+            2>&1 | head -40
+
+      - name: Check Passenger port & process via API
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "=== App details ==="
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/ApplicationManager/get_app_settings?appname=keluhkampus.my.id" \
+            | python3 -m json.tool 2>&1 | head -100
