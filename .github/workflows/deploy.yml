@@ -181,10 +181,11 @@ jobs:
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
         run: |
-          echo "Writing public_html/.htaccess (reverse proxy ke Node :3000)..."
-          HTACCESS_PATH="C:/Users/bagas/Downloads/keluhkampusnew/public/.htaccess"
+          HTACCESS_PATH="${{ github.workspace }}/public/.htaccess"
+          echo "Writing public_html/.htaccess from ${HTACCESS_PATH}..."
           if [ ! -f "$HTACCESS_PATH" ]; then
-            echo "::error::$HTACCESS_PATH not found"
+            echo "::error::$HTACCESS_PATH not found in runner"
+            exit 1
           fi
           http_code=$(curl -sS -o /tmp/htaccess_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
@@ -197,7 +198,8 @@ jobs:
           cat /tmp/htaccess_resp
           echo ""
           if [[ "$http_code" != "200" ]]; then
-            echo "::warning::.htaccess upload failed - domain root will show directory listing"
+            echo "::error::.htaccess upload failed"
+            exit 1
           fi
 
       - name: Health check
