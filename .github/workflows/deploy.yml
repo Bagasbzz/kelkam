@@ -52,13 +52,10 @@ jobs:
           cp -r prisma deploy/prisma
           cp package.json deploy/package.json
           cp server.js deploy/server.js
-          # Include production node_modules so app can run without SSH install
-          if [ -d "node_modules" ]; then
-            cp -r node_modules deploy/node_modules
-            echo "node_modules included"
-          else
-            echo "::warning::node_modules not found, app won't start"
-          fi
+          # JANGAN bundle node_modules — CloudLinux NodeJS Selector butuh
+          # 'node_modules' sebagai symlink ke nodevenv/, bukan folder beneran.
+          # Klik "Run NPM Install" di cPanel UI setelah deploy kalau package.json berubah.
+          echo "node_modules NOT bundled (CloudLinux manages it via symlink)"
           cd deploy
           zip -qr ../bundle.zip .
           cd ..
@@ -177,6 +174,31 @@ jobs:
           echo "HTTP $http_code"
           cat /tmp/env_resp
           echo ""
+
+      - name: Upload .htaccess to public_html (reverse proxy)
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        run: |
+          echo "Writing public_html/.htaccess (reverse proxy ke Node :3000)..."
+          HTACCESS_PATH="C:/Users/bagas/Downloads/keluhkampusnew/public/.htaccess"
+          if [ ! -f "$HTACCESS_PATH" ]; then
+            echo "::error::$HTACCESS_PATH not found"
+          fi
+          http_code=$(curl -sS -o /tmp/htaccess_resp -w "%{http_code}" \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --data-urlencode "dir=/public_html" \
+            --data-urlencode "file=.htaccess" \
+            --data-urlencode "content@${HTACCESS_PATH}" \
+            --data-urlencode "encoding=utf-8" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+          echo "HTTP $http_code"
+          cat /tmp/htaccess_resp
+          echo ""
+          if [[ "$http_code" != "200" ]]; then
+            echo "::warning::.htaccess upload failed - domain root will show directory listing"
+          fi
 
       - name: Health check
         run: |
