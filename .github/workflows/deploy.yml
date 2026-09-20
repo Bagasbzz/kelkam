@@ -171,32 +171,17 @@ jobs:
           cat /tmp/env_resp
           echo ""
 
-      - name: Upload .htaccess to public_html (reverse proxy)
+      - name: Delete public_html/.htaccess (Passenger handles routing)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
         run: |
-          HTACCESS_PATH="${{ github.workspace }}/public/.htaccess"
-          echo "Writing public_html/.htaccess from ${HTACCESS_PATH}..."
-          if [ ! -f "$HTACCESS_PATH" ]; then
-            echo "::error::$HTACCESS_PATH not found in runner"
-            exit 1
-          fi
-          http_code=$(curl -sS -o /tmp/htaccess_resp -w "%{http_code}" \
+          echo "Deleting /public_html/.htaccess (Passenger routes directly)..."
+          curl -sS -o /tmp/del_resp -w "HTTP %{http_code}\n" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "dir=/public_html" \
-            --data-urlencode "file=.htaccess" \
-            --data-urlencode "content@${HTACCESS_PATH}" \
-            --data-urlencode "encoding=utf-8" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
-          echo "HTTP $http_code"
-          cat /tmp/htaccess_resp
-          echo ""
-          if [[ "$http_code" != "200" ]]; then
-            echo "::error::.htaccess upload failed"
-            exit 1
-          fi
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files?dir=/public_html&files=.htaccess" \
+            || echo "delete failed (may not exist)"
 
       - name: Health check
         run: |
