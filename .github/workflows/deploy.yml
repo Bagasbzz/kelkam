@@ -171,17 +171,27 @@ jobs:
           cat /tmp/env_resp
           echo ""
 
-      - name: Delete public_html/.htaccess (Passenger handles routing)
+      - name: Write public_html/.htaccess (reverse proxy ke Node:3000)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
         run: |
-          echo "Deleting /public_html/.htaccess (Passenger routes directly)..."
-          curl -sS -o /tmp/del_resp -w "HTTP %{http_code}\n" \
+          echo "Writing public_html/.htaccess (Apache reverse proxy ke Node)..."
+          http_code=$(curl -sS -o /tmp/htaccess_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files?dir=/public_html&files=.htaccess" \
-            || echo "delete failed (may not exist)"
+            --data-urlencode "dir=/public_html" \
+            --data-urlencode "file=.htaccess" \
+            --data-urlencode "content@public/.htaccess" \
+            --data-urlencode "encoding=utf-8" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+          echo "HTTP $http_code"
+          cat /tmp/htaccess_resp
+          echo ""
+          if [[ "$http_code" != "200" ]]; then
+            echo "::error::Failed to write public_html/.htaccess"
+            exit 1
+          fi
 
       - name: Health check
         run: |
