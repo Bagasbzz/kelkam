@@ -19,14 +19,8 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Generate Prisma client
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: npx prisma generate
+      - name: Install dependencies (prod-only, no devDeps)
+        run: npm ci --omit=dev --no-audit --no-fund
 
       - name: Build Next.js standalone
         env:
@@ -51,11 +45,13 @@ jobs:
           cp -r public deploy/public
           cp -r prisma deploy/prisma
           cp package.json deploy/package.json
+          cp package-lock.json deploy/package-lock.json
           cp server.js deploy/server.js
-          # JANGAN bundle node_modules — CloudLinux NodeJS Selector butuh
-          # 'node_modules' sebagai symlink ke nodevenv/, bukan folder beneran.
-          # Klik "Run NPM Install" di cPanel UI setelah deploy kalau package.json berubah.
-          echo "node_modules NOT bundled (CloudLinux manages it via symlink)"
+          # Bundle production node_modules dari runner (sudah di-build di Ubuntu
+          # yang punya argon2/prisma build tools lengkap — JKC shared hosting gagal compile).
+          # CloudLinux akan pakai folder ini langsung, bukan create symlink ke nodevenv.
+          cp -r node_modules deploy/node_modules
+          echo "node_modules bundled from runner ($(du -sh node_modules | cut -f1))"
           cd deploy
           zip -qr ../bundle.zip .
           cd ..
