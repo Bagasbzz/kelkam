@@ -19,8 +19,8 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Install dependencies (prod-only, no devDeps)
-        run: npm ci --omit=dev --no-audit --no-fund
+      - name: Install dependencies (semua — Next.js build butuh devDeps juga)
+        run: npm ci --no-audit --no-fund
 
       - name: Build Next.js standalone
         env:
@@ -138,7 +138,7 @@ jobs:
           AI_MODEL_FAST: ${{ secrets.AI_MODEL_FAST }}
           AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
           REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
-          UPLOAD_DIR: /home/keluhkam/keluhkampus.my.id/uploads
+          UPLOAD_DIR: /home/keluhkam/public_html/keluhkampus.my.id/uploads
         run: |
           echo "Writing .env to ${CPANEL_DIR}/.env..."
           {
