@@ -79,7 +79,7 @@ jobs:
             exit 1
           fi
 
-      - name: Extract ZIP via cPanel UAPI
+      - name: Extract ZIP via cPanel API 2 (Fileman::fileop)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -92,12 +92,20 @@ jobs:
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/dir?dir=${CPANEL_DIR}" || true
 
-          # Extract via cPanel ExtractCompression
+          # JKC server doesn't have ExtractCompression Perl module installed, so UAPI
+          # /execute/ExtractCompression/extract fails with HTTP 200 + empty data but
+          # extracts NOTHING. Fallback to API 2 Fileman::fileop which is built into
+          # the core Fileman module (always present).
           http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "file=${CPANEL_DIR}/bundle.zip" \
-            --data-urlencode "type=zip" \
-            "https://${CPANEL_HOST}:2083/execute/ExtractCompression/extract")
+            --data-urlencode "cpanel_jsonapi_apiversion=2" \
+            --data-urlencode "cpanel_jsonapi_module=Fileman" \
+            --data-urlencode "cpanel_jsonapi_func=fileop" \
+            --data-urlencode "op=extract" \
+            --data-urlencode "sourcefiles=${CPANEL_DIR}/bundle.zip" \
+            --data-urlencode "destfiles=${CPANEL_DIR}/" \
+            --data-urlencode "doubledecode=0" \
+            "https://${CPANEL_HOST}:2083/cpanel")
           echo "HTTP $http_code"
           cat /tmp/extract_resp
           echo ""
@@ -106,16 +114,14 @@ jobs:
             exit 1
           fi
 
-          # VERIFY: ExtractCompression API silently succeeds with 200 even when nothing was extracted.
-          # We MUST confirm node_modules is actually on the server, otherwise Node will crash on next start.
+          # VERIFY: even API 2 can return 200 without actually extracting.
+          # Confirm node_modules is actually on the server, otherwise Node will crash on next start.
           echo "Verifying extract: listing ${CPANEL_DIR} on server..."
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
           if ! echo "$verify_resp" | grep -q '"name":"node_modules"'; then
             echo "::error::VERIFY FAILED: node_modules NOT found on server after extract."
-            echo "::error::ExtractCompression returned 200 but the zip was not actually extracted."
-            echo "::error::This usually means bundle.zip is in a wrong location, or extract hit a permission/path issue."
             echo "::error::Manual recovery: SSH to server (or use cPanel File Manager) and run:"
             echo "::error::  cd ${CPANEL_DIR} && unzip -o bundle.zip && touch tmp/restart.txt"
             echo "--- raw list_files response (first 3000 chars) ---"
