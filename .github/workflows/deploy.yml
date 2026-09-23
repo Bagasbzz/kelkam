@@ -79,50 +79,36 @@ jobs:
             exit 1
           fi
 
-      - name: Extract ZIP via cPanel UAPI (Fileman::extract)
+      - name: Wait for cron to extract bundle.zip
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          echo "Extracting bundle.zip in ${CPANEL_DIR}..."
-          # Ensure target dir exists (cPanel extract may not create it)
-          curl -sS -o /tmp/mkdir_resp -w "mkdir HTTP %{http_code}\n" \
+          echo "bundle.zip uploaded (size below). Extraction is handled by a cPanel cron job (runs every minute)."
+          curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/dir?dir=${CPANEL_DIR}" || true
-
-          # Try UAPI Fileman::extract — this lives in core Fileman module
-          # (separate from broken ExtractCompression module).
-          http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "file=${CPANEL_DIR}/bundle.zip" \
-            --data-urlencode "encoding=utf-8" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/extract")
-          echo "Fileman/extract HTTP $http_code"
-          cat /tmp/extract_resp
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
+            | head -c 1500
           echo ""
-          if [[ "$http_code" != "200" ]]; then
-            echo "::error::Fileman/extract failed - HTTP $http_code. Response above."
-            exit 1
-          fi
-
-          # VERIFY: confirm node_modules is actually on the server.
-          echo "Verifying extract: listing ${CPANEL_DIR} on server..."
-          verify_resp=$(curl -sS \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-          if ! echo "$verify_resp" | grep -q '"name":"node_modules"'; then
-            echo "::error::VERIFY FAILED: node_modules NOT found on server after extract."
-            echo "::error::All known cPanel extract APIs are unavailable on JKC."
-            echo "::error::Manual recovery: open cPanel File Manager, navigate to ${CPANEL_DIR},"
-            echo "::error::  right-click bundle.zip → Extract. Then SSH/FTP and run: touch tmp/restart.txt"
-            echo "--- raw list_files response (first 3000 chars) ---"
-            echo "$verify_resp" | head -c 3000
-            echo ""
-            exit 1
-          fi
-          echo "✓ VERIFY OK: node_modules present on server"
+          echo ""
+          echo "Polling for node_modules to appear on server (up to 90s)..."
+          for i in 1 2 3 4 5 6; do
+            sleep 15
+            verify_resp=$(curl -sS \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+            if echo "$verify_resp" | grep -q '"name":"node_modules"'; then
+              echo "✓ Cron extracted bundle.zip — node_modules present on server after $((i*15))s"
+              exit 0
+            fi
+            echo "  ...still waiting ($((i*15))s elapsed)"
+          done
+          echo "::error::Cron did not extract within 90s."
+          echo "::error::Verify in cPanel: Cron Jobs — is the keluhkampus job set to Once Per Minute?"
+          echo "::error::Verify in cPanel: File Manager — is bundle.zip still present at ${CPANEL_DIR}?"
+          exit 1
 
       - name: Trigger Passenger restart
         env:
