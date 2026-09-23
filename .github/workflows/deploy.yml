@@ -102,8 +102,28 @@ jobs:
           cat /tmp/extract_resp
           echo ""
           if [[ "$http_code" != "200" ]]; then
-            echo "::warning::Extract may have failed - check logs"
+            echo "::error::Extract failed - HTTP $http_code. Response above."
+            exit 1
           fi
+
+          # VERIFY: ExtractCompression API silently succeeds with 200 even when nothing was extracted.
+          # We MUST confirm node_modules is actually on the server, otherwise Node will crash on next start.
+          echo "Verifying extract: listing ${CPANEL_DIR} on server..."
+          verify_resp=$(curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          if ! echo "$verify_resp" | grep -q '"name":"node_modules"'; then
+            echo "::error::VERIFY FAILED: node_modules NOT found on server after extract."
+            echo "::error::ExtractCompression returned 200 but the zip was not actually extracted."
+            echo "::error::This usually means bundle.zip is in a wrong location, or extract hit a permission/path issue."
+            echo "::error::Manual recovery: SSH to server (or use cPanel File Manager) and run:"
+            echo "::error::  cd ${CPANEL_DIR} && unzip -o bundle.zip && touch tmp/restart.txt"
+            echo "--- raw list_files response (first 3000 chars) ---"
+            echo "$verify_resp" | head -c 3000
+            echo ""
+            exit 1
+          fi
+          echo "✓ VERIFY OK: node_modules present on server"
 
       - name: Trigger Passenger restart
         env:
@@ -113,13 +133,24 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "Touching tmp/restart.txt to restart Passenger..."
-          curl -sS -o /tmp/restart_resp -w "HTTP %{http_code}\n" \
+          # Ensure tmp dir exists first
+          curl -sS -o /tmp/mkdir_tmp -w "mkdir tmp HTTP %{http_code}\n" \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/dir?dir=${CPANEL_DIR}/tmp" || true
+          http_code=$(curl -sS -o /tmp/restart_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             --data-urlencode "dir=${CPANEL_DIR}/tmp" \
             --data-urlencode "file=restart.txt" \
             --data-urlencode "content=" \
             --data-urlencode "encoding=utf-8" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file" || true
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+          echo "HTTP $http_code"
+          cat /tmp/restart_resp
+          echo ""
+          if [[ "$http_code" != "200" ]]; then
+            echo "::error::Failed to trigger Passenger restart - HTTP $http_code"
+            exit 1
+          fi
 
       - name: Write .env to server
         env:
@@ -170,6 +201,10 @@ jobs:
           echo "HTTP $http_code"
           cat /tmp/env_resp
           echo ""
+          if [[ "$http_code" != "200" ]]; then
+            echo "::error::Failed to write .env - HTTP $http_code"
+            exit 1
+          fi
 
       - name: Write public_html/.htaccess (reverse proxy ke Node:3000)
         env:
