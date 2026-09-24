@@ -29,6 +29,11 @@
  *   - `process.chdir(__dirname)` supaya Next.js resolve path relatif
  *     terhadap file ini, bukan cwd Passenger.
  *   - `parse()` dari `url` module adalah legacy API, tapi stabil & no deps.
+ *   - JKC Main Domain DocumentRoot = /public_html/. Passenger cuma handle
+ *     path yang match Application root (/keluhkampus.my.id/). Apache
+ *     .htaccess rewrite "/" → "/keluhkampus.my.id/" secara internal supaya
+ *     request root juga sampai ke app. Kita strip prefix di sini sebelum
+ *     forward ke Next.js biar route matching tetap bener.
  * -----------------------------------------------------------------------------
  */
 
@@ -44,6 +49,12 @@ const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOSTNAME || "0.0.0.0";
 const dev = process.env.NODE_ENV !== "production";
 
+// Path prefix yang ditambahin sama Apache .htaccess rewrite di root domain.
+// Main domain DocumentRoot = /public_html/, jadi request "/" di-rewrite ke
+// "/keluhkampus.my.id/" sebelum sampai ke Passenger. Kita strip prefix di
+// sini supaya Next.js route matching (Next.js gak tau soal subfolder).
+const APP_PATH_PREFIX = "/keluhkampus.my.id";
+
 const app = next({ dev, dir: __dirname });
 const handle = app.getRequestHandler();
 
@@ -51,12 +62,16 @@ app.prepare()
   .then(() => {
     createServer((req, res) => {
       const parsedUrl = parse(req.url || "/", true);
+      if (parsedUrl.pathname && parsedUrl.pathname.startsWith(APP_PATH_PREFIX)) {
+        parsedUrl.pathname =
+          parsedUrl.pathname.replace(APP_PATH_PREFIX, "") || "/";
+      }
       handle(req, res, parsedUrl);
     })
-      .listen(port, hostname, () => {
-        // eslint-disable-next-line no-console
-        console.log(`keluhkampus ready on http://${hostname}:${port}`);
-      });
+    .listen(port, hostname, () => {
+      // eslint-disable-next-line no-console
+      console.log(`keluhkampus ready on http://${hostname}:${port}`);
+    });
   })
   .catch((err) => {
     // eslint-disable-next-line no-console
