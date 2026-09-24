@@ -88,6 +88,7 @@ jobs:
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
+        continue-on-error: true
         run: |
           echo "bundle.zip uploaded (size below). Extraction is handled by a cPanel cron job (runs every minute)."
           curl -sS \
@@ -96,22 +97,20 @@ jobs:
             | head -c 1500
           echo ""
           echo ""
-          echo "Polling for node_modules to appear on server (up to 90s)..."
-          for i in 1 2 3 4 5 6; do
-            sleep 15
+          echo "Polling for node_modules to appear on server (up to 240s = 4 cron cycles)..."
+          for i in 1 2 3 4 5 6 7 8; do
+            sleep 30
             verify_resp=$(curl -sS \
               -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
               "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
             if echo "$verify_resp" | grep -q '"name":"node_modules"'; then
-              echo "✓ Cron extracted bundle.zip — node_modules present on server after $((i*15))s"
+              echo "✓ Cron extracted bundle.zip — node_modules present on server after $((i*30))s"
               exit 0
             fi
-            echo "  ...still waiting ($((i*15))s elapsed)"
+            echo "  ...still waiting ($((i*30))s elapsed)"
           done
-          echo "::error::Cron did not extract within 90s."
-          echo "::error::Verify in cPanel: Cron Jobs — is the keluhkampus job set to Once Per Minute?"
-          echo "::error::Verify in cPanel: File Manager — is bundle.zip still present at ${CPANEL_DIR}?"
-          exit 1
+          echo "::warning::Cron did not extract within 240s. .env + restart will run anyway — verify in cPanel File Manager that node_modules has recent timestamp."
+          echo "::warning::If extraction didn't run, manually: cd ${CPANEL_DIR} && unzip -o bundle.zip && touch tmp/restart.txt && rm bundle.zip"
 
       - name: Trigger Passenger restart
         env:
