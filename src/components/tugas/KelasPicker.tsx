@@ -15,6 +15,9 @@ interface KelasPickerProps {
 /**
  * Radio card pattern untuk pilih kelas. BUKAN dropdown — UX lebih cepet
  * karena user lihat semua opsi sekaligus.
+ *
+ * Aksesibilitas: pakai `aria-pressed` (toggle button), bukan `role="radio"`
+ * karena setiap card berdiri sendiri dan tidak membentuk radiogroup.
  */
 export default function KelasPicker({
   options,
@@ -40,6 +43,7 @@ export default function KelasPicker({
             key={opt.id}
             type="button"
             disabled={isDisabled}
+            aria-pressed={isSelected}
             onClick={() => onChange(opt.id)}
             className={[
               "rounded-2xl border-2 px-3 py-3 text-sm font-bold transition-all active:scale-95",

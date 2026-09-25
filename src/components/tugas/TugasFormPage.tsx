@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
+import Input from "@/components/ui/Input";
+import Textarea from "@/components/ui/Textarea";
 import KelasPicker from "@/components/tugas/KelasPicker";
 import {
   createTugas,
@@ -183,38 +185,27 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
 
         <Card>
           <form onSubmit={onSubmit} className="space-y-5">
-            <div>
-              <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
-                Judul
-              </label>
-              <input
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Tugas 1: Sorting Algorithm"
-                maxLength={160}
-                className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500"
-              />
-            </div>
+            <Input
+              label="Judul"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Tugas 1: Sorting Algorithm"
+              maxLength={160}
+            />
+
+            <Textarea
+              label="Deskripsi"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={4}
+              maxLength={8000}
+              placeholder="Instruksi tugas, format file, dll..."
+            />
 
             <div>
-              <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
-                Deskripsi
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={4}
-                maxLength={8000}
-                placeholder="Instruksi tugas, format file, dll..."
-                className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500"
-              />
-            </div>
-
-            <div>
-              <label className="mb-2 block text-xs font-bold uppercase tracking-widest text-slate-500">
+              <p className="mb-2 block text-xs font-bold uppercase tracking-widest text-slate-500">
                 Kelas (opsional — kosongkan untuk semua kelas)
-              </label>
+              </p>
               <KelasPicker
                 options={course.classes}
                 value={classId}
@@ -237,7 +228,11 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
               </p>
             </div>
 
-            {error && <p className="text-xs text-red-600">{error}</p>}
+            {error && (
+              <p role="alert" className="text-xs text-red-600">
+                {error}
+              </p>
+            )}
 
             <div className="flex justify-end">
               <Button

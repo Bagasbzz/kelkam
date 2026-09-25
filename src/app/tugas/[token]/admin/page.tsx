@@ -52,16 +52,16 @@ export default function CourseAdminDashboard() {
       const data = await fetchCourseByToken(token);
       setCourse(data.course);
       setTugases(data.tugases);
-      // Count submissions per tugas (best-effort, sequential).
+      // Fetch submission counts in parallel (best-effort) — sequential would
+      // be N round-trips, jadi pakai Promise.allSettled untuk toleransi error.
+      const results = await Promise.allSettled(
+        data.tugases.map((t) => fetchAdminSubmissions(t.id)),
+      );
       const next: Record<string, number> = {};
-      for (const t of data.tugases) {
-        try {
-          const sub = await fetchAdminSubmissions(t.id);
-          next[t.id] = sub.submissions.length;
-        } catch {
-          next[t.id] = 0;
-        }
-      }
+      results.forEach((r, i) => {
+        const id = data.tugases[i].id;
+        next[id] = r.status === "fulfilled" ? r.value.submissions.length : 0;
+      });
       setCounts(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat course.");
