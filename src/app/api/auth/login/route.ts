@@ -80,7 +80,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const session = await createSession(user.id, user.email, user.name);
+    const session = await createSession(user.id, user.email, user.name, user.role);
     return NextResponse.json(
       { success: true, user: session.user },
       { headers: { "Cache-Control": "no-store" } }

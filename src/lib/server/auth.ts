@@ -45,6 +45,7 @@ import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import argon2 from "argon2";
 import { prisma } from "@/lib/db/prisma";
+import { ApiRequestError } from "@/lib/server/request-guards";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -82,6 +83,8 @@ export interface SessionUser {
   id: string;
   email: string;
   name: string | null;
+  /** Role global: USER (mahasiswa) atau ADMIN (asdos). */
+  role: "USER" | "ADMIN";
 }
 
 /** Result pattern untuk guard helper (lihat authenticateRequestFromCookie). */
@@ -126,12 +129,16 @@ export async function verifyPassword(hash: string, plain: string): Promise<boole
 
 /**
  * Buat JWT baru (HS256, signed dengan JWT_SECRET).
- * Payload: { sub: userId, email }.
+ * Payload: { sub: userId, email, role }.
  *
  * Token ini akan disimpan di tabel `sessions.id` supaya bisa di-revoke.
  */
-export async function createSessionToken(userId: string, email: string): Promise<string> {
-  return new SignJWT({ sub: userId, email })
+export async function createSessionToken(
+  userId: string,
+  email: string,
+  role: "USER" | "ADMIN"
+): Promise<string> {
+  return new SignJWT({ sub: userId, email, role })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${TOKEN_TTL_SECONDS}s`)
@@ -159,10 +166,17 @@ async function setSessionCookie(token: string) {
  * @param userId - id user yang baru login
  * @param email - email (untuk payload JWT, agar logout bisa jalan tanpa DB lookup)
  * @param name - display name (null OK)
+ * @param role - 'USER' | 'ADMIN' (ikut di JWT payload supaya getCurrentUser
+ *               tidak perlu hit DB untuk cek role)
  * @returns user info yang siap dikembalikan ke client
  */
-export async function createSession(userId: string, email: string, name: string | null) {
-  const token = await createSessionToken(userId, email);
+export async function createSession(
+  userId: string,
+  email: string,
+  name: string | null,
+  role: "USER" | "ADMIN"
+) {
+  const token = await createSessionToken(userId, email, role);
   const expiresAt = new Date(Date.now() + TOKEN_TTL_SECONDS * 1000);
 
   // Catat token di DB. Kalau user logout atau di-ban, row ini dihapus →
@@ -172,7 +186,7 @@ export async function createSession(userId: string, email: string, name: string 
   });
 
   await setSessionCookie(token);
-  return { user: { id: userId, email, name } };
+  return { user: { id: userId, email, name, role } };
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +222,7 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, name: true },
+      select: { id: true, email: true, name: true, role: true },
     });
     return user || null;
   } catch {
@@ -255,6 +269,87 @@ export async function destroySession() {
     await prisma.session.delete({ where: { id: token } }).catch(() => undefined);
   }
   cookieStore.delete(COOKIE_NAME);
+}
+
+// ---------------------------------------------------------------------------
+// Role / permission helpers (untuk fitur Tugas)
+// ---------------------------------------------------------------------------
+
+/**
+ * Hard-require role=ADMIN. Throw ApiRequestError(403) kalau tidak.
+ * Pakai di API route yang butuh privilege global (mis. bikin course baru).
+ */
+export async function requireAdmin(): Promise<SessionUser> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new ApiRequestError(401, "Silakan masuk terlebih dahulu untuk melanjutkan.");
+  }
+  if (user.role !== "ADMIN") {
+    throw new ApiRequestError(403, "Hanya admin yang boleh melakukan aksi ini.");
+  }
+  return user;
+}
+
+/**
+ * Cek apakah user adalah admin dari course tertentu.
+ * Return true kalau:
+ *   - user.role === 'ADMIN' (admin global) ATAU
+ *   - ada row di tabel CourseAdmin untuk (courseId, userId).
+ *
+ * @param userId - id user yang mau dicek
+ * @param courseId - id course yang mau dicek aksesnya
+ */
+export async function isCourseAdmin(userId: string, courseId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { role: true },
+  });
+  if (!user) return false;
+  if (user.role === "ADMIN") return true;
+
+  const adminRow = await prisma.courseAdmin.findUnique({
+    where: { courseId_userId: { courseId, userId } },
+    select: { id: true },
+  });
+  return Boolean(adminRow);
+}
+
+/**
+ * Hard-require course admin. Throw ApiRequestError(401|403) kalau tidak.
+ * Pakai di API route yang butuh akses per-course (mis. CRUD tugas).
+ */
+export async function requireCourseAdmin(courseId: string): Promise<SessionUser> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new ApiRequestError(401, "Silakan masuk terlebih dahulu untuk melanjutkan.");
+  }
+  const allowed = await isCourseAdmin(user.id, courseId);
+  if (!allowed) {
+    throw new ApiRequestError(403, "Kamu bukan admin untuk course ini.");
+  }
+  return user;
+}
+
+/**
+ * Hard-require course creator (bukan co-admin). Buat aksi sensitif
+ * seperti menambah admin lain (anti privilege escalation berlapis).
+ */
+export async function requireCourseCreator(courseId: string): Promise<SessionUser> {
+  const user = await getCurrentUser();
+  if (!user) {
+    throw new ApiRequestError(401, "Silakan masuk terlebih dahulu untuk melanjutkan.");
+  }
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { createdById: true },
+  });
+  if (!course) {
+    throw new ApiRequestError(404, "Course tidak ditemukan.");
+  }
+  if (course.createdById !== user.id && user.role !== "ADMIN") {
+    throw new ApiRequestError(403, "Hanya pembuat course yang boleh melakukan aksi ini.");
+  }
+  return user;
 }
 
 // ---------------------------------------------------------------------------

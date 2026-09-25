@@ -77,11 +77,11 @@ export async function POST(req: Request) {
     const passwordHash = await hashPassword(password);
     const user = await prisma.user.create({
       data: { email, passwordHash, name: name || null },
-      select: { id: true, email: true, name: true },
+      select: { id: true, email: true, name: true, role: true },
     });
 
     // createSession() bikin JWT 30 hari + catat di tabel sessions + set httpOnly cookie.
-    const session = await createSession(user.id, user.email, user.name);
+    const session = await createSession(user.id, user.email, user.name, user.role);
     return NextResponse.json(
       { success: true, user: session.user },
       { headers: { "Cache-Control": "no-store" } }

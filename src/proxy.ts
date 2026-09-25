@@ -49,6 +49,8 @@ import { enforceRateLimit } from "@/lib/server/request-guards";
 /**
  * Path API yang WAJIB terautentikasi.
  * Setiap prefix dicocokkan dengan `pathname.startsWith(prefix)`.
+ *
+ * Endpoint publik di-explicit-skip di bawah (lihat PUBLIC_API_EXACT_PATHS).
  */
 const PROTECTED_API_PREFIXES = [
   "/api/report-jobs/",
@@ -58,11 +60,25 @@ const PROTECTED_API_PREFIXES = [
   "/api/studio/",
   "/api/files/",
   "/api/auth/me",
+  "/api/tugas/",
+];
+
+/**
+ * Path API yang publik (skip auth check).
+ * `/api/tugas/courses/by-token` dipakai mahasiswa untuk lihat detail course
+ * pakai token — sengaja publik, tapi di-handler tetap rate-limit per-IP.
+ */
+const PUBLIC_API_EXACT_PATHS = [
+  "/api/tugas/courses/by-token",
 ];
 
 /**
  * Path page (UI) yang WAJIB login.
  * User yang belum login akan di-redirect ke /login?redirect=<path>.
+ *
+ * Tugas pages tidak di-protect di sini — banyak path yang read-only untuk
+ * publik (mis. /tugas/[token] view course). Page handler masing-masing
+ * handle auth state sendiri. `/tugas/admin` juga dicek di page level.
  */
 const PROTECTED_PAGE_PREFIXES = [
   "/studio",
@@ -86,8 +102,9 @@ const JWT_SECRET = new TextEncoder().encode(
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Skip publik endpoint (waitlist rate-limit dirinya sendiri per-IP).
+  // Skip publik endpoint (waitlist + by-token course lookup rate-limit dirinya sendiri).
   if (pathname === "/api/waitlist") return NextResponse.next();
+  if (PUBLIC_API_EXACT_PATHS.includes(pathname)) return NextResponse.next();
 
   const isProtectedApi = PROTECTED_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const isProtectedPage = PROTECTED_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
