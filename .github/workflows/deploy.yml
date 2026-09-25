@@ -92,16 +92,33 @@ jobs:
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          echo "Uploading bundle.zip to ${CPANEL_HOST}..."
+          echo "CPANEL_DIR=${CPANEL_DIR}"
+          # Diagnostic: list server root before upload to confirm path
+          echo "--- pre-upload list of CPANEL_DIR ---"
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
+            | head -c 2000
+          echo ""
+          echo "--- end pre-upload ---"
+          echo "Uploading bundle.zip to ${CPANEL_DIR}..."
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -F "file=@bundle.zip" \
             -F "dir=${CPANEL_DIR}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files")
-          echo "HTTP $http_code"
+          echo "Upload HTTP $http_code"
           cat /tmp/upload_resp
           echo ""
+          # Diagnostic: verify upload landed
+          echo "--- post-upload list of CPANEL_DIR ---"
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
+            | head -c 2000
+          echo ""
+          echo "--- end post-upload ---"
           if [[ "$http_code" != "200" ]]; then
             echo "::error::Upload failed"
             exit 1
@@ -114,27 +131,44 @@ jobs:
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          echo "Extracting ${CPANEL_DIR}/bundle.zip via Fileman::uncompress..."
-          # Sanity check: list file exists
-          ls_resp=$(curl -sS \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-          if ! echo "$ls_resp" | grep -q '"name":"bundle.zip"'; then
-            echo "::warning::bundle.zip tidak ada di ${CPANEL_DIR} — skip extract."
-            echo "  Upload mungkin gagal; cek step 'Upload ZIP via cPanel UAPI' di atas."
+          echo "CPANEL_DIR=${CPANEL_DIR}"
+          # Cari bundle.zip di CPANEL_DIR atau di public_html/<basename>/ — JKC DocumentRoot
+          # = public_html/, Passenger serve dari public_html/keluhkampus.my.id/. Kalau
+          # CPANEL_DIR adalah /home/keluhkam/keluhkampus.my.id (tanpa public_html), upload
+          # & extract ke path itu artinya Passenger tidak baca sama sekali.
+          BASENAME="${CPANEL_DIR##*/}"   # "keluhkampus.my.id"
+          ALT_DIR="/home/${CPANEL_USER}/public_html/${BASENAME}"
+          echo "ALT_DIR=${ALT_DIR}"
+          find_zip=""
+          for d in "${CPANEL_DIR}" "${ALT_DIR}"; do
+            echo "--- probing ${d} ---"
+            r=$(curl -sS \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
+            echo "${r}" | head -c 1500
+            echo ""
+            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
+              find_zip="${d}"
+              echo "✓ bundle.zip ditemukan di ${d}"
+              break
+            fi
+          done
+          if [[ -z "${find_zip}" ]]; then
+            echo "::warning::bundle.zip tidak ada di CPANEL_DIR maupun public_html/ — cek upload step."
             exit 0
           fi
           # Extract via UAPI
+          echo "Extracting ${find_zip}/bundle.zip via Fileman::uncompress..."
           http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "type=zip" \
-            --data-urlencode "sourcefile=${CPANEL_DIR}/bundle.zip" \
-            --data-urlencode "file=${CPANEL_DIR}" \
-            --data-urlencode "destdir=${CPANEL_DIR}" \
+            --data-urlencode "sourcefile=${find_zip}/bundle.zip" \
+            --data-urlencode "file=${find_zip}" \
+            --data-urlencode "destdir=${find_zip}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/uncompress")
-          echo "HTTP $http_code"
+          echo "Extract HTTP $http_code"
           cat /tmp/extract_resp
           echo ""
           if [[ "$http_code" != "200" ]]; then
@@ -145,20 +179,19 @@ jobs:
           sleep 2
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${find_zip}&limit=500")
           if ! echo "$verify_resp" | grep -q '"name":"node_modules"'; then
             echo "::warning::Extract selesai tapi node_modules tidak terlihat. Cek manual."
             exit 1
           fi
-          echo "✓ Extract OK — node_modules present"
+          echo "✓ Extract OK — node_modules present di ${find_zip}"
           # Hapus bundle.zip setelah sukses (cleanup)
-          http_code=$(curl -sS -o /tmp/rm_resp -w "%{http_code}" \
+          curl -sS -o /tmp/rm_resp -w "Delete HTTP %{http_code}\n" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "files=${CPANEL_DIR}/bundle.zip" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true)
-          echo "Delete bundle.zip HTTP $http_code"
+            --data-urlencode "files=${find_zip}/bundle.zip" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
           cat /tmp/rm_resp 2>/dev/null || true
           echo ""
 
