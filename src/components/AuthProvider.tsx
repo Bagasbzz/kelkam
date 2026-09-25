@@ -34,6 +34,30 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 // ---------------------------------------------------------------------------
+// Module-level modal trigger
+// ---------------------------------------------------------------------------
+
+/**
+ * Event emitter supaya komponen manapun bisa minta buka modal login,
+ * tanpa harus nge-bubble callback lewat props.
+ *
+ * AuthMenu subscribe ke ini (lihat useEffect di bawah) — dia satu-satunya
+ * yang render modal login (state-nya lokal supaya gak re-render seluruh app).
+ */
+let loginModalListeners = new Set<() => void>();
+
+function emitLoginModal() {
+  for (const fn of loginModalListeners) fn();
+}
+
+export function subscribeLoginModal(fn: () => void) {
+  loginModalListeners.add(fn);
+  return () => {
+    loginModalListeners.delete(fn);
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -41,6 +65,7 @@ interface AuthUser {
   id: string;
   email: string;
   name: string | null;
+  role: "USER" | "ADMIN";
 }
 
 interface AuthContextValue {
@@ -50,6 +75,15 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   register: (email: string, password: string, name?: string) => Promise<{ ok: boolean; error?: string }>;
   logout: () => Promise<void>;
+  /**
+   * Trigger global login modal dari komponen manapun. Berguna untuk CTA
+   * "Login untuk submit" di halaman Tugas yang posisinya di luar Navbar.
+   *
+   * Implementasi: AuthMenu subscribe ke event ini via state global (lihat
+   * file ini — kita pakai `authModalOpen` setter yang di-share lewat
+   * module-level event emitter supaya AuthMenu bisa re-render).
+   */
+  openLoginModal: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,9 +167,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  /** Buka modal login dari komponen manapun. Bridge ke AuthMenu via event. */
+  const openLoginModal = useCallback(() => {
+    emitLoginModal();
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, loading, refresh, login, register, logout }),
-    [user, loading, refresh, login, register, logout]
+    () => ({ user, loading, refresh, login, register, logout, openLoginModal }),
+    [user, loading, refresh, login, register, logout, openLoginModal]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

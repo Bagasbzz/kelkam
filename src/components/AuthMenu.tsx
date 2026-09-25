@@ -25,9 +25,9 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LogIn, LogOut, UserRound, X } from "lucide-react";
-import { useAuth } from "@/components/AuthProvider";
+import { subscribeLoginModal, useAuth } from "@/components/AuthProvider";
 
 export default function AuthMenu() {
   const { user, loading, login, logout } = useAuth();
@@ -38,6 +38,12 @@ export default function AuthMenu() {
   const [name, setName] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Subscribe ke global trigger supaya komponen manapun (mis. SubmissionForm)
+  // bisa minta buka modal login tanpa harus lewat props drilling.
+  useEffect(() => {
+    return subscribeLoginModal(() => setOpen(true));
+  }, []);
 
   /**
    * Submit handler. Mode 'register' dipanggil langsung ke /api/auth/register

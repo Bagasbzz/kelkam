@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { GraduationCap, Workflow, BookOpen, FileText, LayoutDashboard, LayoutTemplate, Sparkles, BarChart3, BrainCircuit } from "lucide-react";
+import { GraduationCap, Workflow, BookOpen, FileText, LayoutDashboard, LayoutTemplate, Sparkles, BarChart3, BrainCircuit, ClipboardList } from "lucide-react";
 import { useState, useEffect } from "react";
 import AuthMenu from "@/components/AuthMenu";
 
@@ -42,6 +42,7 @@ export default function Navbar() {
     { href: "/fix-format", label: "Format", icon: FileText },
     { href: "/template-generator", label: "Editor", icon: LayoutTemplate },
     { href: "/tracker", label: "Tracker", icon: BarChart3 },
+    { href: "/tugas", label: "Tugas", icon: ClipboardList },
   ];
 
   return (
