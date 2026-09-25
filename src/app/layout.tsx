@@ -6,6 +6,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "keluhkampus | Platform Berbagai Tools Mahasiswa",
   description: "Platform berbagai tools mahasiswa untuk mempermudah pengerjaan tugas kuliahmu.",
+  icons: { icon: "/icon.svg" },
 };
 
 export default function RootLayout({
