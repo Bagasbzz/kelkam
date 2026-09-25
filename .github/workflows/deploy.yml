@@ -107,35 +107,60 @@ jobs:
             exit 1
           fi
 
-      - name: Wait for cron to extract bundle.zip
+      - name: Extract bundle.zip via cPanel UAPI (no cron dependency)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
-        continue-on-error: true
         run: |
-          echo "bundle.zip uploaded (size below). Extraction is handled by a cPanel cron job (runs every minute)."
-          curl -sS \
+          echo "Extracting ${CPANEL_DIR}/bundle.zip via Fileman::uncompress..."
+          # Sanity check: list file exists
+          ls_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
-            | head -c 1500
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          if ! echo "$ls_resp" | grep -q '"name":"bundle.zip"'; then
+            echo "::warning::bundle.zip tidak ada di ${CPANEL_DIR} — skip extract."
+            echo "  Upload mungkin gagal; cek step 'Upload ZIP via cPanel UAPI' di atas."
+            exit 0
+          fi
+          # Extract via UAPI
+          http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "type=zip" \
+            --data-urlencode "sourcefile=${CPANEL_DIR}/bundle.zip" \
+            --data-urlencode "file=${CPANEL_DIR}" \
+            --data-urlencode "destdir=${CPANEL_DIR}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/uncompress")
+          echo "HTTP $http_code"
+          cat /tmp/extract_resp
           echo ""
+          if [[ "$http_code" != "200" ]]; then
+            echo "::error::Fileman::uncompress gagal (HTTP $http_code). Cek response di atas."
+            exit 1
+          fi
+          # Verify node_modules muncul
+          sleep 2
+          verify_resp=$(curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          if ! echo "$verify_resp" | grep -q '"name":"node_modules"'; then
+            echo "::warning::Extract selesai tapi node_modules tidak terlihat. Cek manual."
+            exit 1
+          fi
+          echo "✓ Extract OK — node_modules present"
+          # Hapus bundle.zip setelah sukses (cleanup)
+          http_code=$(curl -sS -o /tmp/rm_resp -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "files=${CPANEL_DIR}/bundle.zip" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true)
+          echo "Delete bundle.zip HTTP $http_code"
+          cat /tmp/rm_resp 2>/dev/null || true
           echo ""
-          echo "Polling for node_modules to appear on server (up to 240s = 4 cron cycles)..."
-          for i in 1 2 3 4 5 6 7 8; do
-            sleep 30
-            verify_resp=$(curl -sS \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-            if echo "$verify_resp" | grep -q '"name":"node_modules"'; then
-              echo "✓ Cron extracted bundle.zip — node_modules present on server after $((i*30))s"
-              exit 0
-            fi
-            echo "  ...still waiting ($((i*30))s elapsed)"
-          done
-          echo "::warning::Cron did not extract within 240s. .env + restart will run anyway — verify in cPanel File Manager that node_modules has recent timestamp."
-          echo "::warning::If extraction didn't run, manually: cd ${CPANEL_DIR} && unzip -o bundle.zip && touch tmp/restart.txt && rm bundle.zip"
 
       - name: Trigger Passenger restart
         env:
