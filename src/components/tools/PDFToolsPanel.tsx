@@ -47,6 +47,12 @@ export function PDFToolsPanel() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: "info" | "success" | "warn"; message: string } | null>(null);
 
+  // Per-tool option state
+  const [splitRange, setSplitRange] = useState("1-3");
+  const [rotateAngle, setRotateAngle] = useState<90 | 180 | 270>(90);
+  const [watermarkText, setWatermarkText] = useState("CONFIDENTIAL");
+  const [cropRect, setCropRect] = useState("0,0,400,600");
+
   const tool = TOOLS.find((t) => t.id === active)!;
   const requireFiles = !["img2pdf"].includes(active);
 
@@ -63,8 +69,8 @@ export function PDFToolsPanel() {
     setBusy(true);
     setResult(null);
     try {
-      await runTool(active, files, setResult);
-      setResult((r) => r ?? { tone: "success", message: "Selesai. File sudah di-download." });
+      const info = await runTool(active, files, { splitRange, rotateAngle, watermarkText, cropRect });
+      setResult(info ? { tone: "info", message: info } : { tone: "success", message: "Selesai. File sudah di-download." });
     } catch (err) {
       setResult({ tone: "warn", message: err instanceof Error ? err.message : "Gagal." });
     } finally {
@@ -93,7 +99,73 @@ export function PDFToolsPanel() {
           <FileListPreview files={files} onRemove={(i) => setFiles(files.filter((_, idx) => idx !== i))} />
         </div>
       }
-      children={<ToolOptions active={active} onResult={setResult} />}
+      children={
+        <div className="space-y-4">
+          {active === "split" && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 px-2 mb-2">
+                Range halaman
+              </label>
+              <input
+                value={splitRange}
+                onChange={(e) => setSplitRange(e.target.value)}
+                placeholder="1-3,5,7-9"
+                className="w-full rounded-2xl bg-slate-50 border-2 border-transparent px-6 py-3 font-mono text-sm focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none"
+              />
+              <p className="mt-2 text-xs text-slate-500 px-2">Contoh: <code>1-3,5</code> → halaman 1,2,3,5.</p>
+            </div>
+          )}
+          {active === "rotate" && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 px-2 mb-2">
+                Sudut rotasi
+              </label>
+              <div className="flex gap-2">
+                {([90, 180, 270] as const).map((deg) => (
+                  <button
+                    key={deg}
+                    type="button"
+                    onClick={() => setRotateAngle(deg)}
+                    className={`flex-1 rounded-xl px-4 py-2 text-sm font-bold transition ${
+                      rotateAngle === deg
+                        ? "bg-blue-600 text-white shadow-md shadow-blue-500/30"
+                        : "bg-slate-50 text-slate-600 hover:bg-slate-100"
+                    }`}
+                  >
+                    {deg}°
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {active === "watermark" && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 px-2 mb-2">
+                Teks watermark
+              </label>
+              <input
+                value={watermarkText}
+                onChange={(e) => setWatermarkText(e.target.value)}
+                placeholder="CONFIDENTIAL"
+                className="w-full rounded-2xl bg-slate-50 border-2 border-transparent px-6 py-3 text-sm focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none"
+              />
+            </div>
+          )}
+          {active === "crop" && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 px-2 mb-2">
+                Crop box (x, y, w, h) — pisahkan dengan koma
+              </label>
+              <input
+                value={cropRect}
+                onChange={(e) => setCropRect(e.target.value)}
+                placeholder="0,0,400,600"
+                className="w-full rounded-2xl bg-slate-50 border-2 border-transparent px-6 py-3 font-mono text-sm focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none"
+              />
+            </div>
+          )}
+        </div>
+      }
       runButton={
         <RunButton
           busy={busy}
@@ -123,68 +195,49 @@ function actionLabel(id: string): string {
   return map[id] ?? "Proses";
 }
 
-interface RunToolOpts {
-  active: string;
-  files: File[];
-  setResult: (r: { tone: "info" | "success" | "warn"; message: string } | null) => void;
-}
-
 async function runTool(
   id: string,
   files: File[],
-  setResult: (r: { tone: "info" | "success" | "warn"; message: string } | null) => void,
-): Promise<void> {
+  opts: { splitRange: string; rotateAngle: 90 | 180 | 270; watermarkText: string; cropRect: string },
+): Promise<string | null> {
   switch (id) {
     case "merge":
       await mergePdfs(files);
-      return;
-    case "split": {
-      const range = window.prompt("Range halaman (contoh: 1-3,5,7-9)") ?? "";
-      await splitPdf(files[0], range);
-      return;
-    }
+      return null;
+    case "split":
+      await splitPdf(files[0], opts.splitRange);
+      return null;
     case "compress":
       await compressPdf(files[0]);
-      return;
+      return null;
     case "pdf2img":
       await pdfToImages(files[0]);
-      return;
+      return null;
     case "img2pdf":
       await imagesToPdf(files);
-      return;
-    case "rotate": {
-      const raw = window.prompt("Sudut rotasi (90 / 180 / 270)?", "90") ?? "90";
-      const angle = Number(raw);
-      if (![90, 180, 270].includes(angle)) throw new Error("Sudut harus 90/180/270.");
-      await rotatePdf(files[0], angle);
-      return;
-    }
-    case "watermark": {
-      const text = window.prompt("Teks watermark?", "CONFIDENTIAL") ?? "";
-      await watermarkPdf(files[0], text);
-      return;
-    }
+      return null;
+    case "rotate":
+      await rotatePdf(files[0], opts.rotateAngle);
+      return null;
+    case "watermark":
+      await watermarkPdf(files[0], opts.watermarkText);
+      return null;
     case "extract": {
       const text = await extractPdfText(files[0]);
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       saveAsBlob(blob, "extracted.txt");
-      setResult({ tone: "info", message: `Berhasil extract ${text.length} karakter.` });
-      return;
+      return `Berhasil extract ${text.length} karakter.`;
     }
     case "pages":
       await addPageNumbers(files[0]);
-      return;
+      return null;
     case "crop": {
-      const raw = window.prompt(
-        "Crop box (x,y,w,h) — pisahkan dengan koma:",
-        "0,0,400,600",
-      ) ?? "0,0,400,600";
-      const parts = raw.split(",").map((n) => Number(n.trim()));
+      const parts = opts.cropRect.split(",").map((n) => Number(n.trim()));
       if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
-        throw new Error("Format crop: 4 angka dipisah koma.");
+        throw new Error("Format crop: 4 angka dipisah koma (x,y,w,h).");
       }
       await cropPdf(files[0], { x: parts[0], y: parts[1], width: parts[2], height: parts[3] });
-      return;
+      return null;
     }
   }
 }
@@ -196,24 +249,4 @@ function saveAsBlob(blob: Blob, filename: string) {
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-// ---------------------------------------------------------------------------
-// Per-tool options (extra inputs inline). Saat ini masih pakai window.prompt
-// — untuk iterasi berikutnya bisa ganti ke inline form yang lebih ramah.
-// Tetap di-render supaya shell tidak berubah bentuk.
-// ---------------------------------------------------------------------------
-
-function ToolOptions({ active }: { active: string; onResult: (r: { tone: "info" | "success" | "warn"; message: string } | null) => void }) {
-  return (
-    <div className="mt-2 text-xs text-slate-500">
-      {active === "split" && <p>Setelah klik proses, masukkan range halaman (mis. <code>1-3,5</code>).</p>}
-      {active === "rotate" && <p>Setelah klik proses, masukkan sudut: 90 / 180 / 270.</p>}
-      {active === "watermark" && <p>Setelah klik proses, masukkan teks watermark.</p>}
-      {active === "crop" && <p>Setelah klik proses, masukkan koordinat <code>x,y,w,h</code>.</p>}
-      {(active === "merge" || active === "compress" || active === "pdf2img" || active === "img2pdf" || active === "pages" || active === "extract") && (
-        <p>Langsung klik tombol proses — semua parameter ada di file yang dipilih.</p>
-      )}
-    </div>
-  );
 }

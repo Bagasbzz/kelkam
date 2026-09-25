@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { CalendarClock, Pencil, Trash2, FileText, Tag } from "lucide-react";
 import Button from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import CountdownTimer from "./CountdownTimer";
 import type { TugasSummary } from "@/lib/client/tugas-api";
 
@@ -44,6 +46,7 @@ export default function TugasCard({
   onDelete,
   submissionsCount,
 }: TugasCardProps) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -99,11 +102,7 @@ export default function TugasCard({
                   variant="danger"
                   size="sm"
                   icon={Trash2}
-                  onClick={() => {
-                    if (confirm(`Hapus tugas "${tugas.title}"? Semua submission ikut terhapus.`)) {
-                      onDelete(tugas);
-                    }
-                  }}
+                  onClick={() => setConfirmDelete(true)}
                 >
                   Hapus
                 </Button>
@@ -118,6 +117,26 @@ export default function TugasCard({
           )}
         </div>
       </div>
+
+      {onDelete && (
+        <ConfirmDialog
+          open={confirmDelete}
+          title={`Hapus tugas "${tugas.title}"?`}
+          message={
+            <>
+              Tindakan ini tidak bisa dibatalkan. Semua submission terkait
+              (termasuk file yang di-upload) akan ikut terhapus.
+            </>
+          }
+          confirmLabel="Hapus"
+          tone="danger"
+          onConfirm={() => {
+            setConfirmDelete(false);
+            onDelete(tugas);
+          }}
+          onCancel={() => setConfirmDelete(false)}
+        />
+      )}
     </div>
   );
 }

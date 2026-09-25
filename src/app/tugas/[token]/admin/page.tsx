@@ -43,6 +43,7 @@ export default function CourseAdminDashboard() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -76,11 +77,12 @@ export default function CourseAdminDashboard() {
   }, [user, authLoading, loadAll]);
 
   async function onDelete(t: TugasSummary) {
+    setDeleteError(null);
     try {
       await deleteTugas(t.id);
       await loadAll();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal hapus tugas.");
+      setDeleteError(err instanceof Error ? err.message : "Gagal hapus tugas.");
     }
   }
 
@@ -209,6 +211,20 @@ export default function CourseAdminDashboard() {
               Bikin Tugas
             </Button>
           </div>
+
+          {deleteError && (
+            <div className="mt-4 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <span className="font-bold">Gagal hapus tugas:</span>
+              <span>{deleteError}</span>
+              <button
+                type="button"
+                onClick={() => setDeleteError(null)}
+                className="ml-auto text-xs font-bold text-red-700 hover:underline"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
 
           <div className="mt-5 space-y-3">
             {tugases.length === 0 ? (
