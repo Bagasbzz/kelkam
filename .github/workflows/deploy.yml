@@ -68,24 +68,22 @@ jobs:
           rm -rf deploy bundle.zip
           mkdir -p deploy/tmp
           touch deploy/tmp/restart.txt
+          # .next/standalone/ SUDAH self-contained: ada server.js, node_modules produksi
+          # (argon2/prisma prebuilds), prisma/, package.json. Tinggal tambah .next/static
+          # (untuk _next/static/* assets) + public/ (untuk favicon, robots.txt, dll).
           cp -r .next/standalone/. deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
-          cp -r prisma deploy/prisma
-          cp package.json deploy/package.json
-          cp package-lock.json deploy/package-lock.json
-          cp server.js deploy/server.js
-          # Bundle production node_modules dari runner (sudah di-build di Ubuntu
-          # yang punya argon2/prisma build tools lengkap — JKC shared hosting gagal compile).
-          # CloudLinux akan pakai folder ini langsung, bukan create symlink ke nodevenv.
-          cp -r node_modules deploy/node_modules
-          echo "node_modules bundled from runner ($(du -sh node_modules | cut -f1))"
+          echo "Bundle sources:"
+          echo "  .next/standalone/: $(du -sh .next/standalone | cut -f1)"
+          echo "  .next/static:     $(du -sh .next/static | cut -f1)"
+          echo "  public:           $(du -sh public | cut -f1)"
           cd deploy
           zip -qr ../bundle.zip .
           cd ..
-          echo "Bundle size: $(du -sh bundle.zip | cut -f1)"
+          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
 
-      - name: Upload ZIP via FTPS (bypass PHP upload limits)
+      - name: Upload ZIP via cPanel UAPI (Fileman::upload_files)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -93,40 +91,39 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "CPANEL_DIR=${CPANEL_DIR}"
-          # Diagnostik: pre-upload state di kedua kandidat path
-          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
-            echo "--- pre-upload list ${d} ---"
-            curl -sS \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500" \
-              | head -c 1500
-            echo ""
-          done
-          echo "--- end pre-upload ---"
-          # Upload via FTPS (native protocol, no PHP limits). cPanel modern terima
-          # API token sebagai FTP password. FTP root = /home/${CPANEL_USER}, jadi
-          # path relatif = strip prefix /home/${CPANEL_USER}/ dari CPANEL_DIR.
-          REL_PATH="${CPANEL_DIR#/home/${CPANEL_USER}/}"
-          FTP_TARGET="ftps://${CPANEL_HOST}/${REL_PATH}/bundle.zip"
-          echo "FTPS target: ${FTP_TARGET}"
-          echo "Uploading bundle.zip..."
-          curl --ssl -sS -o /tmp/upload_resp -w "curl_exit=%{http_code} bytes_uploaded=%{size_upload}\n" \
-            --connect-timeout 30 \
-            -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -T bundle.zip \
-            "${FTP_TARGET}" 2> /tmp/upload_err
-          echo "stderr:"; cat /tmp/upload_err 2>/dev/null
-          echo "resp:"; cat /tmp/upload_resp 2>/dev/null
+          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
+          # Diagnostic: list server dir sebelum upload
+          echo "--- pre-upload list ${CPANEL_DIR} ---"
+          curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
+            | head -c 1500
           echo ""
-          # Verifikasi: bundle.zip harus muncul di salah satu path
-          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
-            r=$(curl -sS \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
-            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
-              echo "✓ bundle.zip landing di ${d}"
-            fi
-          done
+          echo "--- end pre-upload ---"
+          # Upload via Fileman (sized untuk fit PHP upload limit; bundle sekarang ~80MB,
+          # node_modules TIDAK lagi di-copy dari runner karena .next/standalone sudah
+          # self-contained dengan argon2/prisma prebuilds).
+          http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -F "file=@bundle.zip" \
+            -F "dir=${CPANEL_DIR}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files")
+          echo "Upload HTTP $http_code"
+          cat /tmp/upload_resp
+          echo ""
+          # Verifikasi upload landing
+          echo "--- post-upload list ${CPANEL_DIR} ---"
+          post=$(curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          echo "${post}" | head -c 1500
+          echo ""
+          if ! echo "${post}" | grep -q '"name":"bundle.zip"'; then
+            echo "::error::bundle.zip tidak muncul di ${CPANEL_DIR} setelah upload — PHP upload limit?"
+            exit 1
+          fi
+          echo "✓ bundle.zip landing di ${CPANEL_DIR}"
 
       - name: Extract bundle.zip via cPanel UAPI (no cron dependency)
         env:
