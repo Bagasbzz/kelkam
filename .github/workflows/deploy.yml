@@ -30,13 +30,25 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
         run: |
+          echo "DATABASE_URL set: $([[ -n "${DATABASE_URL}" ]] && echo yes || echo NO)"
+          echo "DIRECT_URL set:   $([[ -n "${DIRECT_URL}" ]] && echo yes || echo NO)"
           if [[ -z "${DATABASE_URL}" || -z "${DIRECT_URL}" ]]; then
-            echo "::warning::DATABASE_URL or DIRECT_URL secret belum diset. Lewati migration step."
-            echo "  → Settings → Secrets and variables → Actions → tambah DATABASE_URL + DIRECT_URL"
-            echo "  → Setelah secret tersedia, migration akan auto-run di push berikutnya"
+            echo "::warning::DATABASE_URL atau DIRECT_URL belum diset di GitHub Secrets."
+            echo "  → Settings → Secrets and variables → Actions → tambah 2 secret ini"
+            echo "  → Sementara, code baru tetap di-upload; migration apply manual via:"
+            echo "  →   cPanel Terminal: cd /home/keluhkam/... && DATABASE_URL=... DIRECT_URL=... npx prisma migrate deploy"
             exit 0
           fi
-          npx prisma migrate deploy --schema prisma/schema.prisma
+          # Coba migrate; kalau gagal, log jelas tapi JANGAN block build+upload.
+          set +e
+          npx prisma migrate deploy --schema prisma/schema.prisma 2>&1 | tee /tmp/migrate.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::warning::prisma migrate deploy gagal (exit $rc). Lanjut upload bundle."
+            echo "  → Cek /tmp/migrate.log di workflow artifacts, atau run manual di server."
+          fi
+          exit 0
 
       - name: Build Next.js standalone
         env:
