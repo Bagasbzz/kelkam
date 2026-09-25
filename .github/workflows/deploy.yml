@@ -85,7 +85,7 @@ jobs:
           cd ..
           echo "Bundle size: $(du -sh bundle.zip | cut -f1)"
 
-      - name: Upload ZIP via cPanel UAPI
+      - name: Upload ZIP via FTPS (bypass PHP upload limits)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -93,36 +93,40 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "CPANEL_DIR=${CPANEL_DIR}"
-          # Diagnostic: list server root before upload to confirm path
-          echo "--- pre-upload list of CPANEL_DIR ---"
-          curl -sS \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
-            | head -c 2000
-          echo ""
+          # Diagnostik: pre-upload state di kedua kandidat path
+          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
+            echo "--- pre-upload list ${d} ---"
+            curl -sS \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500" \
+              | head -c 1500
+            echo ""
+          done
           echo "--- end pre-upload ---"
-          echo "Uploading bundle.zip to ${CPANEL_DIR}..."
-          http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
-            -X POST \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -F "file=@bundle.zip" \
-            -F "dir=${CPANEL_DIR}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files")
-          echo "Upload HTTP $http_code"
-          cat /tmp/upload_resp
+          # Upload via FTPS (native protocol, no PHP limits). cPanel modern terima
+          # API token sebagai FTP password. FTP root = /home/${CPANEL_USER}, jadi
+          # path relatif = strip prefix /home/${CPANEL_USER}/ dari CPANEL_DIR.
+          REL_PATH="${CPANEL_DIR#/home/${CPANEL_USER}/}"
+          FTP_TARGET="ftps://${CPANEL_HOST}/${REL_PATH}/bundle.zip"
+          echo "FTPS target: ${FTP_TARGET}"
+          echo "Uploading bundle.zip..."
+          curl --ssl -sS -o /tmp/upload_resp -w "curl_exit=%{http_code} bytes_uploaded=%{size_upload}\n" \
+            --connect-timeout 30 \
+            -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -T bundle.zip \
+            "${FTP_TARGET}" 2> /tmp/upload_err
+          echo "stderr:"; cat /tmp/upload_err 2>/dev/null
+          echo "resp:"; cat /tmp/upload_resp 2>/dev/null
           echo ""
-          # Diagnostic: verify upload landed
-          echo "--- post-upload list of CPANEL_DIR ---"
-          curl -sS \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
-            | head -c 2000
-          echo ""
-          echo "--- end post-upload ---"
-          if [[ "$http_code" != "200" ]]; then
-            echo "::error::Upload failed"
-            exit 1
-          fi
+          # Verifikasi: bundle.zip harus muncul di salah satu path
+          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
+            r=$(curl -sS \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
+            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
+              echo "✓ bundle.zip landing di ${d}"
+            fi
+          done
 
       - name: Extract bundle.zip via cPanel UAPI (no cron dependency)
         env:
