@@ -12,6 +12,8 @@
  *   410  : deadline sudah lewat (return Gone)
  *
  * Position di-assign atomic di dalam transaction (lihat position.ts).
+ * Race condition di-handle via `assignPositionWithRetry()` yang retry kalau
+ * kena unique constraint `(tugasId, position)`.
  * Kalau deadline lewat, status jadi 'LATE'.
  */
 import { NextResponse } from "next/server";
@@ -27,7 +29,7 @@ import {
   assertFileUploadOwnedBy,
   getTugasOrThrow,
 } from "@/lib/server/tugas/access";
-import { assignPosition } from "@/lib/server/tugas/position";
+import { assignPositionWithRetry, isPrismaUniqueViolation } from "@/lib/server/tugas/position";
 
 const SubmitSchema = z.object({
   classId: z.string().min(1, "Pilih kelas dulu."),
@@ -92,7 +94,7 @@ export async function POST(
 
     // Atomic: assign position + insert dalam transaction yang sama.
     const submission = await prisma.$transaction(async (tx) => {
-      const position = await assignPosition(tx, tugasId);
+      const { position } = await assignPositionWithRetry(tx, tugasId);
       return tx.tugasSubmission.create({
         data: {
           tugasId,
@@ -139,12 +141,21 @@ export async function POST(
     if (error instanceof ApiRequestError) {
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
     }
-    // P2002 dari unique (tugasId, userId) — race condition antara cek & insert.
-    const code = (error as { code?: string }).code;
-    if (code === "P2002") {
+    // P2002 — bisa jadi duplicate (tugasId, userId) ATAU race position (tugasId, position).
+    if (isPrismaUniqueViolation(error)) {
+      const target = (error as { meta?: { target?: string[] } }).meta?.target ?? [];
+      if (target.includes("tugas_id_user_id")) {
+        return NextResponse.json(
+          { success: false, error: "Kamu sudah mengumpulkan tugas ini." },
+          { status: 400 },
+        );
+      }
+      // Position race — seharusnya sudah di-retry di assignPositionWithRetry.
+      // Kalau sampai bocor, server sibuk.
+      console.warn("Position race bocor:", target);
       return NextResponse.json(
-        { success: false, error: "Kamu sudah mengumpulkan tugas ini." },
-        { status: 400 },
+        { success: false, error: "Server sedang sibuk, coba lagi sebentar." },
+        { status: 503 },
       );
     }
     console.error("API /api/tugas/tugas/[id]/submit failed:", error);

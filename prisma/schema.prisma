@@ -589,8 +589,12 @@ model TugasSubmission {
   status       SubmissionStatus @default(SUBMITTED) @map("status")
   submittedAt  DateTime         @default(now()) @map("submitted_at")
 
+  // (tugasId, userId) — satu user cuma boleh submit 1x per tugas.
   @@unique([tugasId, userId])
-  @@index([tugasId, position])
+  // (tugasId, position) — atomic position assignment + anti race condition
+  // saat dua submit masuk di detik yang sama. assignPosition() retry kalau
+  // kena P2002 di index ini.
+  @@unique([tugasId, position])
   @@index([tugasId, classId])
   @@index([userId])
   @@map("tugas_submissions")
