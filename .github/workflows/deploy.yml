@@ -25,6 +25,12 @@ jobs:
       - name: Generate Prisma client (semua binary targets dari schema.prisma)
         run: npx prisma generate
 
+      - name: Apply pending Prisma migrations to JKC Postgres
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+        run: npx prisma migrate deploy --schema prisma/schema.prisma
+
       - name: Build Next.js standalone
         env:
           NEXT_PUBLIC_SITE_URL: ${{ secrets.NEXT_PUBLIC_SITE_URL }}
