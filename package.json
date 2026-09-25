@@ -41,7 +41,6 @@
     "browser-image-compression": "^2.0.2",
     "docx": "^9.6.1",
     "file-saver": "^2.0.5",
-    "html-to-docx": "^1.8.0",
     "jose": "^5.9.6",
     "jszip": "^3.10.1",
     "lucide-react": "^0.577.0",

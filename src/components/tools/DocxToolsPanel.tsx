@@ -15,21 +15,17 @@
 import { useState } from "react";
 import { FileDropzone, FileListPreview } from "@/components/ui/FileDropzone";
 import { ToolPanelShell, RunButton, ResultBanner, type ToolDescriptor } from "./ToolPanelShell";
-import { docxToHtml, docxToMarkdown, docxToText, htmlToDocx, textToDocx } from "@/lib/client/docx-tools";
+import { docxToHtml, docxToMarkdown, docxToText } from "@/lib/client/docx-tools";
 
 const TOOLS: ToolDescriptor[] = [
   { id: "docx2html", label: "DOCX → HTML", description: "Convert file Word ke HTML." },
   { id: "docx2text", label: "DOCX → Text", description: "Ambil plain text dari Word." },
   { id: "docx2md", label: "DOCX → Markdown", description: "Best-effort markdown (heading heuristic)." },
-  { id: "html2docx", label: "HTML → DOCX", description: "Tulis HTML, download sebagai Word." },
-  { id: "text2docx", label: "Text → DOCX", description: "Tulis teks, download sebagai Word." },
 ];
 
 export function DocxToolsPanel() {
   const [active, setActive] = useState("docx2html");
   const [files, setFiles] = useState<File[]>([]);
-  const [html, setHtml] = useState("<h1>Halo</h1><p>Ini paragraf.</p>");
-  const [text, setText] = useState("Halo dunia.\n\nIni paragraf kedua.");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: "info" | "success" | "warn"; message: string } | null>(null);
   const tool = TOOLS.find((t) => t.id === active)!;
@@ -65,16 +61,6 @@ export function DocxToolsPanel() {
           setResult({ tone: "info", message: `Markdown ${out.length} karakter.` });
           break;
         }
-        case "html2docx": {
-          await htmlToDocx(html);
-          setResult({ tone: "success", message: "File .docx sudah di-download." });
-          break;
-        }
-        case "text2docx": {
-          await textToDocx(text);
-          setResult({ tone: "success", message: "File .docx sudah di-download." });
-          break;
-        }
       }
     } catch (err) {
       setResult({ tone: "warn", message: err instanceof Error ? err.message : "Gagal." });
@@ -94,36 +80,16 @@ export function DocxToolsPanel() {
       title="DOCX Tools"
       subtitle={tool.description}
       filePicker={
-        active !== "html2docx" && active !== "text2docx" ? (
-          <div className="mb-4">
-            <FileDropzone
-              accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-              onFiles={setFiles}
-              hint="1 file .docx"
-            />
-            <FileListPreview files={files} onRemove={(i) => setFiles(files.filter((_, idx) => idx !== i))} />
-          </div>
-        ) : null
-      }
-      children={
-        active === "html2docx" ? (
-          <textarea
-            value={html}
-            onChange={(e) => setHtml(e.target.value)}
-            rows={10}
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none"
-            placeholder="<p>Tulis HTML di sini...</p>"
+        <div className="mb-4">
+          <FileDropzone
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onFiles={setFiles}
+            hint="1 file .docx"
           />
-        ) : active === "text2docx" ? (
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={10}
-            className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-50 outline-none"
-            placeholder="Tulis teks di sini..."
-          />
-        ) : null
+          <FileListPreview files={files} onRemove={(i) => setFiles(files.filter((_, idx) => idx !== i))} />
+        </div>
       }
+      children={null}
       runButton={<RunButton busy={busy} disabled={false} onClick={onRun} label="Proses" />}
       result={result && <ResultBanner tone={result.tone}>{result.message}</ResultBanner>}
     />

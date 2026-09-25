@@ -16,9 +16,13 @@
 "use client";
 
 import * as pdfjsLib from "pdfjs-dist";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore — ?url import di-handle Next.js webpack, return string URL.
-import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+// Resolve worker URL via runtime URL constructor — Turbopack-compatible
+// (tidak butuh `?url` import yang return default export).
+const pdfWorkerUrl = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
 
 let configured = false;
 

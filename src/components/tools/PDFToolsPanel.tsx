@@ -239,6 +239,8 @@ async function runTool(
       await cropPdf(files[0], { x: parts[0], y: parts[1], width: parts[2], height: parts[3] });
       return null;
     }
+    default:
+      return null;
   }
 }
 

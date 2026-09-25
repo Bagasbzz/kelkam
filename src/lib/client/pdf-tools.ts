@@ -46,7 +46,7 @@ export async function mergePdfs(files: File[]): Promise<void> {
     pages.forEach((p) => merged.addPage(p));
   }
   const bytes = await merged.save();
-  saveAs(new Blob([bytes], { type: "application/pdf" }), "merged.pdf");
+  saveAs(new Blob([bytes as BlobPart], { type: "application/pdf" }), "merged.pdf");
 }
 
 /**
@@ -66,7 +66,7 @@ export async function splitPdf(file: File, range: string): Promise<void> {
   const pages = await out.copyPages(src, wanted);
   pages.forEach((p) => out.addPage(p));
   const bytes = await out.save();
-  saveAs(new Blob([bytes], { type: "application/pdf" }), "split.pdf");
+  saveAs(new Blob([bytes as BlobPart], { type: "application/pdf" }), "split.pdf");
 }
 
 /** Convert PDF ke images (PNG per halaman) lalu download sebagai .zip. */
@@ -107,7 +107,7 @@ export async function imagesToPdf(files: File[]): Promise<void> {
     page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
   }
   const out = await doc.save();
-  saveAs(new Blob([out], { type: "application/pdf" }), "images.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "images.pdf");
 }
 
 /** Rotate setiap halaman dengan sudut tertentu. */
@@ -115,7 +115,7 @@ export async function rotatePdf(file: File, angle: number): Promise<void> {
   const src = await PDFDocument.load(await file.arrayBuffer());
   src.getPages().forEach((p) => p.setRotation(degrees(angle)));
   const out = await src.save();
-  saveAs(new Blob([out], { type: "application/pdf" }), "rotated.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "rotated.pdf");
 }
 
 /** Tambah watermark text di tengah setiap halaman. */
@@ -137,7 +137,7 @@ export async function watermarkPdf(file: File, text: string): Promise<void> {
     });
   });
   const out = await src.save();
-  saveAs(new Blob([out], { type: "application/pdf" }), "watermarked.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "watermarked.pdf");
 }
 
 /** Extract plain text dari PDF. */
@@ -172,7 +172,7 @@ export async function addPageNumbers(file: File): Promise<void> {
     });
   });
   const out = await src.save();
-  saveAs(new Blob([out], { type: "application/pdf" }), "paged.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "paged.pdf");
 }
 
 /** Compress PDF dengan re-save (mengurangi object overhead). Tidak ada recompress gambar bawaan. */
@@ -182,7 +182,7 @@ export async function compressPdf(file: File): Promise<void> {
     ignoreEncryption: true,
   });
   const out = await src.save({ useObjectStreams: true });
-  saveAs(new Blob([out], { type: "application/pdf" }), "compressed.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "compressed.pdf");
 }
 
 /** Crop PDF — ambil area tertentu per halaman (semua halaman dipotong sama). */
@@ -200,7 +200,7 @@ export async function cropPdf(
     page.setCropBox(x, y, w, h);
   });
   const out = await src.save();
-  saveAs(new Blob([out], { type: "application/pdf" }), "cropped.pdf");
+  saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "cropped.pdf");
 }
 
 // ---------------------------------------------------------------------------
