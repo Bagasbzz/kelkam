@@ -29,7 +29,14 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DIRECT_URL: ${{ secrets.DIRECT_URL }}
-        run: npx prisma migrate deploy --schema prisma/schema.prisma
+        run: |
+          if [[ -z "${DATABASE_URL}" || -z "${DIRECT_URL}" ]]; then
+            echo "::warning::DATABASE_URL or DIRECT_URL secret belum diset. Lewati migration step."
+            echo "  → Settings → Secrets and variables → Actions → tambah DATABASE_URL + DIRECT_URL"
+            echo "  → Setelah secret tersedia, migration akan auto-run di push berikutnya"
+            exit 0
+          fi
+          npx prisma migrate deploy --schema prisma/schema.prisma
 
       - name: Build Next.js standalone
         env:
