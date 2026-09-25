@@ -32,6 +32,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
+import { MAX_FILE_BYTES, MAX_FILE_LABEL } from "@/lib/file-limits";
 import { saveUpload } from "@/lib/storage/upload";
 
 /** Pakai Node.js runtime (bukan Edge) karena pakai fs + buffer. */
@@ -39,9 +40,6 @@ export const runtime = "nodejs";
 
 /** Timeout 60 detik — handle file besar. */
 export const maxDuration = 60;
-
-/** Limit 12 MB sama dengan limit di context/extract — biar konsisten. */
-const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 export async function POST(req: Request) {
   // -------------------------------------------------------------------------
@@ -72,7 +70,7 @@ export async function POST(req: Request) {
     // Validasi ukuran & nama
     // -------------------------------------------------------------------------
     if (file.size <= 0 || file.size > MAX_FILE_BYTES) {
-      throw new ApiRequestError(413, "Ukuran file harus di bawah 12 MB.");
+      throw new ApiRequestError(413, `Ukuran file harus di bawah ${MAX_FILE_LABEL}.`);
     }
 
     const name = file.name.replace(/[\r\n]/g, "").slice(0, 200);

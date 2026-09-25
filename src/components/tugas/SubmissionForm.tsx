@@ -21,6 +21,7 @@ import {
   uploadSubmissionFile,
   type SubmissionRow,
 } from "@/lib/client/tugas-api";
+import { MAX_FILE_BYTES, formatFileSize } from "@/lib/file-limits";
 
 interface SubmissionFormProps {
   tugasId: string;
@@ -35,7 +36,11 @@ interface SubmissionFormProps {
   onSubmitted?: (submission: SubmissionRow, position: number, total: number) => void;
 }
 
-const MAX_FILE_BYTES = 12 * 1024 * 1024; // sama dengan backend
+function validateFile(f: File): string | null {
+    if (f.size > MAX_FILE_BYTES) return `Ukuran file maksimal ${formatFileSize(MAX_FILE_BYTES)}.`;
+    if (!f.name || f.name.length > 200) return "Nama file tidak valid.";
+    return null;
+  }
 
 export default function SubmissionForm({
   tugasId,
@@ -106,7 +111,7 @@ export default function SubmissionForm({
   }
 
   function validateFile(f: File): string | null {
-    if (f.size > MAX_FILE_BYTES) return `Ukuran file maksimal ${MAX_FILE_BYTES / 1024 / 1024} MB.`;
+    if (f.size > MAX_FILE_BYTES) return `Ukuran file maksimal ${formatFileSize(MAX_FILE_BYTES)}.`;
     if (!f.name || f.name.length > 200) return "Nama file tidak valid.";
     return null;
   }
@@ -223,7 +228,7 @@ export default function SubmissionForm({
               <FileText className="w-4 h-4 text-blue-500" />
               {existing.fileUpload.originalName}
               <span className="text-slate-400">
-                ({(existing.fileUpload.size / 1024).toFixed(1)} KB)
+                ({formatFileSize(existing.fileUpload.size)})
               </span>
             </div>
           )}
@@ -305,7 +310,7 @@ export default function SubmissionForm({
         {!file ? (
           <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 transition hover:border-blue-200 hover:bg-blue-50/50">
             <Upload className="w-5 h-5" />
-            <span>Klik untuk pilih file (maks 12 MB)</span>
+            <span>Klik untuk pilih file (maks {formatFileSize(MAX_FILE_BYTES)})</span>
             <input
               type="file"
               className="hidden"
@@ -320,7 +325,7 @@ export default function SubmissionForm({
               <div className="min-w-0">
                 <p className="truncate font-bold text-slate-700">{file.name}</p>
                 <p className="text-xs text-slate-500">
-                  {(file.size / 1024).toFixed(1)} KB
+                  {formatFileSize(file.size)}
                 </p>
               </div>
             </div>
