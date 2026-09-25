@@ -44,6 +44,21 @@ datasource db {
 // ===========================================================================
 
 /**
+ * Role user untuk fitur Tugas. `USER` = mahasiswa (default), `ADMIN` = asdos
+ * yang bisa bikin course. Co-admin per-course ditentukan via tabel CourseAdmin.
+ */
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum SubmissionStatus {
+  SUBMITTED
+  LATE
+  REJECTED
+}
+
+/**
  * User account. Email unique, passwordHash via argon2id.
  * Cascade delete ke semua tabel yang reference user.
  */
@@ -52,22 +67,30 @@ model User {
   email        String   @unique
   passwordHash String   @map("password_hash")
   name         String?
+  role         UserRole @default(USER) @map("role")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Reverse relations (lihat @relation di model lain).
   sessions          Session[]
   projects          Project[]
-  referenceLibrary    ReferenceLibrary[]
-  referenceEvidence   ReferenceEvidence[]
-  reportJobs          ReportJob[]
-  fileUploads         FileUpload[]
-  studioProjects      StudioProject[]
-  studioSources       StudioSource[]
-  studioQuestions     StudioQuestion[]
-  studioDecisions     StudioDecision[]
-  studioArtifacts     StudioArtifact[]
-  studioRevisions     StudioProjectRevision[]
+  referenceLibrary  ReferenceLibrary[]
+  referenceEvidence ReferenceEvidence[]
+  reportJobs        ReportJob[]
+  fileUploads       FileUpload[]
+  studioProjects    StudioProject[]
+  studioSources     StudioSource[]
+  studioQuestions   StudioQuestion[]
+  studioDecisions   StudioDecision[]
+  studioArtifacts   StudioArtifact[]
+  studioRevisions   StudioProjectRevision[]
+
+  // Reverse relations Tugas.
+  coursesCreated Course[]           @relation("CourseCreator")
+  coursesAsAdmin CourseAdmin[]
+  enrollments    CourseEnrollment[]
+  tugasesCreated Tugas[]            @relation("TugasCreator")
+  submissions    TugasSubmission[]
 
   @@map("users")
 }
@@ -123,26 +146,26 @@ model Project {
  * citation_apa untuk insert ke laporan tanpa generate ulang.
  */
 model ReferenceLibrary {
-  id              String   @id @default(cuid())
-  projectId       String   @map("project_id")
-  project         Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  ownerId         String   @map("owner_id")
-  owner           User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  referenceId     String?  @map("reference_id")
-  title           String?
-  authors         Json?
-  year            Int?
-  venue           String?
-  abstract        String?
-  url             String?
-  pdfUrl          String?  @map("pdf_url")
-  doi             String?
-  citationCount   Int?     @map("citation_count")
-  isOpenAccess    Boolean  @default(false) @map("is_open_access")
-  source          String?
-  citationApa     String?  @map("citation_apa")
-  raw             Json?
-  createdAt       DateTime @default(now()) @map("created_at")
+  id            String   @id @default(cuid())
+  projectId     String   @map("project_id")
+  project       Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
+  ownerId       String   @map("owner_id")
+  owner         User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  referenceId   String?  @map("reference_id")
+  title         String?
+  authors       Json?
+  year          Int?
+  venue         String?
+  abstract      String?
+  url           String?
+  pdfUrl        String?  @map("pdf_url")
+  doi           String?
+  citationCount Int?     @map("citation_count")
+  isOpenAccess  Boolean  @default(false) @map("is_open_access")
+  source        String?
+  citationApa   String?  @map("citation_apa")
+  raw           Json?
+  createdAt     DateTime @default(now()) @map("created_at")
 
   @@index([projectId])
   @@index([ownerId])
@@ -194,13 +217,13 @@ model ReportJob {
   owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   projectId String   @map("project_id")
   project   Project  @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  status    String   // "queued" | "running" | "done" | "failed"
+  status    String // "queued" | "running" | "done" | "failed"
   progress  Int      @default(0)
   stage     String   @default("")
   result    String?
   source    String?
   error     String?
-  payload   Json?    // SanitizedForPersistence project
+  payload   Json? // SanitizedForPersistence project
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -230,6 +253,8 @@ model FileUpload {
   originalName String   @map("original_name")
   createdAt    DateTime @default(now()) @map("created_at")
 
+  submissions TugasSubmission[]
+
   @@index([ownerId])
   @@index([createdAt])
   @@map("file_uploads")
@@ -253,7 +278,7 @@ model StudioProject {
   schemaVersion      Int      @default(1) @map("schema_version")
   name               String
   revision           Int      @default(1)
-  importedFromLegacy Boolean @default(false) @map("imported_from_legacy")
+  importedFromLegacy Boolean  @default(false) @map("imported_from_legacy")
   intake             Json     @default("{}")
   specification      Json     @default("{}")
   formatProfile      Json     @default("{}") @map("format_profile")
@@ -276,20 +301,20 @@ model StudioProject {
  * authority menandakan trust level (binding/primary/supporting/dll).
  */
 model StudioSource {
-  id         String   @id @default(cuid())
-  projectId  String   @map("project_id")
+  id         String        @id @default(cuid())
+  projectId  String        @map("project_id")
   project    StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  ownerId    String   @map("owner_id")
-  owner      User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId    String        @map("owner_id")
+  owner      User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   kind       String
   authority  String
   title      String
-  content    String   @db.Text  // Bisa panjang (PDF text, dll) → TEXT type
-  fileName   String?  @map("file_name")
+  content    String        @db.Text // Bisa panjang (PDF text, dll) → TEXT type
+  fileName   String?       @map("file_name")
   provenance String?
   notes      String?
-  createdAt  DateTime @default(now()) @map("created_at")
-  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdAt  DateTime      @default(now()) @map("created_at")
+  updatedAt  DateTime      @updatedAt @map("updated_at")
 
   @@index([projectId])
   @@index([ownerId])
@@ -303,26 +328,26 @@ model StudioSource {
  * Status: unanswered | answered | waived.
  */
 model StudioQuestion {
-  id                  String   @id @default(cuid())
-  projectId           String   @map("project_id")
+  id                  String        @id @default(cuid())
+  projectId           String        @map("project_id")
   project             StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  ownerId             String   @map("owner_id")
-  owner               User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  questionKey         String   @map("question_key")
+  ownerId             String        @map("owner_id")
+  owner               User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  questionKey         String        @map("question_key")
   category            String
-  questionClass       String   @map("question_class")
+  questionClass       String        @map("question_class")
   prompt              String
-  why                 String   @default("")
-  answerHint          String   @default("") @map("answer_hint")
-  status              String   @default("unanswered")
-  answer              String   @default("")
-  waiverReason        String?  @map("waiver_reason")
-  priority            Int      @default(1)
-  affectedArtifactIds Json     @default("[]") @map("affected_artifact_ids")
-  sourceIds           Json     @default("[]") @map("source_ids")
-  origin              String   @default("system")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  why                 String        @default("")
+  answerHint          String        @default("") @map("answer_hint")
+  status              String        @default("unanswered")
+  answer              String        @default("")
+  waiverReason        String?       @map("waiver_reason")
+  priority            Int           @default(1)
+  affectedArtifactIds Json          @default("[]") @map("affected_artifact_ids")
+  sourceIds           Json          @default("[]") @map("source_ids")
+  origin              String        @default("system")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
 
   @@unique([projectId, questionKey])
   @@index([projectId, status])
@@ -336,25 +361,25 @@ model StudioQuestion {
  * history menyimpan trail perubahan (JSON array).
  */
 model StudioDecision {
-  id                  String   @id @default(cuid())
-  projectId           String   @map("project_id")
+  id                  String        @id @default(cuid())
+  projectId           String        @map("project_id")
   project             StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  ownerId             String   @map("owner_id")
-  owner               User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  decisionKey         String   @map("decision_key")
+  ownerId             String        @map("owner_id")
+  owner               User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  decisionKey         String        @map("decision_key")
   category            String
   statement           String
   value               String
-  rationale           String   @default("")
-  status              String   @default("draft")
-  origin              String   @default("user")
-  questionId          String?  @map("question_id")
-  sourceIds           Json     @default("[]") @map("source_ids")
-  affectedArtifactIds Json     @default("[]") @map("affected_artifact_ids")
-  version             Int      @default(1)
-  history             Json     @default("[]")
-  createdAt           DateTime @default(now()) @map("created_at")
-  updatedAt           DateTime @updatedAt @map("updated_at")
+  rationale           String        @default("")
+  status              String        @default("draft")
+  origin              String        @default("user")
+  questionId          String?       @map("question_id")
+  sourceIds           Json          @default("[]") @map("source_ids")
+  affectedArtifactIds Json          @default("[]") @map("affected_artifact_ids")
+  version             Int           @default(1)
+  history             Json          @default("[]")
+  createdAt           DateTime      @default(now()) @map("created_at")
+  updatedAt           DateTime      @updatedAt @map("updated_at")
 
   @@index([projectId, status])
   @@index([ownerId])
@@ -367,24 +392,24 @@ model StudioDecision {
  * payload menyimpan diagram data / draft content.
  */
 model StudioArtifact {
-  projectId        String   @map("project_id")
+  projectId        String        @map("project_id")
   project          StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  artifactId       String   @map("artifact_id")
-  ownerId          String   @map("owner_id")
-  owner            User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  artifactId       String        @map("artifact_id")
+  ownerId          String        @map("owner_id")
+  owner            User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   kind             String
   title            String
-  description      String   @default("")
-  status           String   @default("not_started")
-  dependencyIds    Json     @default("[]") @map("dependency_ids")
-  decisionIds      Json     @default("[]") @map("decision_ids")
-  currentVersion   Int      @default(0) @map("current_version")
-  approvedVersion  Int?     @map("approved_version")
+  description      String        @default("")
+  status           String        @default("not_started")
+  dependencyIds    Json          @default("[]") @map("dependency_ids")
+  decisionIds      Json          @default("[]") @map("decision_ids")
+  currentVersion   Int           @default(0) @map("current_version")
+  approvedVersion  Int?          @map("approved_version")
   payload          Json?
-  validationIssues Json     @default("[]") @map("validation_issues")
-  lockedAt         DateTime? @map("locked_at")
-  generatedAt      DateTime? @map("generated_at")
-  updatedAt        DateTime @updatedAt @map("updated_at")
+  validationIssues Json          @default("[]") @map("validation_issues")
+  lockedAt         DateTime?     @map("locked_at")
+  generatedAt      DateTime?     @map("generated_at")
+  updatedAt        DateTime      @updatedAt @map("updated_at")
 
   @@id([projectId, artifactId])
   @@index([projectId, status])
@@ -397,15 +422,15 @@ model StudioArtifact {
  * client POST snapshot lengkap ke sini. Bisa di-restore di frontend.
  */
 model StudioProjectRevision {
-  id        String   @id @default(cuid())
-  projectId String   @map("project_id")
+  id        String        @id @default(cuid())
+  projectId String        @map("project_id")
   project   StudioProject @relation(fields: [projectId], references: [projectId], onDelete: Cascade)
-  ownerId   String   @map("owner_id")
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId   String        @map("owner_id")
+  owner     User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   revision  Int
-  reason    String   @default("")
+  reason    String        @default("")
   snapshot  Json
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime      @default(now()) @map("created_at")
 
   @@unique([projectId, revision])
   @@index([projectId, revision])
@@ -428,4 +453,145 @@ model Waitlist {
 
   @@index([createdAt])
   @@map("waitlist")
+}
+
+// ===========================================================================
+// TUGAS (assignment collection untuk asdos / mata kuliah)
+// ===========================================================================
+
+/**
+ * Mata kuliah. `token` adalah kode akses short (8 char, alphanumeric tanpa
+ * karakter membingungkan) — mahasiswa pakai token ini untuk membuka course.
+ * `createdById` adalah admin global (User.role=ADMIN) yang pertama kali bikin
+ * course. Co-admin per-course ditentukan lewat tabel CourseAdmin.
+ */
+model Course {
+  id          String   @id @default(cuid())
+  name        String
+  code        String
+  description String?
+  token       String   @unique
+  createdById String   @map("created_by_id")
+  createdBy   User     @relation("CourseCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  classes     CourseClass[]
+  admins      CourseAdmin[]
+  enrollments CourseEnrollment[]
+  tugases     Tugas[]
+
+  @@index([token])
+  @@index([createdById])
+  @@map("courses")
+}
+
+/**
+ * Kelas di dalam course (mis. "A", "B", "IF-3A"). `name` unique per course.
+ * Submission Tugas harus memilih 1 class — admin lihat per-class di dashboard.
+ */
+model CourseClass {
+  id       String @id @default(cuid())
+  courseId String @map("course_id")
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  name     String
+
+  tugases     Tugas[]           @relation("TugasClass")
+  submissions TugasSubmission[]
+
+  @@unique([courseId, name])
+  @@map("course_classes")
+}
+
+/**
+ * Co-admin per-course. Hanya `createdBy` yang boleh add admin (anti privilege
+ * escalation berlapis — co-admin ga bisa bikin co-admin lain).
+ */
+model CourseAdmin {
+  id       String   @id @default(cuid())
+  courseId String   @map("course_id")
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId   String   @map("user_id")
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  addedAt  DateTime @default(now()) @map("added_at")
+
+  @@unique([courseId, userId])
+  @@map("course_admins")
+}
+
+/**
+ * Enrollment user ke course (opsional — submit endpoint tidak cek ini, cukup
+ * token valid + login). Disimpan untuk tracking dan analytics.
+ */
+model CourseEnrollment {
+  id         String   @id @default(cuid())
+  courseId   String   @map("course_id")
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  enrolledAt DateTime @default(now()) @map("enrolled_at")
+
+  @@unique([courseId, userId])
+  @@index([courseId])
+  @@map("course_enrollments")
+}
+
+/**
+ * Tugas / assignment. `classId` nullable = tugas untuk semua kelas di course.
+ * `deadline` UTC — render ke "Asia/Jakarta" di client.
+ * Submission disimpan dengan `position` (1-based, urutan ngumpul).
+ */
+model Tugas {
+  id          String       @id @default(cuid())
+  courseId    String       @map("course_id")
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  classId     String?      @map("class_id")
+  class       CourseClass? @relation("TugasClass", fields: [classId], references: [id], onDelete: SetNull)
+  title       String
+  description String       @db.Text
+  deadline    DateTime     @map("deadline")
+  createdById String       @map("created_by_id")
+  createdBy   User         @relation("TugasCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  submissions TugasSubmission[]
+
+  @@index([courseId])
+  @@index([classId])
+  @@index([deadline])
+  @@map("tugases")
+}
+
+/**
+ * Submission mahasiswa untuk 1 tugas.
+ * - `nim` & `name` disimpan per submission (mahasiswa ga harus punya NIM
+ * di profile — beberapa kelas beda format penulisan).
+ * - `position` 1-based, di-assign via transaction + `findFirst orderBy desc`.
+ * - `status`: SUBMITTED (default) | LATE (submit setelah deadline) | REJECTED.
+ * - `fileUploadId` nullable (boleh text-only). Kalau di-SetNull, file tetep
+ * ada di storage (lihat src/lib/storage/upload.ts).
+ */
+model TugasSubmission {
+  id           String           @id @default(cuid())
+  tugasId      String           @map("tugas_id")
+  tugas        Tugas            @relation(fields: [tugasId], references: [id], onDelete: Cascade)
+  userId       String           @map("user_id")
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  classId      String           @map("class_id")
+  class        CourseClass      @relation(fields: [classId], references: [id], onDelete: Cascade)
+  nim          String           @map("nim")
+  name         String           @map("name")
+  note         String?          @db.Text
+  fileUploadId String?          @map("file_upload_id")
+  fileUpload   FileUpload?      @relation(fields: [fileUploadId], references: [id], onDelete: SetNull)
+  position     Int              @map("position")
+  status       SubmissionStatus @default(SUBMITTED) @map("status")
+  submittedAt  DateTime         @default(now()) @map("submitted_at")
+
+  @@unique([tugasId, userId])
+  @@index([tugasId, position])
+  @@index([tugasId, classId])
+  @@index([userId])
+  @@map("tugas_submissions")
 }
