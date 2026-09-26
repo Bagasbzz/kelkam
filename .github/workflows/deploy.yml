@@ -128,34 +128,48 @@ jobs:
           echo "--- FTP banner (raw socket, no auth) ---"
           timeout 10 bash -c 'exec 3<>/dev/tcp/$0/$1; cat <&3 & sleep 2; kill %1 2>/dev/null; exec 3<&-' "${CPANEL_HOST}" 21 2>&1 || echo "(no banner)"
 
-      - name: "10b — Upload ZIP via plain FTP (verbose)"
+      - name: "10b — Upload ZIP via cPanel UAPI multipart (Fileman::upload_files)"
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          REL_PATH="${CPANEL_DIR#/home/${CPANEL_USER}/}"
-          FTP_TARGET="ftp://${CPANEL_HOST}/${REL_PATH}/bundle.zip"
-          echo "Target=${FTP_TARGET}"
-          curl -v --connect-timeout 60 --max-time 1200 \
-            -o /tmp/upload_resp \
-            -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -T bundle.zip \
-            "${FTP_TARGET}" > /tmp/upload_err 2>&1
-          ec=$?
-          echo ""
-          echo "=== curl result ==="
-          echo "exit=${ec}"
-          echo "--- stderr (last 80 lines) ---"
-          tail -80 /tmp/upload_err
-          echo "--- resp ---"
-          cat /tmp/upload_resp 2>/dev/null
-          echo ""
-          if [[ "$ec" -ne 0 ]]; then
-            echo "::error::FTP upload gagal (exit $ec)"
+          echo "Target dir=${CPANEL_DIR}  bundle=$(du -h bundle.zip | cut -f1)"
+          # cPanel UAPI Fileman::upload_files — pakai API token (bukan FTP password).
+          # Pure-FTPd reject token, tapi UAPI terima. PHP upload_max_filesize default 100M.
+          BUNDLE_SIZE=$(stat -c %s bundle.zip)
+          echo "Bundle size: ${BUNDLE_SIZE} bytes"
+          if [[ "${BUNDLE_SIZE}" -gt 90000000 ]]; then
+            echo "::error::Bundle > 90MB, di atas limit PHP upload. Slim dulu."
             exit 1
           fi
+          http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -F "dir=${CPANEL_DIR}" \
+            -F "file=@bundle.zip" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files" 2> /tmp/upload_err)
+          echo "HTTP ${http_code}"
+          echo "--- resp (first 500B) ---"
+          head -c 500 /tmp/upload_resp
+          echo ""
+          echo "--- err (last 20 lines) ---"
+          tail -20 /tmp/upload_err 2>/dev/null
+          if [[ "${http_code}" != "200" ]] || grep -qi '"errors"\|"status":\s*0' /tmp/upload_resp; then
+            echo "::error::UAPI upload_files gagal (HTTP ${http_code})"
+            exit 1
+          fi
+          # Verify file landed: list_files dan cari bundle.zip
+          echo "--- verify file exists ---"
+          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
+            r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
+            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
+              echo "✓ bundle.zip terlihat di ${d}"
+              break
+            fi
+          done
 
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
