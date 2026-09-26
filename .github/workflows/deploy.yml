@@ -203,7 +203,7 @@ jobs:
           FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
           FTP_USER: ${{ secrets.JKC_FTP_USER }}
           FTP_PASS: ${{ secrets.JKC_FTP_PASSWORD }}
-          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+          FTP_DIR: "/home/keluhkam/public_html"
         run: |
           python3 - <<'PYEOF'
           import ftplib, os, sys
@@ -284,7 +284,7 @@ jobs:
           FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
           FTP_USER: ${{ secrets.JKC_FTP_USER }}
           FTP_PASS: ${{ secrets.JKC_FTP_PASSWORD }}
-          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+          FTP_DIR: "/home/keluhkam/public_html"
           BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
           set +e
