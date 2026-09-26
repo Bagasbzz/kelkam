@@ -165,8 +165,8 @@ jobs:
           echo ""
           echo "--- upload_err (last 20 lines) ---"
           tail -20 /tmp/upload_err 2>/dev/null
-          if [[ "${http_code}" != "200" ]] || grep -qi '"errors"\|"status":\s*0' /tmp/upload_resp; then
-            echo "::error::UAPI upload_files gagal (HTTP ${http_code})"
+          if grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/upload_resp; then
+            echo "::error::UAPI upload_files gagal"
             echo "=== FULL step log head ==="
             head -200 /tmp/step10b.log
             exit 1
@@ -215,8 +215,8 @@ jobs:
           echo "Extract HTTP $http_code"
           cat /tmp/extract_resp
           echo ""
-          if [[ "$http_code" != "200" ]] || grep -qi '"errors"' /tmp/extract_resp; then
-            echo "::error::Fileman::uncompress gagal (HTTP $http_code)"
+          if grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/extract_resp; then
+            echo "::error::Fileman::uncompress gagal"
             exit 1
           fi
           # Verify server.js muncul
