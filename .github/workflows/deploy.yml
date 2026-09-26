@@ -208,8 +208,21 @@ jobs:
           python3 - <<'PYEOF'
           import ftplib, os, sys
           host = os.environ["FTP_HOST"]
+          ftp_dir = os.environ["FTP_DIR"]
+          # FTPS servers (Pure-FTPd di Jagoan) hanya izinkan path RELATIVE ke FTP
+          # root user (biasanya /home/<user>/). Kalau JKC_FTP_DIR diset absolute
+          # (mis. /home/keluhkam/public_html/...), cwd ke path absolute gagal 550.
+          # Auto-strip prefix /home/<user>/ kalau ada.
+          def to_relative(p, user):
+              for prefix in (f"/home/{user}/", f"/home/{user}", "/"):
+                  if p.startswith(prefix):
+                      rel = p[len(prefix):]
+                      return rel if rel else "."
+              return p
+          ftp_dir_rel = to_relative(ftp_dir, os.environ["FTP_USER"])
+          print(f"FTP_DIR absolute: {ftp_dir}")
+          print(f"FTP_DIR relative (cwd): {ftp_dir_rel}")
           try:
-              # Implicit FTPS (TLS sejak connect) — pakai FTP_TLS.connect() langsung.
               ftp = ftplib.FTP_TLS()
               ftp.connect(host, 21, timeout=30)
               ftp.login(os.environ["FTP_USER"], os.environ["FTP_PASS"])
@@ -218,7 +231,14 @@ jobs:
               except Exception:
                   pass
               print("✓ FTPS login OK")
-              ftp.cwd(os.environ["FTP_DIR"])
+              # Test cwd ke relative path
+              try:
+                  ftp.cwd(ftp_dir_rel)
+                  print(f"✓ cwd {ftp_dir_rel} OK")
+              except ftplib.error_perm as e:
+                  print(f"cwd {ftp_dir_rel} failed: {e}")
+                  # Fallback: coba strip 'public_html/' prefix kalau masih gagal
+                  raise
               with open("/tmp/ftp_test.txt", "rb") as f:
                   ftp.storbinary("STOR .kk_ftp_probe", f)
               print("✓ FTPS STOR OK")
@@ -228,11 +248,21 @@ jobs:
               except Exception as e:
                   print(f"delete failed: {e}")
               ftp.quit()
-              print("FTP_VALIDATED=OK")
+              print(f"FTP_VALIDATED=OK  REL={ftp_dir_rel}")
+              # Expose relative path to upload step
+              print(f"FTP_DIR_REL={ftp_dir_rel}" >> os.environ["GITHUB_ENV"] if "GITHUB_ENV" in os.environ else open("/dev/null", "w"))
+              with open("/tmp/ftp_dir_rel.txt", "w") as f:
+                  f.write(ftp_dir_rel)
           except Exception as e:
               print(f"::error::FTPS validation failed: {e}")
               sys.exit(1)
           PYEOF
+          # Fallback: write to GITHUB_ENV via shell (handles Python -> env propagation)
+          if [[ -s /tmp/ftp_dir_rel.txt ]]; then
+            FTP_DIR_REL=$(cat /tmp/ftp_dir_rel.txt)
+            echo "FTP_DIR_REL=${FTP_DIR_REL}" >> $GITHUB_ENV
+            echo "✓ Exported FTP_DIR_REL=${FTP_DIR_REL}"
+          fi
 
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
@@ -296,13 +326,16 @@ jobs:
           TOTAL=$(find "${SRC}" -type f | wc -l)
           echo "TOTAL=${TOTAL}" >> $GITHUB_ENV
           echo "Total files to upload (after trim): ${TOTAL}"
-          export FTP_HOST FTP_USER FTP_PASS FTP_DIR SRC TOTAL
+          # Prefer relative path (Pure-FTPd rejects absolute cwd)
+          FTP_DIR_USE="${FTP_DIR_REL:-${FTP_DIR}}"
+          echo "Using FTP_DIR (cwd-relative): ${FTP_DIR_USE}"
+          export FTP_HOST FTP_USER FTP_PASS FTP_DIR_USE SRC TOTAL
           python3 - <<'PYEOF'
           import ftplib, os, sys, time
           host = os.environ["FTP_HOST"]
           user = os.environ["FTP_USER"]
           pw = os.environ["FTP_PASS"]
-          base_dir = os.environ["FTP_DIR"]
+          base_dir = os.environ["FTP_DIR_USE"]
           src = os.environ["SRC"]
           total = int(os.environ.get("TOTAL", "0"))
           ok = 0
