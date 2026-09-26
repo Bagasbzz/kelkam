@@ -91,7 +91,7 @@ jobs:
 
       - name: Prepare & zip deploy bundle
         run: |
-          rm -rf deploy bundle.zip
+          rm -rf deploy bundle-*.zip
           mkdir -p deploy/tmp
           touch deploy/tmp/restart.txt
           cp -r .next/standalone/. deploy/
@@ -104,7 +104,12 @@ jobs:
           cd deploy
           zip -qr ../bundle.zip .
           cd ..
-          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
+          # Rename ke nama unik per-run: cPanel upload_files nolak "bundle.zip"
+          # meskipun probe 6 lokasi tidak menemukan file. Pasti internal cache.
+          RUN_TAG="$(date +%s)-${GITHUB_RUN_ID}"
+          mv bundle.zip "bundle-${RUN_TAG}.zip"
+          echo "BUNDLE_FILE=bundle-${RUN_TAG}.zip" >> $GITHUB_ENV
+          echo "Renamed → bundle-${RUN_TAG}.zip  ($(du -h bundle-${RUN_TAG}.zip | cut -f1))"
 
       - name: "10a — Diagnose FTP target (DNS / TCP / banner)"
         env:
@@ -134,76 +139,25 @@ jobs:
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
+          BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
           exec > /tmp/step10b.log 2>&1
-          set +x  # log step saja (exec sudah capture semuanya)
-          echo "Target dir=${CPANEL_DIR}  bundle=$(du -h bundle.zip | cut -f1)"
-          BUNDLE_SIZE=$(stat -c %s bundle.zip)
+          set +x
+          echo "Target dir=${CPANEL_DIR}  bundle_file=${BUNDLE_FILE}"
+          BUNDLE_SIZE=$(stat -c %s "${BUNDLE_FILE}")
           echo "Bundle size: ${BUNDLE_SIZE} bytes"
           if [[ "${BUNDLE_SIZE}" -gt 90000000 ]]; then
             echo "::error::Bundle > 90MB, di atas limit PHP upload."
             exit 1
           fi
-          # PROBE: cari di mana bundle.zip existing berada.
-          echo "--- probe existing bundle.zip locations ---"
-          PROBE_DIRS=(
-            "${CPANEL_DIR}"
-            "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"
-            "/home/${CPANEL_USER}/public_html"
-            "/home/${CPANEL_USER}"
-            "/home/${CPANEL_USER}/keluhkampus.my.id"
-            "/home/${CPANEL_USER}/tmp"
-          )
-          FOUND_PATHS=()
-          for d in "${PROBE_DIRS[@]}"; do
-            [[ -z "$d" ]] && continue
-            r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500" 2>/dev/null)
-            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
-              echo "  → bundle.zip DITEMUKAN di: ${d}"
-              FOUND_PATHS+=("${d}/bundle.zip")
-            fi
-          done
-          echo "Found paths: ${FOUND_PATHS[@]:-(none)}"
-          # DELETE dengan absolute path + verbose response.
-          if [[ ${#FOUND_PATHS[@]} -gt 0 ]]; then
-            echo "--- delete bundle.zip dari ${#FOUND_PATHS[@]} lokasi ---"
-            for p in "${FOUND_PATHS[@]}"; do
-              dr=$(dirname "$p")
-              fn=$(basename "$p")
-              resp=$(curl -sS -o /tmp/del_resp -w "HTTP %{http_code}" \
-                -X POST \
-                -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-                -H "Content-Type: application/x-www-form-urlencoded" \
-                --data-urlencode "dir=${dr}" \
-                --data-urlencode "files=${fn}" \
-                "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files")
-              echo "  DELETE ${p} → ${resp}"
-              echo "  resp body:"; cat /tmp/del_resp 2>/dev/null
-              echo ""
-            done
-            # Verify delete.
-            echo "--- verify deleted ---"
-            sleep 2
-            still=0
-            for d in "${PROBE_DIRS[@]}"; do
-              [[ -z "$d" ]] && continue
-              r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-                "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
-              if echo "${r}" | grep -q '"name":"bundle.zip"'; then
-                echo "  → bundle.zip MASIH ada di: ${d}"
-                still=1
-              fi
-            done
-            [[ "$still" -eq 1 ]] && { echo "::error::bundle.zip masih ada setelah delete — permission issue?"; }
-          fi
-          # UPLOAD.
-          echo "--- upload ---"
+          # UPLOAD dengan nama unik (BUNDLE_FILE) — bypass cPanel "already exists" cache
+          # untuk nama "bundle.zip" yang persistent secara internal.
+          echo "--- upload ${BUNDLE_FILE} ---"
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -F "dir=${CPANEL_DIR}" \
-            -F "file=@bundle.zip" \
+            -F "file=@${BUNDLE_FILE}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files" 2> /tmp/upload_err)
           echo "HTTP ${http_code}"
           echo "--- upload_resp (first 500B) ---"
@@ -217,19 +171,17 @@ jobs:
             head -200 /tmp/step10b.log
             exit 1
           fi
-          # Verify upload.
-          echo "--- verify file landed ---"
+          # Verify upload landed di server (cari by basename).
+          BASENAME_REMOTE="${BUNDLE_FILE}"
           ok=0
-          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
-            r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
-            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
-              echo "✓ bundle.zip terlihat di ${d}"
-              ok=1
-              break
-            fi
-          done
-          [[ "$ok" -ne 1 ]] && { echo "::error::bundle.zip tidak muncul setelah upload"; exit 1; }
+          r=$(curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          if echo "${r}" | grep -q "\"name\":\"${BASENAME_REMOTE}\""; then
+            echo "✓ ${BASENAME_REMOTE} terlihat di ${CPANEL_DIR}"
+            ok=1
+          fi
+          [[ "$ok" -ne 1 ]] && { echo "::error::${BASENAME_REMOTE} tidak muncul setelah upload"; exit 1; }
 
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
@@ -243,44 +195,22 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Extract bundle.zip via cPanel UAPI Fileman::uncompress
+      - name: Extract bundle via cPanel UAPI Fileman::uncompress
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
+          BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
-          echo "CPANEL_DIR=${CPANEL_DIR}"
-          # Auto-probe: bundle.zip bisa landing di CPANEL_DIR atau di public_html/<basename>/
-          BASENAME="${CPANEL_DIR##*/}"
-          ALT_DIR="/home/${CPANEL_USER}/public_html/${BASENAME}"
-          find_zip=""
-          for d in "${CPANEL_DIR}" "${ALT_DIR}"; do
-            echo "--- probing ${d} ---"
-            r=$(curl -sS \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
-            echo "${r}" | head -c 800
-            echo ""
-            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
-              find_zip="${d}"
-              echo "✓ bundle.zip ditemukan di ${d}"
-              break
-            fi
-          done
-          if [[ -z "${find_zip}" ]]; then
-            echo "::error::bundle.zip tidak ada di CPANEL_DIR maupun public_html/ — upload step gagal."
-            exit 1
-          fi
-          # Extract via Fileman::uncompress (UAPI native)
-          echo "Extracting ${find_zip}/bundle.zip via Fileman::uncompress..."
+          echo "Extracting ${CPANEL_DIR}/${BUNDLE_FILE}..."
           http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "type=zip" \
-            --data-urlencode "sourcefile=${find_zip}/bundle.zip" \
-            --data-urlencode "destdir=${find_zip}" \
+            --data-urlencode "sourcefile=${CPANEL_DIR}/${BUNDLE_FILE}" \
+            --data-urlencode "destdir=${CPANEL_DIR}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/uncompress")
           echo "Extract HTTP $http_code"
           cat /tmp/extract_resp
@@ -289,22 +219,29 @@ jobs:
             echo "::error::Fileman::uncompress gagal (HTTP $http_code)"
             exit 1
           fi
-          # Verify node_modules muncul
+          # Verify server.js muncul
           sleep 2
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${find_zip}&limit=500")
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
           if ! echo "$verify_resp" | grep -q '"name":"server.js"'; then
             echo "::warning::Extract selesai tapi server.js tidak terlihat."
           else
-            echo "✓ Extract OK — server.js present di ${find_zip}"
+            echo "✓ Extract OK — server.js present di ${CPANEL_DIR}"
           fi
-          # Cleanup: hapus bundle.zip
+          # Cleanup: hapus uploaded zip
           curl -sS -o /tmp/rm_resp -w "Delete HTTP %{http_code}\n" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "files=${find_zip}/bundle.zip" \
+            --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          # Cleanup legacy bundle.zip kalau masih ada
+          curl -sS -o /tmp/rm_resp2 -w "Delete legacy HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "files=${CPANEL_DIR}/bundle.zip" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
