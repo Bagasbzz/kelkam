@@ -186,7 +186,7 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Extract bundle via cPanel UAPI Fileman::uncompress
+      - name: Extract bundle via cPanel API2 Fileman::uncompress
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -194,45 +194,43 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
           BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
-          echo "Extracting ${CPANEL_DIR}/${BUNDLE_FILE}..."
+          echo "Extracting ${CPANEL_DIR}/${BUNDLE_FILE} via API2 Fileman::uncompress..."
+          # cPanel UAPI tidak punya Fileman::uncompress di server ini (verified run #52).
+          # API2 endpoint /cpanel adalah legacy — Fileman::uncompress ada di sini.
           http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "type=zip" \
+            --data-urlencode "cpanel_jsonapi_user=${CPANEL_USER}" \
+            --data-urlencode "cpanel_jsonapi_apiversion=2" \
+            --data-urlencode "cpanel_jsonapi_module=Fileman" \
+            --data-urlencode "cpanel_jsonapi_func=uncompress" \
             --data-urlencode "sourcefile=${CPANEL_DIR}/${BUNDLE_FILE}" \
             --data-urlencode "destdir=${CPANEL_DIR}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/uncompress")
+            "https://${CPANEL_HOST}:2083/cpanel")
           echo "Extract HTTP $http_code"
-          cat /tmp/extract_resp
+          head -c 800 /tmp/extract_resp
           echo ""
-          if grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/extract_resp; then
-            echo "::error::Fileman::uncompress gagal"
+          if [[ "$http_code" != "200" ]] || grep -qE '"failed":\s*[1-9]|result-?[12]' /tmp/extract_resp; then
+            echo "::error::Fileman::uncompress (API2) gagal"
             exit 1
           fi
           # Verify server.js muncul
-          sleep 2
+          sleep 3
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
           if ! echo "$verify_resp" | grep -q '"name":"server.js"'; then
-            echo "::warning::Extract selesai tapi server.js tidak terlihat."
-          else
-            echo "✓ Extract OK — server.js present di ${CPANEL_DIR}"
+            echo "::error::Extract selesai tapi server.js tidak terlihat."
+            exit 1
           fi
-          # Cleanup: hapus uploaded zip
-          curl -sS -o /tmp/rm_resp -w "Delete HTTP %{http_code}\n" \
+          echo "✓ Extract OK — server.js present di ${CPANEL_DIR}"
+          # Cleanup uploaded zip
+          curl -sS -o /dev/null -w "Delete HTTP %{http_code}\n" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
-          # Cleanup legacy bundle.zip kalau masih ada
-          curl -sS -o /tmp/rm_resp2 -w "Delete legacy HTTP %{http_code}\n" \
-            -X POST \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "files=${CPANEL_DIR}/bundle.zip" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
