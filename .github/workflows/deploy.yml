@@ -209,16 +209,19 @@ jobs:
           import ftplib, os, sys
           host = os.environ["FTP_HOST"]
           try:
-              ftp = ftplib.FTP_TLS(host, timeout=30)
-              ftp.auth_tls()
+              # Implicit FTPS (TLS sejak connect) — pakai FTP_TLS.connect() langsung.
+              ftp = ftplib.FTP_TLS()
+              ftp.connect(host, 21, timeout=30)
               ftp.login(os.environ["FTP_USER"], os.environ["FTP_PASS"])
+              try:
+                  ftp.prot_p()
+              except Exception:
+                  pass
               print("✓ FTPS login OK")
               ftp.cwd(os.environ["FTP_DIR"])
-              # Upload test file
               with open("/tmp/ftp_test.txt", "rb") as f:
                   ftp.storbinary("STOR .kk_ftp_probe", f)
               print("✓ FTPS STOR OK")
-              # Cleanup
               try:
                   ftp.delete(".kk_ftp_probe")
                   print("✓ FTPS DELETE OK")
@@ -307,8 +310,8 @@ jobs:
           t0 = time.time()
           ftp = None
           try:
-              ftp = ftplib.FTP_TLS(host, timeout=120)
-              ftp.auth_tls()
+              ftp = ftplib.FTP_TLS()
+              ftp.connect(host, 21, timeout=120)
               ftp.login(user, pw)
               try:
                   ftp.prot_p()
