@@ -136,14 +136,23 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "Target dir=${CPANEL_DIR}  bundle=$(du -h bundle.zip | cut -f1)"
-          # cPanel UAPI Fileman::upload_files — pakai API token (bukan FTP password).
-          # Pure-FTPd reject token, tapi UAPI terima. PHP upload_max_filesize default 100M.
           BUNDLE_SIZE=$(stat -c %s bundle.zip)
           echo "Bundle size: ${BUNDLE_SIZE} bytes"
           if [[ "${BUNDLE_SIZE}" -gt 90000000 ]]; then
             echo "::error::Bundle > 90MB, di atas limit PHP upload. Slim dulu."
             exit 1
           fi
+          # Cleanup: hapus bundle.zip existing kalau ada (UAPI upload_files reject overwrite).
+          echo "--- delete existing bundle.zip if any ---"
+          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
+            curl -sS -o /dev/null -w "delete ${d}: HTTP %{http_code}\n" \
+              -X POST \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              --data-urlencode "files=${d}/bundle.zip" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          done
+          # Upload via UAPI multipart.
+          echo "--- upload ---"
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
@@ -160,16 +169,19 @@ jobs:
             echo "::error::UAPI upload_files gagal (HTTP ${http_code})"
             exit 1
           fi
-          # Verify file landed: list_files dan cari bundle.zip
+          # Verify file landed.
           echo "--- verify file exists ---"
+          ok=0
           for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
             r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
               "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
             if echo "${r}" | grep -q '"name":"bundle.zip"'; then
               echo "✓ bundle.zip terlihat di ${d}"
+              ok=1
               break
             fi
           done
+          [[ "$ok" -ne 1 ]] && { echo "::error::bundle.zip tidak muncul setelah upload"; exit 1; }
 
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
