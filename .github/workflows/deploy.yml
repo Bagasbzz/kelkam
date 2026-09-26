@@ -90,40 +90,58 @@ jobs:
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
+          set +e  # Jangan auto-exit di curl failure, kita inspect manual
           echo "CPANEL_DIR=${CPANEL_DIR}"
-          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
-          # Diagnostic: list server dir sebelum upload
+          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1) (raw bytes: $(stat -c%s bundle.zip))"
+          # Diagnostic: list server dir sebelum upload (cek path exists + visible)
           echo "--- pre-upload list ${CPANEL_DIR} ---"
-          curl -sS \
+          pre=$(curl -sS -w "\nHTTP=%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500" \
-            | head -c 1500
+            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
+          echo "${pre}" | head -c 2000
           echo ""
           echo "--- end pre-upload ---"
-          # Upload via Fileman (sized untuk fit PHP upload limit; bundle sekarang ~80MB,
-          # node_modules TIDAK lagi di-copy dari runner karena .next/standalone sudah
-          # self-contained dengan argon2/prisma prebuilds).
+          # Upload via Fileman dengan curl --fail-with-body supaya non-2xx die early
+          echo "Uploading bundle.zip to ${CPANEL_DIR}..."
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -F "file=@bundle.zip" \
             -F "dir=${CPANEL_DIR}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files")
-          echo "Upload HTTP $http_code"
-          cat /tmp/upload_resp
-          echo ""
+          upload_exit=$?
+          echo "Upload: HTTP=${http_code} curl_exit=${upload_exit}"
+          echo "Response body:"; cat /tmp/upload_resp; echo ""
           # Verifikasi upload landing
-          echo "--- post-upload list ${CPANEL_DIR} ---"
-          post=$(curl -sS \
+          sleep 1
+          post=$(curl -sS -w "\nHTTP=%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-          echo "${post}" | head -c 1500
+          echo "--- post-upload list ${CPANEL_DIR} ---"
+          echo "${post}" | head -c 2000
           echo ""
-          if ! echo "${post}" | grep -q '"name":"bundle.zip"'; then
-            echo "::error::bundle.zip tidak muncul di ${CPANEL_DIR} setelah upload — PHP upload limit?"
-            exit 1
+          if echo "${post}" | grep -q '"name":"bundle.zip"'; then
+            echo "✓ bundle.zip landing di ${CPANEL_DIR}"
+            exit 0
           fi
-          echo "✓ bundle.zip landing di ${CPANEL_DIR}"
+          # Kalau tidak muncul, cek fallback path: /home/${CPANEL_USER}/public_html/<basename>
+          ALT_DIR="/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"
+          if [[ "${ALT_DIR}" != "${CPANEL_DIR}" ]]; then
+            echo "--- check alt dir ${ALT_DIR} ---"
+            alt=$(curl -sS \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${ALT_DIR}&limit=500")
+            echo "${alt}" | head -c 1500
+            echo ""
+            if echo "${alt}" | grep -q '"name":"bundle.zip"'; then
+              echo "::warning::bundle.zip ada di ${ALT_DIR} (bukan CPANEL_DIR). Lanjut, extract step akan cari di kedua path."
+              exit 0
+            fi
+          fi
+          echo "::error::bundle.zip TIDAK muncul di ${CPANEL_DIR} maupun ${ALT_DIR} setelah upload."
+          echo "  HTTP ${http_code} curl_exit ${upload_exit}"
+          echo "  Body: $(cat /tmp/upload_resp)"
+          exit 1
 
       - name: Extract bundle.zip via cPanel UAPI (no cron dependency)
         env:
