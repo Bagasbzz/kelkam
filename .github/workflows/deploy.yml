@@ -34,19 +34,14 @@ jobs:
           echo "DIRECT_URL set:   $([[ -n "${DIRECT_URL}" ]] && echo yes || echo NO)"
           if [[ -z "${DATABASE_URL}" || -z "${DIRECT_URL}" ]]; then
             echo "::warning::DATABASE_URL atau DIRECT_URL belum diset di GitHub Secrets."
-            echo "  → Settings → Secrets and variables → Actions → tambah 2 secret ini"
-            echo "  → Sementara, code baru tetap di-upload; migration apply manual via:"
-            echo "  →   cPanel Terminal: cd /home/keluhkam/... && DATABASE_URL=... DIRECT_URL=... npx prisma migrate deploy"
             exit 0
           fi
-          # Coba migrate; kalau gagal, log jelas tapi JANGAN block build+upload.
           set +e
           npx prisma migrate deploy --schema prisma/schema.prisma 2>&1 | tee /tmp/migrate.log
           rc=${PIPESTATUS[0]}
           set -e
           if [[ "$rc" -ne 0 ]]; then
             echo "::warning::prisma migrate deploy gagal (exit $rc). Lanjut upload bundle."
-            echo "  → Cek /tmp/migrate.log di workflow artifacts, atau run manual di server."
           fi
           exit 0
 
@@ -63,14 +58,43 @@ jobs:
           REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
         run: npm run build
 
+      - name: Slim bundle — drop unused Prisma engines / wasm / edge
+        run: |
+          # Schema generates 2 engines: "native" + "debian-openssl-1.1.x".
+          # On GitHub Actions ubuntu-latest, "native" = debian-openssl-3.0.x.
+          # JKC server needs debian-openssl-1.1.x (explicit in schema). Drop the 3.0.x.
+          PRISMA_DIR=".next/standalone/node_modules/.prisma/client"
+          KEEP_ENGINE="libquery_engine-debian-openssl-1.1.x.so.node"
+          if [[ -d "$PRISMA_DIR" ]]; then
+            for f in "$PRISMA_DIR"/*.so.node; do
+              [[ -f "$f" ]] || continue
+              base=$(basename "$f")
+              if [[ "$base" != "$KEEP_ENGINE" ]]; then
+                rm -f "$f"
+                echo "  - removed: $base"
+              else
+                echo "  + kept:    $base"
+              fi
+            done
+            # Drop Windows / WASM / edge / browser (JKC = Debian Linux Node, not edge runtime)
+            for f in query_engine-windows.dll.node query_engine_bg.wasm edge.js index-browser.js; do
+              if [[ -f "$PRISMA_DIR/$f" ]]; then
+                rm -f "$PRISMA_DIR/$f"
+                echo "  - removed: $f"
+              fi
+            done
+            # Drop edge variants from @prisma/client/runtime
+            rm -f .next/standalone/node_modules/@prisma/client/runtime/edge-esm.js \
+                  .next/standalone/node_modules/@prisma/client/runtime/edge.js 2>/dev/null || true
+          else
+            echo "::warning::$PRISMA_DIR not found — Prisma generate may have failed"
+          fi
+
       - name: Prepare & zip deploy bundle
         run: |
           rm -rf deploy bundle.zip
           mkdir -p deploy/tmp
           touch deploy/tmp/restart.txt
-          # .next/standalone/ SUDAH self-contained: ada server.js, node_modules produksi
-          # (argon2/prisma prebuilds), prisma/, package.json. Tinggal tambah .next/static
-          # (untuk _next/static/* assets) + public/ (untuk favicon, robots.txt, dll).
           cp -r .next/standalone/. deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
@@ -88,153 +112,169 @@ jobs:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
-          CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           set +e
-          DOC_ROOT="/home/${CPANEL_USER}/public_html"
-          echo "CPANEL_DIR=${CPANEL_DIR}"
-          echo "DOC_ROOT=${DOC_ROOT}"
+          # IMPORTANT: cPanel UAPI 'dir' param uses HOME-RELATIVE paths (not absolute).
+          # Confirmed working format: '/public_html' = $HOME/public_html on JKC.
+          UAPI_DIR="/public_html"
           bundle_bytes=$(stat -c%s bundle.zip)
-          echo "Bundle zip size: $(du -sh bundle.zip | cut -f1) (raw bytes: ${bundle_bytes})"
-
-          # STRATEGY: bypass Fileman::upload_files (silently drops large files via PHP
-          # upload limits). Upload bundle.zip as base64 in 4MB text chunks via
-          # Fileman::save_file (no PHP multipart, no upload limit). Then a tiny PHP
-          # script in DocRoot decodes → writes zip → uncompresses → triggers restart.
+          echo "Bundle: $(du -sh bundle.zip | cut -f1) (${bundle_bytes} bytes)"
 
           # 1) Base64-encode locally + split into 4MB chunks.
           base64 -w 0 bundle.zip > /tmp/bundle.b64
           b64_bytes=$(stat -c%s /tmp/bundle.b64)
-          CHUNK_SIZE=$((4 * 1024 * 1024))   # 4 MB per chunk — safely under any limit
+          CHUNK_SIZE=$((4 * 1024 * 1024))
           NUM_CHUNKS=$(( (b64_bytes + CHUNK_SIZE - 1) / CHUNK_SIZE ))
-          echo "base64 size: ${b64_bytes} bytes → ${NUM_CHUNKS} chunks of ${CHUNK_SIZE} bytes"
-
+          echo "base64: ${b64_bytes}B → ${NUM_CHUNKS} chunks of ${CHUNK_SIZE}B"
           split -b ${CHUNK_SIZE} -d -a 3 /tmp/bundle.b64 /tmp/chunk_
-          ls -la /tmp/chunk_*
 
-          # 2) Upload each chunk to DocRoot as bundle.zip.b64.NNN (PUBLIC path).
+          # 2) Upload each chunk via save_file (no PHP multipart, no upload limit).
           UPLOAD_OK=1
           for chunk in /tmp/chunk_*; do
             idx="${chunk##*_}"
-            echo "--- uploading chunk ${idx} ---"
             up_http=$(curl -sS -o /tmp/c_resp -w "%{http_code}" \
               -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              --data-urlencode "dir=${DOC_ROOT}" \
+              --data-urlencode "dir=${UAPI_DIR}" \
               --data-urlencode "file=bundle.zip.b64.${idx}" \
               --data-urlencode "content@${chunk}" \
               --data-urlencode "encoding=utf-8" \
               "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
             up_body=$(cat /tmp/c_resp)
-            echo "chunk ${idx} HTTP=${up_http} body=${up_body:0:200}"
-            if [[ "${up_http}" != "200" ]]; then
-              echo "::error::chunk ${idx} upload failed HTTP=${up_http}"
+            echo "chunk ${idx} HTTP=${up_http} body=${up_body:0:150}"
+            # UAPI returns HTTP 200 even on error — body has "errors":[...] when failed.
+            if [[ "${up_http}" != "200" ]] || echo "${up_body}" | grep -qi '"errors"'; then
+              echo "::error::chunk ${idx} upload failed"
               UPLOAD_OK=0
               break
             fi
           done
 
-          # 3) Write a tiny PHP decoder to DocRoot (publicly fetchable, runs under Apache).
-          # Uses PHP ZipArchive (built-in) — no shell_exec needed (cPanel usually disables it).
+          # 3) Write decoder.php to DocRoot. It self-deletes after running.
           cat > /tmp/decoder.php <<'PHP'
           <?php
-          // decoder.php?token=SECRET — concat base64 chunks → decode → ZipArchive extract → touch restart.txt
+          // decoder.php?token=SECRET — concat base64 chunks → decode → ZipArchive extract → touch restart.txt → self-delete
+          // Logs everything to /public_html/.deploy.log (hidden file, fetchable via HTTP).
           header('Content-Type: text/plain; charset=utf-8');
           $DOC_ROOT = '/home/keluhkam/public_html';
           $CPANEL_DIR = '/home/keluhkam/public_html/keluhkampus.my.id';
+          $LOG = $DOC_ROOT . '/.deploy.log';
           $SECRET = '__DEPLOY_SECRET__';
           $tok = $_GET['token'] ?? '';
           if (!hash_equals($SECRET, $tok)) { http_response_code(403); echo "forbidden"; exit; }
           @set_time_limit(300);
+          function logmsg($m) {
+            global $LOG;
+            @file_put_contents($LOG, date('c') . " $m\n", FILE_APPEND);
+            echo $m . "\n";
+            @ob_flush(); @flush();
+          }
           function delTree($d) {
-              if (!is_dir($d)) return @unlink($d);
-              foreach (scandir($d) as $f) {
-                  if ($f === '.' || $f === '..') continue;
-                  $p = $d . '/' . $f;
-                  is_dir($p) ? delTree($p) : @unlink($p);
-              }
-              return @rmdir($d);
+            if (!is_dir($d)) return @unlink($d);
+            foreach (scandir($d) as $f) {
+              if ($f === '.' || $f === '..') continue;
+              $p = $d . '/' . $f;
+              is_dir($p) ? delTree($p) : @unlink($p);
+            }
+            return @rmdir($d);
           }
+          logmsg("=== decoder start pid=" . getmypid());
+
           $b64 = '';
+          $n_chunks = 0;
           for ($i = 0; $i < 1000; $i++) {
-              $f = $DOC_ROOT . '/bundle.zip.b64.' . str_pad((string)$i, 3, '0', STR_PAD_LEFT);
-              if (!file_exists($f)) break;
-              $b64 .= file_get_contents($f);
-              unlink($f);
+            $f = $DOC_ROOT . '/bundle.zip.b64.' . str_pad((string)$i, 3, '0', STR_PAD_LEFT);
+            if (!file_exists($f)) break;
+            $b64 .= file_get_contents($f);
+            $n_chunks++;
+            unlink($f);
           }
-          if ($b64 === '') { http_response_code(500); echo "no chunks"; exit; }
+          logmsg("read $n_chunks chunks, total b64=" . strlen($b64));
+          if ($b64 === '') { http_response_code(500); logmsg("FATAL: no chunks"); exit; }
+
           $zip_bytes = base64_decode($b64, true);
-          if ($zip_bytes === false) { http_response_code(500); echo "base64 decode failed"; exit; }
-          $tmp_zip = '/tmp/bundle_' . getmypid() . '.zip';
+          if ($zip_bytes === false) { http_response_code(500); logmsg("FATAL: base64 decode failed"); exit; }
+          logmsg("decoded zip=" . strlen($zip_bytes) . " bytes");
+
+          // Write zip to DocRoot (NOT /tmp — open_basedir often blocks /tmp under Apache).
+          $tmp_zip = $DOC_ROOT . '/.bundle.zip.tmp';
           if (file_put_contents($tmp_zip, $zip_bytes) === false) {
-              http_response_code(500); echo "write tmp failed"; exit;
+            http_response_code(500); logmsg("FATAL: write $tmp_zip failed"); exit;
           }
-          echo "wrote tmp zip " . strlen($zip_bytes) . " bytes\n";
-          if (!class_exists('ZipArchive')) {
-              http_response_code(500); echo "ZipArchive missing"; exit;
-          }
+          logmsg("wrote zip to $tmp_zip");
+
+          if (!class_exists('ZipArchive')) { http_response_code(500); logmsg("FATAL: ZipArchive missing"); @unlink($tmp_zip); exit; }
+
           $za = new ZipArchive();
-          if ($za->open($tmp_zip) !== true) {
-              http_response_code(500); echo "zip open failed"; exit;
+          $open_rc = $za->open($tmp_zip);
+          if ($open_rc !== true) {
+            http_response_code(500);
+            logmsg("FATAL: zip open rc=$open_rc err=" . $za->getStatusString());
+            @unlink($tmp_zip);
+            exit;
           }
-          // Clean app dir first (remove stale files from previous bundle, but keep .env,
-          // uploads/, tmp/).
-          $keep = ['.env', 'uploads', 'tmp'];
+
+          // Wipe app dir (keep .env, uploads, tmp, .deploy.log, .bundle.zip.tmp).
+          $keep = ['.env', 'uploads', 'tmp', '.deploy.log', '.bundle.zip.tmp'];
+          if (!is_dir($CPANEL_DIR)) {
+            logmsg("$CPANEL_DIR missing — creating");
+            @mkdir($CPANEL_DIR, 0755, true);
+          }
           $dh = @opendir($CPANEL_DIR);
           if ($dh) {
-              while (($f = readdir($dh)) !== false) {
-                  if ($f === '.' || $f === '..') continue;
-                  if (in_array($f, $keep, true)) continue;
-                  $p = $CPANEL_DIR . '/' . $f;
-                  if (is_dir($p)) delTree($p); else @unlink($p);
-              }
-              closedir($dh);
+            $n = 0;
+            while (($f = readdir($dh)) !== false) {
+              if ($f === '.' || $f === '..') continue;
+              if (in_array($f, $keep, true)) continue;
+              $p = $CPANEL_DIR . '/' . $f;
+              if (is_dir($p)) delTree($p); else @unlink($p);
+              $n++;
+            }
+            closedir($dh);
+            logmsg("wiped $n items from $CPANEL_DIR");
+          } else {
+            logmsg("WARN: opendir($CPANEL_DIR) failed: " . error_get_last()['message'] ?? 'unknown');
           }
+
           $ok = $za->extractTo($CPANEL_DIR);
           $za->close();
           @unlink($tmp_zip);
-          echo $ok ? "extracted OK\n" : "extract failed\n";
-          // Touch Passenger restart sentinel.
+          logmsg($ok ? "extracted OK" : "FATAL: extractTo failed err=" . $za->getStatusString());
+          if (!$ok) { http_response_code(500); exit; }
+
           @mkdir($CPANEL_DIR . '/tmp', 0777, true);
           @touch($CPANEL_DIR . '/tmp/restart.txt');
-          echo "done\n";
+          logmsg("touched restart.txt");
+
+          @unlink(__FILE__);
+          logmsg("=== decoder done, self-deleted");
           PHP
 
-          # Substitute deploy secret
           DEPLOY_SECRET=$(openssl rand -hex 16)
           sed -i "s/__DEPLOY_SECRET__/${DEPLOY_SECRET}/" /tmp/decoder.php
-          # Persist the secret for the trigger step via file
-          echo -n "${DEPLOY_SECRET}" > /tmp/deploy_secret
 
           dec_http=$(curl -sS -o /tmp/dec_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "dir=${DOC_ROOT}" \
+            --data-urlencode "dir=${UAPI_DIR}" \
             --data-urlencode "file=decoder.php" \
             --data-urlencode "content@/tmp/decoder.php" \
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
-          echo "decoder.php HTTP=${dec_http}"
-          cat /tmp/dec_resp
-          echo ""
-
-          # 4) Hit decoder.php via HTTP to actually decode + extract + restart.
-          if [[ "${UPLOAD_OK}" == "1" && "${dec_http}" == "200" ]]; then
-            echo "--- triggering decoder ---"
-            SECRET=$(cat /tmp/deploy_secret)
-            curl -sS -w "\nHTTP %{http_code}\n" \
-              "https://keluhkampus.my.id/decoder.php?token=${SECRET}"
+          dec_body=$(cat /tmp/dec_resp)
+          echo "decoder.php HTTP=${dec_http} body=${dec_body:0:200}"
+          if [[ "${dec_http}" != "200" ]] || echo "${dec_body}" | grep -qi '"errors"'; then
+            echo "::error::decoder.php upload failed"
+            UPLOAD_OK=0
           fi
 
-          # 5) Cleanup decoder + diag fetch + remove decoder after use.
-          sleep 2
-          rm /tmp/deploy_secret
-          # Delete decoder.php after run (clean state for next deploy)
-          curl -sS -o /dev/null \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "files=${DOC_ROOT}/decoder.php" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          # 4) Trigger decoder via HTTP.
+          if [[ "${UPLOAD_OK}" == "1" ]]; then
+            echo "--- triggering decoder ---"
+            curl -sS -w "\nHTTP %{http_code}\n" \
+              "https://keluhkampus.my.id/decoder.php?token=${DEPLOY_SECRET}"
+          fi
 
-          # Final diag to DocRoot for verification
+          # 5) Diag to DocRoot (decoder self-deletes).
+          sleep 5
           {
             printf 'chunks_uploaded=%s\n' "${NUM_CHUNKS}"
             printf 'b64_size=%s\n' "${b64_bytes}"
@@ -242,9 +282,9 @@ jobs:
             printf 'upload_ok=%s\n' "${UPLOAD_OK}"
             printf 'decoder_write_http=%s\n' "${dec_http}"
           } > /tmp/diag_content
-          curl -sS -o /dev/null -w "diag HTTP %{http_code}\n" \
+          curl -sS -o /tmp/diag_resp -w "diag HTTP %{http_code}\n" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "dir=${DOC_ROOT}" \
+            --data-urlencode "dir=${UAPI_DIR}" \
             --data-urlencode "file=deploy-diag.txt" \
             --data-urlencode "content@/tmp/diag_content" \
             --data-urlencode "encoding=utf-8" \
@@ -263,10 +303,6 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "Touching tmp/restart.txt to restart Passenger..."
-          # Ensure tmp dir exists first
-          curl -sS -o /tmp/mkdir_tmp -w "mkdir tmp HTTP %{http_code}\n" \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/dir?dir=${CPANEL_DIR}/tmp" || true
           http_code=$(curl -sS -o /tmp/restart_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             --data-urlencode "dir=${CPANEL_DIR}/tmp" \
@@ -275,8 +311,6 @@ jobs:
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
           echo "HTTP $http_code"
-          cat /tmp/restart_resp
-          echo ""
           if [[ "$http_code" != "200" ]]; then
             echo "::error::Failed to trigger Passenger restart - HTTP $http_code"
             exit 1
@@ -318,9 +352,6 @@ jobs:
             echo "PORT=3000"
             echo "HOSTNAME=0.0.0.0"
           } > /tmp/env_content
-          echo "--- env preview ---"
-          cat /tmp/env_content
-          echo "--- end ---"
           http_code=$(curl -sS -o /tmp/env_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             --data-urlencode "dir=${CPANEL_DIR}" \
@@ -329,8 +360,6 @@ jobs:
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
           echo "HTTP $http_code"
-          cat /tmp/env_resp
-          echo ""
           if [[ "$http_code" != "200" ]]; then
             echo "::error::Failed to write .env - HTTP $http_code"
             exit 1
@@ -351,8 +380,6 @@ jobs:
             --data-urlencode "encoding=utf-8" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
           echo "HTTP $http_code"
-          cat /tmp/htaccess_resp
-          echo ""
           if [[ "$http_code" != "200" ]]; then
             echo "::error::Failed to write public_html/.htaccess"
             exit 1
