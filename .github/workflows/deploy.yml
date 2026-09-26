@@ -224,7 +224,7 @@ jobs:
           print(f"FTP_DIR relative (cwd): {ftp_dir_rel}")
           try:
               ftp = ftplib.FTP_TLS()
-              ftp.connect(host, 21, timeout=30)
+              ftp.connect(host, 21, timeout=120)
               ftp.login(os.environ["FTP_USER"], os.environ["FTP_PASS"])
               try:
                   ftp.prot_p()
