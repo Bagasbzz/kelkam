@@ -198,6 +198,39 @@ jobs:
           echo "::warning::Tidak ada UAPI extract function yang work. Fallback ke per-file upload."
           echo "FILEMAN_EXTRACT_FUNC=" >> $GITHUB_ENV
 
+      - name: Validate FTPS write access
+        env:
+          FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
+          FTP_USER: ${{ secrets.JKC_FTP_USER }}
+          FTP_PASS: ${{ secrets.JKC_FTP_PASSWORD }}
+          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+        run: |
+          python3 - <<'PYEOF'
+          import ftplib, os, sys
+          host = os.environ["FTP_HOST"]
+          try:
+              ftp = ftplib.FTP_TLS(host, timeout=30)
+              ftp.auth_tls()
+              ftp.login(os.environ["FTP_USER"], os.environ["FTP_PASS"])
+              print("✓ FTPS login OK")
+              ftp.cwd(os.environ["FTP_DIR"])
+              # Upload test file
+              with open("/tmp/ftp_test.txt", "rb") as f:
+                  ftp.storbinary("STOR .kk_ftp_probe", f)
+              print("✓ FTPS STOR OK")
+              # Cleanup
+              try:
+                  ftp.delete(".kk_ftp_probe")
+                  print("✓ FTPS DELETE OK")
+              except Exception as e:
+                  print(f"delete failed: {e}")
+              ftp.quit()
+              print("FTP_VALIDATED=OK")
+          except Exception as e:
+              print(f"::error::FTPS validation failed: {e}")
+              sys.exit(1)
+          PYEOF
+
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
         uses: actions/upload-artifact@v4
@@ -210,8 +243,144 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Trim extracted bundle (drop heavy/unneeded dirs) and upload per-file
+      - name: Recursive FTPS upload extracted bundle (primary path — fastest)
         if: env.FILEMAN_EXTRACT_FUNC == ''
+        id: ftp_upload
+        env:
+          FTP_HOST: ${{ secrets.JKC_FTP_HOST }}
+          FTP_USER: ${{ secrets.JKC_FTP_USER }}
+          FTP_PASS: ${{ secrets.JKC_FTP_PASSWORD }}
+          FTP_DIR: ${{ secrets.JKC_FTP_DIR }}
+          BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
+        run: |
+          set +e
+          echo "Extract ${BUNDLE_FILE} locally, trim, then upload via FTPS (fast recursive)"
+          rm -rf extracted
+          mkdir -p extracted
+          if ! unzip -q "${BUNDLE_FILE}" -d extracted/; then
+            echo "::error::unzip lokal gagal"
+            exit 1
+          fi
+          if [[ -f "extracted/server.js" ]]; then
+            SRC="extracted"
+          elif [[ -d "extracted/deploy" && -f "extracted/deploy/server.js" ]]; then
+            SRC="extracted/deploy"
+          else
+            SRC=$(find extracted -name "server.js" -type f | head -1 | xargs dirname)
+          fi
+          echo "Using SRC=${SRC}"
+          if [[ ! -f "${SRC}/server.js" ]]; then
+            echo "::error::server.js tidak ada"
+            exit 1
+          fi
+          echo "Trimming unused files..."
+          find "${SRC}" -type f \( \
+            -name "*.map" -o \
+            -name "*.tsbuildinfo" -o \
+            -name "*.md" -o \
+            -name "*.bak" -o \
+            -name "*.d.ts" -o \
+            -path "*/node_modules/*/test/*" -o \
+            -path "*/node_modules/*/tests/*" -o \
+            -path "*/node_modules/*/changelog*" -o \
+            -path "*/node_modules/*/CHANGELOG*" -o \
+            -path "*/node_modules/*/readme.md" -o \
+            -path "*/node_modules/*/README.md" -o \
+            -path "*/node_modules/.bin" -o \
+            -path "*/node_modules/*/man/*" -o \
+            -path "*/node_modules/*/manpages/*" \
+          \) -delete 2>/dev/null
+          TOTAL=$(find "${SRC}" -type f | wc -l)
+          echo "TOTAL=${TOTAL}" >> $GITHUB_ENV
+          echo "Total files to upload (after trim): ${TOTAL}"
+          export FTP_HOST FTP_USER FTP_PASS FTP_DIR SRC TOTAL
+          python3 - <<'PYEOF'
+          import ftplib, os, sys, time
+          host = os.environ["FTP_HOST"]
+          user = os.environ["FTP_USER"]
+          pw = os.environ["FTP_PASS"]
+          base_dir = os.environ["FTP_DIR"]
+          src = os.environ["SRC"]
+          total = int(os.environ.get("TOTAL", "0"))
+          ok = 0
+          fail = 0
+          t0 = time.time()
+          ftp = None
+          try:
+              ftp = ftplib.FTP_TLS(host, timeout=120)
+              ftp.auth_tls()
+              ftp.login(user, pw)
+              try:
+                  ftp.prot_p()
+              except Exception:
+                  pass
+              print(f"Connected to {host}")
+              ftp.cwd(base_dir)
+              # Pre-create dir tree (top-down, mkdir if needed).
+              dirs = set()
+              for root, _, files in os.walk(src):
+                  rel = os.path.relpath(root, src)
+                  if rel != ".":
+                      dirs.add(rel.replace(os.sep, "/"))
+              print(f"Creating {len(dirs)} directories...")
+              for d in sorted(dirs):
+                  parts = d.split("/")
+                  for p in parts:
+                      try:
+                          ftp.cwd(p)
+                      except ftplib.error_perm:
+                          try:
+                              ftp.mkd(p)
+                              ftp.cwd(p)
+                          except Exception as e:
+                              print(f"mkdir {p}: {e}")
+                              break
+              print(f"Uploading {total} files...")
+              for root, _, files in os.walk(src):
+                  rel = os.path.relpath(root, src)
+                  for fn in files:
+                      fpath = os.path.join(root, fn)
+                      if rel == ".":
+                          rpath = fn
+                      else:
+                          rpath = (rel + "/" + fn).replace(os.sep, "/")
+                      try:
+                          with open(fpath, "rb") as f:
+                              ftp.storbinary(f"STOR {rpath}", f)
+                          ok += 1
+                      except Exception as e:
+                          fail += 1
+                          if fail <= 5:
+                              print(f"FAIL {rpath}: {e}")
+                      if (ok + fail) % 100 == 0:
+                          elapsed = time.time() - t0
+                          rate = (ok + fail) / max(elapsed, 1)
+                          print(f"  ... {ok + fail}/{total}  ({rate:.1f}/s)")
+              elapsed = time.time() - t0
+              print(f"OK={ok}  FAIL={fail}  in {elapsed:.1f}s")
+          except Exception as e:
+              print(f"::error::FTPS upload failed: {e}")
+              sys.exit(1)
+          finally:
+              if ftp is not None:
+                  try:
+                      ftp.quit()
+                  except Exception:
+                      pass
+          if fail > 10:
+              sys.exit(1)
+          PYEOF
+          # Cleanup uploaded zip via UAPI
+          curl -sS -o /dev/null -w "delete zip HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: cpanel keluhkam:${{ secrets.JKC_CPANEL_TOKEN }}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "files=${FTP_DIR}/${BUNDLE_FILE}" \
+            "https://${FTP_HOST}:2083/execute/Fileman/delete_files" || true
+          echo "✓ FTPS upload OK"
+
+      - name: Trim extracted bundle (drop heavy/unneeded dirs) and upload per-file
+        if: env.FILEMAN_EXTRACT_FUNC == '' && steps.ftp_upload.outcome == 'failure'
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
