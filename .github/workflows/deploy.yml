@@ -171,17 +171,8 @@ jobs:
             head -200 /tmp/step10b.log
             exit 1
           fi
-          # Verify upload landed di server (cari by basename).
-          BASENAME_REMOTE="${BUNDLE_FILE}"
-          ok=0
-          r=$(curl -sS \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-          if echo "${r}" | grep -q "\"name\":\"${BASENAME_REMOTE}\""; then
-            echo "✓ ${BASENAME_REMOTE} terlihat di ${CPANEL_DIR}"
-            ok=1
-          fi
-          [[ "$ok" -ne 1 ]] && { echo "::error::${BASENAME_REMOTE} tidak muncul setelah upload"; exit 1; }
+          # Upload succeed per API response. Extract step verifies server.js.
+          echo "✓ UAPI upload_files reported succeeded — proceed to extract."
 
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
