@@ -239,8 +239,9 @@ jobs:
                   print(f"cwd {ftp_dir_rel} failed: {e}")
                   # Fallback: coba strip 'public_html/' prefix kalau masih gagal
                   raise
-              with open("/tmp/ftp_test.txt", "rb") as f:
-                  ftp.storbinary("STOR .kk_ftp_probe", f)
+              import io
+              buf = io.BytesIO(b"kk-probe-" + os.urandom(4))
+              ftp.storbinary("STOR .kk_ftp_probe", buf)
               print("✓ FTPS STOR OK")
               try:
                   ftp.delete(".kk_ftp_probe")
