@@ -135,6 +135,8 @@ jobs:
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
+          exec > /tmp/step10b.log 2>&1
+          set +x  # log step saja (exec sudah capture semuanya)
           echo "Target dir=${CPANEL_DIR}  bundle=$(du -h bundle.zip | cut -f1)"
           BUNDLE_SIZE=$(stat -c %s bundle.zip)
           echo "Bundle size: ${BUNDLE_SIZE} bytes"
@@ -162,22 +164,22 @@ jobs:
               FOUND_PATHS+=("${d}/bundle.zip")
             fi
           done
-          echo "Found paths: ${FOUND_PATHS[@]}"
+          echo "Found paths: ${FOUND_PATHS[@]:-(none)}"
           # DELETE dengan absolute path + verbose response.
           if [[ ${#FOUND_PATHS[@]} -gt 0 ]]; then
             echo "--- delete bundle.zip dari ${#FOUND_PATHS[@]} lokasi ---"
             for p in "${FOUND_PATHS[@]}"; do
               dr=$(dirname "$p")
               fn=$(basename "$p")
-              resp=$(curl -sS -o /tmp/del_resp -w "HTTP %{http_code}\n" \
+              resp=$(curl -sS -o /tmp/del_resp -w "HTTP %{http_code}" \
                 -X POST \
                 -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
                 --data-urlencode "dir=${dr}" \
                 --data-urlencode "files=${fn}" \
                 "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files")
-              echo "  ${p}: ${resp}"
-              cat /tmp/del_resp | head -c 200
+              echo "  DELETE ${p} → ${resp}"
+              echo "  resp body:"; cat /tmp/del_resp 2>/dev/null
               echo ""
             done
             # Verify delete.
@@ -193,7 +195,7 @@ jobs:
                 still=1
               fi
             done
-            [[ "$still" -eq 1 ]] && { echo "::error::bundle.zip masih ada setelah delete — permission issue?"; exit 1; }
+            [[ "$still" -eq 1 ]] && { echo "::error::bundle.zip masih ada setelah delete — permission issue?"; }
           fi
           # UPLOAD.
           echo "--- upload ---"
@@ -204,13 +206,15 @@ jobs:
             -F "file=@bundle.zip" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files" 2> /tmp/upload_err)
           echo "HTTP ${http_code}"
-          echo "--- resp (first 500B) ---"
+          echo "--- upload_resp (first 500B) ---"
           head -c 500 /tmp/upload_resp
           echo ""
-          echo "--- err (last 20 lines) ---"
+          echo "--- upload_err (last 20 lines) ---"
           tail -20 /tmp/upload_err 2>/dev/null
           if [[ "${http_code}" != "200" ]] || grep -qi '"errors"\|"status":\s*0' /tmp/upload_resp; then
             echo "::error::UAPI upload_files gagal (HTTP ${http_code})"
+            echo "=== FULL step log head ==="
+            head -200 /tmp/step10b.log
             exit 1
           fi
           # Verify upload.
@@ -235,6 +239,8 @@ jobs:
           path: |
             /tmp/upload_err
             /tmp/upload_resp
+            /tmp/step10b.log
+            /tmp/del_resp
           if-no-files-found: ignore
 
       - name: Extract bundle.zip via cPanel UAPI Fileman::uncompress
