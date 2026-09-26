@@ -186,7 +186,7 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Extract bundle via PHP script (UAPI has no uncompress, API2 needs session)
+      - name: Extract bundle tree locally then upload per-file via UAPI save_file
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -195,68 +195,87 @@ jobs:
           BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
           set +e
-          echo "Extract via PHP script invoked over HTTPS..."
-          # 1. Upload PHP extractor script (saved under docroot so HTTP can reach it).
-          PHP_SCRIPT='<?php
-          $src = $_GET["src"] ?? "";
-          $dst = $_GET["dst"] ?? "";
-          $key = $_GET["key"] ?? "";
-          if ($key !== "kk-deploy-2026") { http_response_code(403); exit("forbidden"); }
-          if (!preg_match("#^/home/keluhkam/[a-z0-9_./-]+$#i", $src) ||
-              !preg_match("#^/home/keluhkam/[a-z0-9_./-]+$#i", $dst)) {
-            http_response_code(400); exit("bad path");
-          }
-          $z = new ZipArchive();
-          $r = $z->open($src);
-          if ($r !== TRUE) { http_response_code(500); exit("open failed: $r"); }
-          $r = $z->extractTo($dst);
-          $z->close();
-          echo $r ? "OK" : "extract failed";
-          '
-          save_code=$(curl -sS -o /tmp/save_resp -w "%{http_code}" \
+          echo "Extract ${BUNDLE_FILE} locally, then upload per-file via UAPI Fileman::save_file"
+          # 1. Extract zip ke folder extracted/
+          rm -rf extracted
+          mkdir -p extracted
+          if ! unzip -q "${BUNDLE_FILE}" -d extracted/; then
+            echo "::error::unzip lokal gagal"
+            exit 1
+          fi
+          # Tentukan root source (kalau zip ada top-level dir atau tidak).
+          if [[ -f "extracted/server.js" ]]; then
+            SRC="extracted"
+          elif [[ -d "extracted/deploy" && -f "extracted/deploy/server.js" ]]; then
+            SRC="extracted/deploy"
+          elif [[ "$(ls extracted | wc -l)" -eq 1 && -d "extracted/$(ls extracted | head -1)" && -f "extracted/$(ls extracted | head -1)/server.js" ]]; then
+            SRC="extracted/$(ls extracted | head -1)"
+          else
+            # Generic: pakai deepest dir yang punya server.js
+            SRC=$(find extracted -name "server.js" -type f | head -1 | xargs dirname)
+          fi
+          echo "Using SRC=${SRC}"
+          if [[ ! -f "${SRC}/server.js" ]]; then
+            echo "::error::server.js tidak ada di extracted bundle"
+            find extracted -name "server.js" -type f | head -5
+            exit 1
+          fi
+          # 2. Hitung total files.
+          TOTAL=$(find "${SRC}" -type f | wc -l)
+          echo "Total files to upload: ${TOTAL}"
+          # 3. Upload per-file via UAPI Fileman::save_file.
+          # Skip symlink & empty dir entries; only regular files.
+          UPLOADED=0
+          FAILED=0
+          while IFS= read -r -d '' filepath; do
+            rel="${filepath#${SRC}/}"
+            parent=$(dirname "${rel}")
+            name=$(basename "${rel}")
+            parent_dir="${CPANEL_DIR}"
+            if [[ "${parent}" != "." ]]; then
+              parent_dir="${CPANEL_DIR}/${parent}"
+            fi
+            code=$(curl -sS -o /tmp/sf_resp -w "%{http_code}" \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              --data-urlencode "dir=${parent_dir}" \
+              --data-urlencode "file=${name}" \
+              --data-urlencode "content@${filepath}" \
+              --data-urlencode "encoding=utf-8" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+            if [[ "$code" != "200" ]] || grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/sf_resp 2>/dev/null; then
+              echo "  FAIL ${rel} (HTTP ${code})"
+              head -c 200 /tmp/sf_resp 2>/dev/null
+              echo ""
+              FAILED=$((FAILED+1))
+            else
+              UPLOADED=$((UPLOADED+1))
+            fi
+            # Progress every 50 files.
+            if (( UPLOADED % 50 == 0 )); then
+              echo "  ... uploaded ${UPLOADED}/${TOTAL}"
+            fi
+          done < <(find "${SRC}" -type f -print0)
+          echo "Uploaded ${UPLOADED}/${TOTAL}  failed=${FAILED}"
+          # 4. Cleanup uploaded zip.
+          curl -sS -o /dev/null -w "delete zip HTTP %{http_code}\n" \
+            -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            --data-urlencode "dir=${CPANEL_DIR}" \
-            --data-urlencode "file=_kk_extract.php" \
-            --data-urlencode "content=${PHP_SCRIPT}" \
-            --data-urlencode "encoding=utf-8" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
-          echo "save_file HTTP $save_code"
-          if [[ "$save_code" != "200" ]]; then
-            echo "::error::Gagal upload _kk_extract.php"
-            cat /tmp/save_resp
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          if [[ "$FAILED" -gt 0 ]]; then
+            echo "::error::${FAILED} files gagal upload (total ${TOTAL})"
             exit 1
           fi
-          # 2. Invoke via HTTP. Docroot = /home/keluhkam/public_html/keluhkampus.my.id/
-          # so script lives at https://keluhkampus.my.id/keluhkampus.my.id/_kk_extract.php
-          SITE_URL="https://keluhkampus.my.id/keluhkampus.my.id/_kk_extract.php"
-          ext_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
-            "${SITE_URL}?src=${CPANEL_DIR}/${BUNDLE_FILE}&dst=${CPANEL_DIR}&key=kk-deploy-2026")
-          echo "extract HTTP $ext_code"
-          cat /tmp/extract_resp
-          echo ""
-          if [[ "$ext_code" != "200" ]] || ! grep -q "^OK" /tmp/extract_resp; then
-            echo "::error::PHP extract gagal (HTTP $ext_code)"
-            exit 1
-          fi
-          # 3. Verify server.js muncul
-          sleep 2
+          # 5. Verify server.js present.
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
           if ! echo "$verify_resp" | grep -q '"name":"server.js"'; then
-            echo "::error::Extract selesai tapi server.js tidak terlihat."
+            echo "::error::Upload selesai tapi server.js tidak terlihat"
             exit 1
           fi
-          echo "✓ Extract OK — server.js present di ${CPANEL_DIR}"
-          # 4. Cleanup: hapus uploaded zip + script
-          for f in "${CPANEL_DIR}/${BUNDLE_FILE}" "${CPANEL_DIR}/_kk_extract.php"; do
-            curl -sS -o /dev/null -w "delete ${f} HTTP %{http_code}\n" \
-              -X POST \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              -H "Content-Type: application/x-www-form-urlencoded" \
-              --data-urlencode "files=${f}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
-          done
+          echo "✓ Upload OK — server.js present di ${CPANEL_DIR}"
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
         env:
