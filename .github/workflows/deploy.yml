@@ -139,19 +139,63 @@ jobs:
           BUNDLE_SIZE=$(stat -c %s bundle.zip)
           echo "Bundle size: ${BUNDLE_SIZE} bytes"
           if [[ "${BUNDLE_SIZE}" -gt 90000000 ]]; then
-            echo "::error::Bundle > 90MB, di atas limit PHP upload. Slim dulu."
+            echo "::error::Bundle > 90MB, di atas limit PHP upload."
             exit 1
           fi
-          # Cleanup: hapus bundle.zip existing kalau ada (UAPI upload_files reject overwrite).
-          echo "--- delete existing bundle.zip if any ---"
-          for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
-            curl -sS -o /dev/null -w "delete ${d}: HTTP %{http_code}\n" \
-              -X POST \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              --data-urlencode "files=${d}/bundle.zip" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          # PROBE: cari di mana bundle.zip existing berada.
+          echo "--- probe existing bundle.zip locations ---"
+          PROBE_DIRS=(
+            "${CPANEL_DIR}"
+            "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"
+            "/home/${CPANEL_USER}/public_html"
+            "/home/${CPANEL_USER}"
+            "/home/${CPANEL_USER}/keluhkampus.my.id"
+            "/home/${CPANEL_USER}/tmp"
+          )
+          FOUND_PATHS=()
+          for d in "${PROBE_DIRS[@]}"; do
+            [[ -z "$d" ]] && continue
+            r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500" 2>/dev/null)
+            if echo "${r}" | grep -q '"name":"bundle.zip"'; then
+              echo "  → bundle.zip DITEMUKAN di: ${d}"
+              FOUND_PATHS+=("${d}/bundle.zip")
+            fi
           done
-          # Upload via UAPI multipart.
+          echo "Found paths: ${FOUND_PATHS[@]}"
+          # DELETE dengan absolute path + verbose response.
+          if [[ ${#FOUND_PATHS[@]} -gt 0 ]]; then
+            echo "--- delete bundle.zip dari ${#FOUND_PATHS[@]} lokasi ---"
+            for p in "${FOUND_PATHS[@]}"; do
+              dr=$(dirname "$p")
+              fn=$(basename "$p")
+              resp=$(curl -sS -o /tmp/del_resp -w "HTTP %{http_code}\n" \
+                -X POST \
+                -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                --data-urlencode "dir=${dr}" \
+                --data-urlencode "files=${fn}" \
+                "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files")
+              echo "  ${p}: ${resp}"
+              cat /tmp/del_resp | head -c 200
+              echo ""
+            done
+            # Verify delete.
+            echo "--- verify deleted ---"
+            sleep 2
+            still=0
+            for d in "${PROBE_DIRS[@]}"; do
+              [[ -z "$d" ]] && continue
+              r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+                "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${d}&limit=500")
+              if echo "${r}" | grep -q '"name":"bundle.zip"'; then
+                echo "  → bundle.zip MASIH ada di: ${d}"
+                still=1
+              fi
+            done
+            [[ "$still" -eq 1 ]] && { echo "::error::bundle.zip masih ada setelah delete — permission issue?"; exit 1; }
+          fi
+          # UPLOAD.
           echo "--- upload ---"
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
@@ -169,8 +213,8 @@ jobs:
             echo "::error::UAPI upload_files gagal (HTTP ${http_code})"
             exit 1
           fi
-          # Verify file landed.
-          echo "--- verify file exists ---"
+          # Verify upload.
+          echo "--- verify file landed ---"
           ok=0
           for d in "${CPANEL_DIR}" "/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"; do
             r=$(curl -sS -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
