@@ -141,8 +141,11 @@ jobs:
               fi
             fi
           fi
-          # Write diagnostic ke public_html agar bisa di-fetch via HTTP
-          DIAG_PATH="${CPANEL_DIR}/deploy-diag.txt"
+          # Write diagnostic ke public_html root agar bisa di-fetch via HTTP.
+          # CPANEL_DIR = /home/keluhkam/public_html/keluhkampus.my.id — PRIVATE (Passenger app dir).
+          # Doc root = /home/keluhkam/public_html — served oleh Apache, publicly accessible.
+          DOC_ROOT="/home/${CPANEL_USER}/public_html"
+          DIAG_PATH="${DOC_ROOT}/deploy-diag.txt"
           cat > /tmp/diag_content <<EOF
 CPANEL_DIR=${CPANEL_DIR}
 bundle_size_bytes=$(stat -c%s bundle.zip)
