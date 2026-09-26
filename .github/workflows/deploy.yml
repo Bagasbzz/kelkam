@@ -106,7 +106,7 @@ jobs:
           cd ..
           echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
 
-      - name: [10a] Diagnose FTP target (DNS / TCP / banner)
+      - name: "10a — Diagnose FTP target (DNS / TCP / banner)"
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
         run: |
@@ -128,7 +128,7 @@ jobs:
           echo "--- FTP banner (raw socket, no auth) ---"
           timeout 10 bash -c 'exec 3<>/dev/tcp/$0/$1; cat <&3 & sleep 2; kill %1 2>/dev/null; exec 3<&-' "${CPANEL_HOST}" 21 2>&1 || echo "(no banner)"
 
-      - name: [10b] Upload ZIP via plain FTP (verbose)
+      - name: "10b — Upload ZIP via plain FTP (verbose)"
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
