@@ -186,7 +186,7 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Extract bundle via cPanel API2 Fileman::uncompress
+      - name: Extract bundle via PHP script (UAPI has no uncompress, API2 needs session)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -194,29 +194,52 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
           BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
-          echo "Extracting ${CPANEL_DIR}/${BUNDLE_FILE} via API2 Fileman::uncompress..."
-          # cPanel UAPI tidak punya Fileman::uncompress di server ini (verified run #52).
-          # API2 endpoint /cpanel adalah legacy — Fileman::uncompress ada di sini.
-          http_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
-            -X POST \
+          set +e
+          echo "Extract via PHP script invoked over HTTPS..."
+          # 1. Upload PHP extractor script (saved under docroot so HTTP can reach it).
+          PHP_SCRIPT='<?php
+          $src = $_GET["src"] ?? "";
+          $dst = $_GET["dst"] ?? "";
+          $key = $_GET["key"] ?? "";
+          if ($key !== "kk-deploy-2026") { http_response_code(403); exit("forbidden"); }
+          if (!preg_match("#^/home/keluhkam/[a-z0-9_./-]+$#i", $src) ||
+              !preg_match("#^/home/keluhkam/[a-z0-9_./-]+$#i", $dst)) {
+            http_response_code(400); exit("bad path");
+          }
+          $z = new ZipArchive();
+          $r = $z->open($src);
+          if ($r !== TRUE) { http_response_code(500); exit("open failed: $r"); }
+          $r = $z->extractTo($dst);
+          $z->close();
+          echo $r ? "OK" : "extract failed";
+          '
+          save_code=$(curl -sS -o /tmp/save_resp -w "%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "cpanel_jsonapi_user=${CPANEL_USER}" \
-            --data-urlencode "cpanel_jsonapi_apiversion=2" \
-            --data-urlencode "cpanel_jsonapi_module=Fileman" \
-            --data-urlencode "cpanel_jsonapi_func=uncompress" \
-            --data-urlencode "sourcefile=${CPANEL_DIR}/${BUNDLE_FILE}" \
-            --data-urlencode "destdir=${CPANEL_DIR}" \
-            "https://${CPANEL_HOST}:2083/cpanel")
-          echo "Extract HTTP $http_code"
-          head -c 800 /tmp/extract_resp
-          echo ""
-          if [[ "$http_code" != "200" ]] || grep -qE '"failed":\s*[1-9]|result-?[12]' /tmp/extract_resp; then
-            echo "::error::Fileman::uncompress (API2) gagal"
+            --data-urlencode "dir=${CPANEL_DIR}" \
+            --data-urlencode "file=_kk_extract.php" \
+            --data-urlencode "content=${PHP_SCRIPT}" \
+            --data-urlencode "encoding=utf-8" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+          echo "save_file HTTP $save_code"
+          if [[ "$save_code" != "200" ]]; then
+            echo "::error::Gagal upload _kk_extract.php"
+            cat /tmp/save_resp
             exit 1
           fi
-          # Verify server.js muncul
-          sleep 3
+          # 2. Invoke via HTTP. Docroot = /home/keluhkam/public_html/keluhkampus.my.id/
+          # so script lives at https://keluhkampus.my.id/keluhkampus.my.id/_kk_extract.php
+          SITE_URL="https://keluhkampus.my.id/keluhkampus.my.id/_kk_extract.php"
+          ext_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
+            "${SITE_URL}?src=${CPANEL_DIR}/${BUNDLE_FILE}&dst=${CPANEL_DIR}&key=kk-deploy-2026")
+          echo "extract HTTP $ext_code"
+          cat /tmp/extract_resp
+          echo ""
+          if [[ "$ext_code" != "200" ]] || ! grep -q "^OK" /tmp/extract_resp; then
+            echo "::error::PHP extract gagal (HTTP $ext_code)"
+            exit 1
+          fi
+          # 3. Verify server.js muncul
+          sleep 2
           verify_resp=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
@@ -225,13 +248,15 @@ jobs:
             exit 1
           fi
           echo "✓ Extract OK — server.js present di ${CPANEL_DIR}"
-          # Cleanup uploaded zip
-          curl -sS -o /dev/null -w "Delete HTTP %{http_code}\n" \
-            -X POST \
-            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          # 4. Cleanup: hapus uploaded zip + script
+          for f in "${CPANEL_DIR}/${BUNDLE_FILE}" "${CPANEL_DIR}/_kk_extract.php"; do
+            curl -sS -o /dev/null -w "delete ${f} HTTP %{http_code}\n" \
+              -X POST \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              --data-urlencode "files=${f}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          done
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
         env:
