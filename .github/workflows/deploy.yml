@@ -90,10 +90,10 @@ jobs:
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          set +e  # Jangan auto-exit di curl failure, kita inspect manual
+          set +e
           echo "CPANEL_DIR=${CPANEL_DIR}"
           echo "Bundle zip size: $(du -sh bundle.zip | cut -f1) (raw bytes: $(stat -c%s bundle.zip))"
-          # Diagnostic: list server dir sebelum upload (cek path exists + visible)
+          # Diagnostic: list server dir sebelum upload
           echo "--- pre-upload list ${CPANEL_DIR} ---"
           pre=$(curl -sS -w "\nHTTP=%{http_code}" \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
@@ -101,7 +101,7 @@ jobs:
           echo "${pre}" | head -c 2000
           echo ""
           echo "--- end pre-upload ---"
-          # Upload via Fileman dengan curl --fail-with-body supaya non-2xx die early
+          # Upload via Fileman
           echo "Uploading bundle.zip to ${CPANEL_DIR}..."
           http_code=$(curl -sS -o /tmp/upload_resp -w "%{http_code}" \
             -X POST \
@@ -110,8 +110,9 @@ jobs:
             -F "dir=${CPANEL_DIR}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/upload_files")
           upload_exit=$?
+          upload_body=$(cat /tmp/upload_resp)
           echo "Upload: HTTP=${http_code} curl_exit=${upload_exit}"
-          echo "Response body:"; cat /tmp/upload_resp; echo ""
+          echo "Response body: ${upload_body}"
           # Verifikasi upload landing
           sleep 1
           post=$(curl -sS -w "\nHTTP=%{http_code}" \
@@ -120,28 +121,52 @@ jobs:
           echo "--- post-upload list ${CPANEL_DIR} ---"
           echo "${post}" | head -c 2000
           echo ""
+          bundle_found="no"
           if echo "${post}" | grep -q '"name":"bundle.zip"'; then
+            bundle_found="yes"
             echo "✓ bundle.zip landing di ${CPANEL_DIR}"
-            exit 0
-          fi
-          # Kalau tidak muncul, cek fallback path: /home/${CPANEL_USER}/public_html/<basename>
-          ALT_DIR="/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"
-          if [[ "${ALT_DIR}" != "${CPANEL_DIR}" ]]; then
-            echo "--- check alt dir ${ALT_DIR} ---"
-            alt=$(curl -sS \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${ALT_DIR}&limit=500")
-            echo "${alt}" | head -c 1500
-            echo ""
-            if echo "${alt}" | grep -q '"name":"bundle.zip"'; then
-              echo "::warning::bundle.zip ada di ${ALT_DIR} (bukan CPANEL_DIR). Lanjut, extract step akan cari di kedua path."
-              exit 0
+          else
+            # Fallback ke alt-dir
+            ALT_DIR="/home/${CPANEL_USER}/public_html/${CPANEL_DIR##*/}"
+            if [[ "${ALT_DIR}" != "${CPANEL_DIR}" ]]; then
+              echo "--- check alt dir ${ALT_DIR} ---"
+              alt=$(curl -sS \
+                -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+                "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${ALT_DIR}&limit=500")
+              echo "${alt}" | head -c 1500
+              echo ""
+              if echo "${alt}" | grep -q '"name":"bundle.zip"'; then
+                bundle_found="yes"
+                echo "✓ bundle.zip di ${ALT_DIR}"
+              fi
             fi
           fi
-          echo "::error::bundle.zip TIDAK muncul di ${CPANEL_DIR} maupun ${ALT_DIR} setelah upload."
-          echo "  HTTP ${http_code} curl_exit ${upload_exit}"
-          echo "  Body: $(cat /tmp/upload_resp)"
-          exit 1
+          # Write diagnostic ke public_html agar bisa di-fetch via HTTP
+          DIAG_PATH="${CPANEL_DIR}/deploy-diag.txt"
+          cat > /tmp/diag_content <<EOF
+CPANEL_DIR=${CPANEL_DIR}
+bundle_size_bytes=$(stat -c%s bundle.zip)
+upload_http=${http_code}
+upload_exit=${upload_exit}
+upload_body=${upload_body}
+bundle_found_in_listing=${bundle_found}
+pre_listing=$(echo "${pre}" | head -c 500 | tr '\n' ' ')
+post_listing=$(echo "${post}" | head -c 500 | tr '\n' ' ')
+EOF
+          curl -sS -o /tmp/diag_resp -w "diag HTTP %{http_code}\n" \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --data-urlencode "dir=${CPANEL_DIR}" \
+            --data-urlencode "file=deploy-diag.txt" \
+            --data-urlencode "content@/tmp/diag_content" \
+            --data-urlencode "encoding=utf-8" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/save_file"
+          cat /tmp/diag_resp
+          echo ""
+          if [[ "${bundle_found}" != "yes" ]]; then
+            echo "::error::bundle.zip TIDAK landing. HTTP=${http_code} body=${upload_body}"
+            echo "  → Diag ditulis ke ${DIAG_PATH} (fetch via https://keluhkampus.my.id/deploy-diag.txt)"
+            exit 1
+          fi
 
       - name: Extract bundle.zip via cPanel UAPI (no cron dependency)
         env:
