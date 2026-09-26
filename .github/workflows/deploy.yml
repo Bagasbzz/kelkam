@@ -8,7 +8,7 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -174,6 +174,30 @@ jobs:
           # Upload succeed per API response. Extract step verifies server.js.
           echo "✓ UAPI upload_files reported succeeded — proceed to extract."
 
+      - name: Probe UAPI Fileman::extract_archive (faster than per-file)
+        id: probe_extract
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        continue-on-error: true
+        run: |
+          echo "Probe UAPI Fileman extract functions..."
+          for fn in extract_archive extract_files decompress_file extract unzip; do
+            code=$(curl -sS -o /tmp/probe_${fn} -w "%{http_code}" \
+              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+              "https://${CPANEL_HOST}:2083/execute/Fileman/${fn}")
+            body=$(head -c 150 /tmp/probe_${fn})
+            echo "Fileman::${fn} → HTTP ${code}  body: ${body}"
+            if [[ "$code" == "200" ]] && ! echo "$body" | grep -qE '"status"\s*:\s*0|"errors"\s*:\s*\[|unknown module'; then
+              echo "FILEMAN_EXTRACT_FUNC=${fn}" >> $GITHUB_ENV
+              echo "✓ Found working extract function: ${fn}"
+              exit 0
+            fi
+          done
+          echo "::warning::Tidak ada UAPI extract function yang work. Fallback ke per-file upload."
+          echo "FILEMAN_EXTRACT_FUNC=" >> $GITHUB_ENV
+
       - name: Upload diagnostic logs as artifact (always runs)
         if: always()
         uses: actions/upload-artifact@v4
@@ -187,6 +211,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Trim extracted bundle (drop heavy/unneeded dirs) and upload per-file
+        if: env.FILEMAN_EXTRACT_FUNC == ''
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -241,10 +266,6 @@ jobs:
           find "${SRC}" -type f -print0 > /tmp/upload_list.bin
           wc -c /tmp/upload_list.bin
           # 4. Upload per-file via UAPI save_file (PARALLEL x8 with xargs).
-          # -n 1: 1 arg per call
-          # -P 8: 8 parallel workers
-          # -0: null-separated input
-          # Tiap worker: compute rel path → curl save_file → print "OK" or "FAIL <rel>".
           export CPANEL_HOST CPANEL_USER CPANEL_TOKEN CPANEL_DIR SRC
           upload_one() {
             local filepath="$1"
@@ -275,7 +296,6 @@ jobs:
           export -f upload_one
           echo "Starting parallel upload (8 workers, 3 retries each)..."
           rm -f /tmp/upload_results.txt
-          # xargs parallel call upload_one dengan input null-separated
           xargs -0 -n 1 -P 8 -I {} bash -c 'upload_one "$@"' _ {} < /tmp/upload_list.bin > /tmp/upload_results.txt 2>&1
           OK=$(grep -c "^OK" /tmp/upload_results.txt 2>/dev/null || echo 0)
           FAIL=$(grep -c "^FAIL" /tmp/upload_results.txt 2>/dev/null || echo 0)
@@ -310,6 +330,52 @@ jobs:
             exit 1
           fi
           echo "✓ Upload OK"
+
+      - name: Extract zip via UAPI Fileman function (if probe found one)
+        if: env.FILEMAN_EXTRACT_FUNC != ''
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+          CPANEL_USER: keluhkam
+          CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+          CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
+          BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
+          EXTRACT_FUNC: ${{ env.FILEMAN_EXTRACT_FUNC }}
+        run: |
+          set +e
+          echo "Extract via UAPI Fileman::${EXTRACT_FUNC} (fast path)"
+          ext_code=$(curl -sS -o /tmp/extract_resp -w "%{http_code}" \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            --data-urlencode "source=${CPANEL_DIR}/${BUNDLE_FILE}" \
+            --data-urlencode "destination=${CPANEL_DIR}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/${EXTRACT_FUNC}")
+          echo "extract HTTP ${ext_code}"
+          cat /tmp/extract_resp
+          echo ""
+          if [[ "$ext_code" != "200" ]] || grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0|"errors"' /tmp/extract_resp 2>/dev/null; then
+            echo "::error::UAPI extract gagal"
+            exit 1
+          fi
+          # Verify server.js
+          sleep 2
+          LOCAL_BUILD=$(cat .next/BUILD_ID)
+          REMOTE_RESP=$(curl -sS \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/get_file?dir=${CPANEL_DIR}/.next&file=BUILD_ID")
+          REMOTE_BUILD=$(echo "${REMOTE_RESP}" | grep -oE '"data":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "Local BUILD_ID:  ${LOCAL_BUILD}"
+          echo "Remote BUILD_ID: ${REMOTE_BUILD}"
+          if [[ "${REMOTE_BUILD}" != "${LOCAL_BUILD}" ]]; then
+            echo "::error::BUILD_ID tidak cocok"
+            exit 1
+          fi
+          # Cleanup zip
+          curl -sS -o /dev/null -w "delete zip HTTP %{http_code}\n" \
+            -X POST \
+            -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
+            "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
+          echo "✓ Extract via ${EXTRACT_FUNC} OK"
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
         env:
