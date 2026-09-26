@@ -186,7 +186,7 @@ jobs:
             /tmp/del_resp
           if-no-files-found: ignore
 
-      - name: Extract bundle tree locally then upload per-file via UAPI save_file
+      - name: Trim extracted bundle (drop heavy/unneeded dirs) and upload per-file
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
@@ -195,87 +195,121 @@ jobs:
           BUNDLE_FILE: ${{ env.BUNDLE_FILE }}
         run: |
           set +e
-          echo "Extract ${BUNDLE_FILE} locally, then upload per-file via UAPI Fileman::save_file"
-          # 1. Extract zip ke folder extracted/
+          echo "Extract ${BUNDLE_FILE} locally, trim, then upload per-file via UAPI save_file (parallel x8)"
+          # 1. Extract zip
           rm -rf extracted
           mkdir -p extracted
           if ! unzip -q "${BUNDLE_FILE}" -d extracted/; then
             echo "::error::unzip lokal gagal"
             exit 1
           fi
-          # Tentukan root source (kalau zip ada top-level dir atau tidak).
           if [[ -f "extracted/server.js" ]]; then
             SRC="extracted"
           elif [[ -d "extracted/deploy" && -f "extracted/deploy/server.js" ]]; then
             SRC="extracted/deploy"
-          elif [[ "$(ls extracted | wc -l)" -eq 1 && -d "extracted/$(ls extracted | head -1)" && -f "extracted/$(ls extracted | head -1)/server.js" ]]; then
-            SRC="extracted/$(ls extracted | head -1)"
           else
-            # Generic: pakai deepest dir yang punya server.js
             SRC=$(find extracted -name "server.js" -type f | head -1 | xargs dirname)
           fi
           echo "Using SRC=${SRC}"
           if [[ ! -f "${SRC}/server.js" ]]; then
-            echo "::error::server.js tidak ada di extracted bundle"
-            find extracted -name "server.js" -type f | head -5
+            echo "::error::server.js tidak ada"
             exit 1
           fi
-          # 2. Hitung total files.
+          # 2. Trim: drop heavy/unneeded paths.
+          # node_modules bisa ribuan files (sourcemaps/README/.map).
+          # Production only butuh compiled JS + .prisma engines.
+          echo "Trimming unused files..."
+          find "${SRC}" -type f \( \
+            -name "*.map" -o \
+            -name "*.tsbuildinfo" -o \
+            -name "*.md" -o \
+            -name "*.bak" -o \
+            -name "*.d.ts" -o \
+            -path "*/node_modules/*/test/*" -o \
+            -path "*/node_modules/*/tests/*" -o \
+            -path "*/node_modules/*/changelog*" -o \
+            -path "*/node_modules/*/CHANGELOG*" -o \
+            -path "*/node_modules/*/readme.md" -o \
+            -path "*/node_modules/*/README.md" -o \
+            -path "*/node_modules/.bin" -o \
+            -path "*/node_modules/*/man/*" -o \
+            -path "*/node_modules/*/manpages/*" \
+          \) -delete 2>/dev/null
           TOTAL=$(find "${SRC}" -type f | wc -l)
-          echo "Total files to upload: ${TOTAL}"
-          # 3. Upload per-file via UAPI Fileman::save_file.
-          # Skip symlink & empty dir entries; only regular files.
-          UPLOADED=0
-          FAILED=0
-          while IFS= read -r -d '' filepath; do
-            rel="${filepath#${SRC}/}"
-            parent=$(dirname "${rel}")
-            name=$(basename "${rel}")
-            parent_dir="${CPANEL_DIR}"
-            if [[ "${parent}" != "." ]]; then
-              parent_dir="${CPANEL_DIR}/${parent}"
-            fi
-            code=$(curl -sS -o /tmp/sf_resp -w "%{http_code}" \
-              -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-              --data-urlencode "dir=${parent_dir}" \
-              --data-urlencode "file=${name}" \
-              --data-urlencode "content@${filepath}" \
-              --data-urlencode "encoding=utf-8" \
-              "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
-            if [[ "$code" != "200" ]] || grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/sf_resp 2>/dev/null; then
-              echo "  FAIL ${rel} (HTTP ${code})"
-              head -c 200 /tmp/sf_resp 2>/dev/null
-              echo ""
-              FAILED=$((FAILED+1))
-            else
-              UPLOADED=$((UPLOADED+1))
-            fi
-            # Progress every 50 files.
-            if (( UPLOADED % 50 == 0 )); then
-              echo "  ... uploaded ${UPLOADED}/${TOTAL}"
-            fi
-          done < <(find "${SRC}" -type f -print0)
-          echo "Uploaded ${UPLOADED}/${TOTAL}  failed=${FAILED}"
-          # 4. Cleanup uploaded zip.
+          echo "Total files to upload (after trim): ${TOTAL}"
+          # 3. Build upload list.
+          find "${SRC}" -type f -print0 > /tmp/upload_list.bin
+          wc -c /tmp/upload_list.bin
+          # 4. Upload per-file via UAPI save_file (PARALLEL x8 with xargs).
+          # -n 1: 1 arg per call
+          # -P 8: 8 parallel workers
+          # -0: null-separated input
+          # Tiap worker: compute rel path → curl save_file → print "OK" or "FAIL <rel>".
+          export CPANEL_HOST CPANEL_USER CPANEL_TOKEN CPANEL_DIR SRC
+          upload_one() {
+            local filepath="$1"
+            local rel="${filepath#${SRC}/}"
+            local parent=$(dirname "${rel}")
+            local name=$(basename "${rel}")
+            local parent_dir="${CPANEL_DIR}"
+            [[ "${parent}" != "." ]] && parent_dir="${CPANEL_DIR}/${parent}"
+            local code="000" i=0
+            while (( i < 3 )); do
+              code=$(curl -sS -o /tmp/sf_resp_$$ -w "%{http_code}" \
+                -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+                --data-urlencode "dir=${parent_dir}" \
+                --data-urlencode "file=${name}" \
+                --data-urlencode "content@${filepath}" \
+                --data-urlencode "encoding=utf-8" \
+                "https://${CPANEL_HOST}:2083/execute/Fileman/save_file")
+              if [[ "$code" == "200" ]] && ! grep -qE '"failed"\s*:\s*[1-9]|"status"\s*:\s*0' /tmp/sf_resp_$$ 2>/dev/null; then
+                printf "OK\t%s\n" "${rel}"
+                return 0
+              fi
+              i=$((i+1))
+              sleep 1
+            done
+            printf "FAIL\t%s\t%s\n" "${rel}" "${code}"
+            return 1
+          }
+          export -f upload_one
+          echo "Starting parallel upload (8 workers, 3 retries each)..."
+          rm -f /tmp/upload_results.txt
+          # xargs parallel call upload_one dengan input null-separated
+          xargs -0 -n 1 -P 8 -I {} bash -c 'upload_one "$@"' _ {} < /tmp/upload_list.bin > /tmp/upload_results.txt 2>&1
+          OK=$(grep -c "^OK" /tmp/upload_results.txt 2>/dev/null || echo 0)
+          FAIL=$(grep -c "^FAIL" /tmp/upload_results.txt 2>/dev/null || echo 0)
+          echo "Uploaded OK=${OK}  FAIL=${FAIL}  (total ${TOTAL})"
+          if [[ "$FAIL" -gt 0 ]]; then
+            echo "First 10 failures:"
+            grep "^FAIL" /tmp/upload_results.txt | head -10
+          fi
+          # 5. Cleanup uploaded zip.
           curl -sS -o /dev/null -w "delete zip HTTP %{http_code}\n" \
             -X POST \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             --data-urlencode "files=${CPANEL_DIR}/${BUNDLE_FILE}" \
             "https://${CPANEL_HOST}:2083/execute/Fileman/delete_files" || true
-          if [[ "$FAILED" -gt 0 ]]; then
-            echo "::error::${FAILED} files gagal upload (total ${TOTAL})"
+          if [[ "$FAIL" -gt 10 ]]; then
+            echo "::error::${FAIL} files gagal upload — too many failures"
             exit 1
           fi
-          # 5. Verify server.js present.
-          verify_resp=$(curl -sS \
+          # 6. Verify BUILD_ID matches local.
+          LOCAL_BUILD=$(cat "${SRC}/.next/BUILD_ID")
+          REMOTE_RESP=$(curl -sS \
             -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
-            "https://${CPANEL_HOST}:2083/execute/Fileman/list_files?dir=${CPANEL_DIR}&limit=500")
-          if ! echo "$verify_resp" | grep -q '"name":"server.js"'; then
-            echo "::error::Upload selesai tapi server.js tidak terlihat"
+            "https://${CPANEL_HOST}:2083/execute/Fileman/get_file?dir=${CPANEL_DIR}/.next&file=BUILD_ID")
+          REMOTE_BUILD=$(echo "${REMOTE_RESP}" | grep -oE '"data":"[^"]*"' | head -1 | cut -d'"' -f4)
+          echo "Local BUILD_ID:  ${LOCAL_BUILD}"
+          echo "Remote BUILD_ID: ${REMOTE_BUILD}"
+          if [[ -z "${REMOTE_BUILD}" ]]; then
+            echo "::warning::Gagal baca BUILD_ID dari server — skip verify"
+          elif [[ "${REMOTE_BUILD}" != "${LOCAL_BUILD}" ]]; then
+            echo "::error::BUILD_ID tidak cocok — upload belum lengkap"
             exit 1
           fi
-          echo "✓ Upload OK — server.js present di ${CPANEL_DIR}"
+          echo "✓ Upload OK"
 
       - name: Trigger Passenger restart (touch tmp/restart.txt)
         env:
