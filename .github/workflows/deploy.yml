@@ -106,33 +106,35 @@ jobs:
           cd ..
           echo "Bundle zip size: $(du -sh bundle.zip | cut -f1)"
 
-      - name: Upload ZIP via FTP (plain, port 21) — cPanel selalu support plain FTP
+      - name: [10a] Diagnose FTP target (DNS / TCP / banner)
+        env:
+          CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
+        run: |
+          echo "=== Secret values (sanitized) ==="
+          echo "CPANEL_HOST=[${CPANEL_HOST}]  len=${#CPANEL_HOST}"
+          echo ""
+          echo "--- DNS lookup ---"
+          getent hosts "${CPANEL_HOST}" 2>&1 || echo "(getent: no result)"
+          nslookup "${CPANEL_HOST}" 2>&1 | tail -15
+          echo ""
+          echo "--- TCP port 21 probe ---"
+          if timeout 10 bash -c "</dev/tcp/${CPANEL_HOST}/21"; then
+            echo "TCP:21 reachable"
+          else
+            echo "::error::TCP:21 NOT reachable"
+            exit 1
+          fi
+          echo ""
+          echo "--- FTP banner (raw socket, no auth) ---"
+          timeout 10 bash -c 'exec 3<>/dev/tcp/$0/$1; cat <&3 & sleep 2; kill %1 2>/dev/null; exec 3<&-' "${CPANEL_HOST}" 21 2>&1 || echo "(no banner)"
+
+      - name: [10b] Upload ZIP via plain FTP (verbose)
         env:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
-          echo "=== DIAGNOSTIC ==="
-          echo "Host=${CPANEL_HOST}  User=${CPANEL_USER}  Dir=${CPANEL_DIR}"
-          echo "--- DNS ---"
-          getent hosts "${CPANEL_HOST}" 2>&1 | head -5 || true
-          nslookup "${CPANEL_HOST}" 2>&1 | grep -iE "(name|address)" | head -10 || true
-          echo "--- TCP:21 probe ---"
-          if timeout 10 bash -c "</dev/tcp/${CPANEL_HOST}/21" 2>&1; then
-            echo "TCP:21 reachable"
-          else
-            echo "::error::TCP:21 UNREACHABLE"
-            exit 1
-          fi
-          echo "--- FTP banner (raw socket) ---"
-          if timeout 10 bash -c 'exec 3<>/dev/tcp/$0/$1; head -c 300 <&3; exec 3<&-' "${CPANEL_HOST}" 21 2>&1; then
-            echo ""
-          else
-            echo "(no banner in 10s)"
-          fi
-          echo ""
-          echo "=== UPLOAD ==="
           REL_PATH="${CPANEL_DIR#/home/${CPANEL_USER}/}"
           FTP_TARGET="ftp://${CPANEL_HOST}/${REL_PATH}/bundle.zip"
           echo "Target=${FTP_TARGET}"
@@ -140,20 +142,30 @@ jobs:
             -o /tmp/upload_resp \
             -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
             -T bundle.zip \
-            "${FTP_TARGET}" 2> /tmp/upload_err
+            "${FTP_TARGET}" > /tmp/upload_err 2>&1
           ec=$?
           echo ""
-          echo "=== RESULT ==="
-          echo "curl_exit=${ec}"
-          echo "--- stderr (last 60 lines) ---"
-          tail -60 /tmp/upload_err
-          echo "--- resp (first 300B) ---"
-          head -c 300 /tmp/upload_resp 2>/dev/null
+          echo "=== curl result ==="
+          echo "exit=${ec}"
+          echo "--- stderr (last 80 lines) ---"
+          tail -80 /tmp/upload_err
+          echo "--- resp ---"
+          cat /tmp/upload_resp 2>/dev/null
           echo ""
           if [[ "$ec" -ne 0 ]]; then
             echo "::error::FTP upload gagal (exit $ec)"
             exit 1
           fi
+
+      - name: Upload diagnostic logs as artifact (always runs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-diagnostic
+          path: |
+            /tmp/upload_err
+            /tmp/upload_resp
+          if-no-files-found: ignore
 
       - name: Extract bundle.zip via cPanel UAPI Fileman::uncompress
         env:
