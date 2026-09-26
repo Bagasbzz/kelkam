@@ -114,22 +114,29 @@ jobs:
           CPANEL_DIR: ${{ secrets.JKC_FTP_DIR }}
         run: |
           echo "CPANEL_DIR=${CPANEL_DIR}"
-          # FTP root = /home/${CPANEL_USER}, jadi path relatif di curl = strip prefix.
           REL_PATH="${CPANEL_DIR#/home/${CPANEL_USER}/}"
           FTP_TARGET="ftps://${CPANEL_HOST}/${REL_PATH}/bundle.zip"
           echo "FTPS target: ${FTP_TARGET}"
-          echo "Uploading bundle.zip..."
-          curl --ssl -sS -o /tmp/upload_resp -w "curl_exit=%{http_code} bytes_uploaded=%{size_upload} time=%{time_total}s\n" \
-            --connect-timeout 30 \
-            -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
-            -T bundle.zip \
-            "${FTP_TARGET}" 2> /tmp/upload_err
-          ec=$?
-          echo "curl exit=$ec"
-          [[ -s /tmp/upload_err ]] && { echo "stderr:"; cat /tmp/upload_err; }
-          [[ -s /tmp/upload_resp ]] && { echo "resp (first 200B):"; head -c 200 /tmp/upload_resp; echo; }
-          if [[ "$ec" -ne 0 ]]; then
-            echo "::error::FTPS upload failed (exit $ec)"
+          echo "Probing TCP first..."
+          timeout 15 bash -c "</dev/tcp/${CPANEL_HOST}/21" && echo "TCP:21 reachable" || echo "TCP:21 NOT reachable"
+          # Retry 3x: FTPS auth/handshake kadang timeout transient dari runner GitHub.
+          ok=0
+          for i in 1 2 3; do
+            echo "--- attempt ${i}/3 ---"
+            curl --ssl --ftp-ssl-reqd -sS -o /tmp/upload_resp -w "exit=%{http_code} up=%{size_upload} t=%{time_total}s\n" \
+              --connect-timeout 20 --max-time 300 \
+              -u "${CPANEL_USER}:${CPANEL_TOKEN}" \
+              -T bundle.zip \
+              "${FTP_TARGET}" 2> /tmp/upload_err
+            ec=$?
+            echo "curl_exit=${ec}"
+            [[ -s /tmp/upload_err ]] && { echo "stderr:"; cat /tmp/upload_err; }
+            [[ -s /tmp/upload_resp ]] && { echo "resp (first 200B):"; head -c 200 /tmp/upload_resp; echo; }
+            if [[ "$ec" -eq 0 ]]; then ok=1; break; fi
+            echo "retry in 5s..."; sleep 5
+          done
+          if [[ "$ok" -ne 1 ]]; then
+            echo "::error::FTPS upload gagal setelah 3x percobaan."
             exit 1
           fi
 
