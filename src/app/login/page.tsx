@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, LogIn, LogOut, UserPlus } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useAuth } from "@/components/AuthProvider";
@@ -14,8 +14,25 @@ import { useAuth } from "@/components/AuthProvider";
  * dari path terproteksi. Selalu include `?redirect=<path>` di query.
  *
  * Pakai AuthProvider context supaya state sinkron dengan Navbar / modal lain.
+ *
+ * useSearchParams() WAJIB dibungkus <Suspense> di Next.js 15+ — tanpa itu
+ * `next build` fail dengan "should be wrapped in a suspense boundary".
  */
 export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+          <p className="text-sm text-slate-500">Memuat…</p>
+        </div>
+      }
+    >
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTarget = searchParams.get("redirect") || "/";
