@@ -204,7 +204,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
 
             <div>
               <p className="mb-2 block text-xs font-bold uppercase tracking-widest text-slate-500">
-                Kelas (opsional — kosongkan untuk semua kelas)
+                Kelas (opsional): kosongkan untuk semua kelas
               </p>
               <KelasPicker
                 options={course.classes}

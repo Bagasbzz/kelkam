@@ -92,9 +92,9 @@ export default function TugasLanding() {
             pakai token mata kuliah.
           </h1>
           <p className="mt-3 max-w-xl text-sm text-slate-300 md:text-base">
-            Mahasiswa akses course lewat token. Lihat tugas, submit file + catatan,
-            lihat posisi antrian kamu. Asdos kelola course + tugas + lihat full
-            submission list.
+            Mahasiswa masuk lewat token, lihat tugas aktif, dan kumpulkan file
+            plus catatan sebelum deadline. Asdos dan super admin kelola course,
+            atur mahasiswa, dan pantau submission real-time.
           </p>
         </div>
 
@@ -109,7 +109,8 @@ export default function TugasLanding() {
               Punya token mata kuliah?
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Token biasanya 8 karakter, share dari asdos kamu.
+              Token 8 karakter, dibagikan oleh asdos. Ketik di sini untuk masuk
+              ke course.
             </p>
 
             <form onSubmit={onSubmit} className="mt-5 flex flex-col gap-3 sm:flex-row">
@@ -135,84 +136,100 @@ export default function TugasLanding() {
             {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
           </Card>
 
-          {/* Admin entry */}
+          {/* Role hint */}
           <Card>
             <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
               <ShieldCheck className="w-4 h-4" />
-              Untuk Asdos
+              Peran kamu
             </div>
             <h2 className="mt-2 text-xl font-black text-slate-900">
-              Kelola course
+              Akses berdasarkan peran
             </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Bikin course baru, atur kelas, tambah co-admin.
-            </p>
-            <div className="mt-5 flex flex-col gap-2">
-              {loading || managedLoading ? (
-                <div className="flex items-center gap-2 text-sm text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Memuat...
-                </div>
-              ) : !user ? (
-                <p className="text-xs text-slate-500">
-                  Masuk dulu sebagai ADMIN untuk akses.
-                </p>
-              ) : !isAdmin ? (
-                <p className="text-xs text-slate-500">
-                  Akun kamu belum jadi admin. Hubungi creator course.
-                </p>
-              ) : (
-                <Link href="/tugas/admin">
-                  <Button variant="primary" size="md" icon={Plus}>
-                    Bikin Course Baru
-                  </Button>
-                </Link>
-              )}
-            </div>
+            <ul className="mt-3 space-y-2 text-sm text-slate-600">
+              <li className="flex gap-2">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
+                <span>
+                  <strong className="text-slate-900">Mahasiswa</strong>: token,
+                  kumpulkan tugas, lihat posisi antrian.
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
+                <span>
+                  <strong className="text-slate-900">Asdos (admin course)</strong>:
+                  kelola course, bikin tugas, lihat semua submission.
+                </span>
+              </li>
+              <li className="flex gap-2">
+                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
+                <span>
+                  <strong className="text-slate-900">Super admin</strong>:
+                  monitor semua course dan jalankan AI insight global.
+                </span>
+              </li>
+            </ul>
           </Card>
         </div>
 
         {/* Managed courses (logged-in users) */}
         {user && (
           <Card>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-              <Users className="w-4 h-4" />
-              Course yang kamu kelola
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
+                  <Users className="w-4 h-4" />
+                  Course yang kamu kelola
+                </div>
+                <p className="mt-1 text-sm text-slate-600">
+                  {isAdmin
+                    ? "Sebagai ADMIN kamu bisa bikin course baru."
+                    : "Sebagai CO-ADMIN kamu hanya mengelola course yang sudah ada."}
+                </p>
+              </div>
+              {isAdmin && !managedLoading && (
+                <Link href="/tugas/admin">
+                  <Button variant="primary" size="sm" icon={Plus}>
+                    Course Baru
+                  </Button>
+                </Link>
+              )}
             </div>
-            {managedLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-sm text-slate-500">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Memuat course...
-              </div>
-            ) : managedCourses.length === 0 ? (
-              <p className="mt-3 text-sm text-slate-500">
-                Belum ada course yang kamu kelola.
-              </p>
-            ) : (
-              <div className="mt-4 space-y-2">
-                {managedCourses.map((c) => (
-                  <Link
-                    key={c.id}
-                    href={`/tugas/${c.token}/admin`}
-                    className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50/40"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-900 truncate">
-                        {c.name}{" "}
-                        <span className="font-mono text-xs text-slate-500">
-                          ({c.code})
-                        </span>
-                      </p>
-                      <p className="mt-1 font-mono text-xs text-slate-500">
-                        Token: {c.token}
-                        {c.isCreator ? " • Pembuat" : " • Co-admin"}
-                      </p>
-                    </div>
-                    <ArrowRight className="w-4 h-4 shrink-0 text-slate-400" />
-                  </Link>
-                ))}
-              </div>
-            )}
+            <div className="mt-4">
+              {managedLoading ? (
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Memuat course...
+                </div>
+              ) : managedCourses.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  Belum ada course yang kamu kelola.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {managedCourses.map((c) => (
+                    <Link
+                      key={c.id}
+                      href={`/tugas/${c.token}/admin`}
+                      className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50/40"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900 truncate">
+                          {c.name}{" "}
+                          <span className="font-mono text-xs text-slate-500">
+                            ({c.code})
+                          </span>
+                        </p>
+                        <p className="mt-1 font-mono text-xs text-slate-500">
+                          Token: {c.token}
+                          {c.isCreator ? " • Pembuat" : " • Co-admin"}
+                        </p>
+                      </div>
+                      <ArrowRight className="w-4 h-4 shrink-0 text-slate-400" />
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
           </Card>
         )}
       </div>

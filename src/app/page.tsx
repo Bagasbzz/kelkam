@@ -53,7 +53,7 @@ const PRIMARY_FEATURES: FeatureCard[] = [
     href: "/tugas",
     title: "Tugas",
     description:
-      "Platform pengumpulan tugas untuk asdos — token mata kuliah, deadline countdown, posisi antrian mahasiswa.",
+      "Platform pengumpulan tugas untuk asdos. Token mata kuliah, deadline countdown, dan posisi antrian mahasiswa.",
     icon: IconCheck,
     accent: "emerald",
     cta: "Masuk Tugas",
@@ -93,7 +93,7 @@ const UTILITY_FEATURES: FeatureCard[] = [
     href: "/ai-tools",
     title: "AI Tools",
     description:
-      "Kumpulan utilitas AI: rewrite, ringkasan, terjemahan, prompt engineering — fokus cepat.",
+      "Utilitas AI: rewrite, ringkasan, terjemahan, dan prompt engineering. Respons cepat, fokus hasil.",
     icon: IconSpark,
     accent: "rose",
     cta: "Coba AI Tools",
@@ -102,7 +102,7 @@ const UTILITY_FEATURES: FeatureCard[] = [
     href: "/fix-format",
     title: "Fix Format",
     description:
-      "Rapikan formatting dokumen yang berantakan — heading, list, spasi, konsisten dalam satu klik.",
+      "Rapikan dokumen yang berantakan. Heading, list, dan spasi konsisten dalam satu klik.",
     icon: IconType,
     accent: "amber",
     cta: "Fix Format",
@@ -120,7 +120,7 @@ const UTILITY_FEATURES: FeatureCard[] = [
     href: "/tracker",
     title: "Tracker",
     description:
-      "Pantau progress tugas dan kebiasaan belajar — visual, simpel, ga ribet.",
+      "Pantau progress tugas dan kebiasaan belajar. Visual, simpel, tanpa ribet.",
     icon: IconPulse,
     accent: "indigo",
     cta: "Lihat Tracker",
