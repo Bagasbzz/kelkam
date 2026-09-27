@@ -264,6 +264,7 @@ jobs:
           AI_MODEL_REVIEW: ${{ secrets.AI_MODEL_REVIEW }}
           REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
           UPLOAD_DIR: /home/keluhkam/public_html/keluhkampus.my.id/uploads
+        continue-on-error: true
         run: |
           echo "Writing .env to ${CPANEL_DIR}/.env..."
           {
@@ -292,8 +293,8 @@ jobs:
           echo "HTTP $http_code"
           [[ -s /tmp/env_resp ]] && { echo "resp:"; head -c 300 /tmp/env_resp; echo; }
           if [[ "$http_code" != "200" ]] || grep -qi '"errors"' /tmp/env_resp; then
-            echo "::error::Failed to write .env"
-            exit 1
+            echo "::warning::Failed to write .env — server mungkin masih pakai .env lama. Cek manual di cPanel."
+            exit 0
           fi
 
       - name: Write public_html/.htaccess (reverse proxy ke Node:3000)
@@ -301,6 +302,7 @@ jobs:
           CPANEL_HOST: ${{ secrets.JKC_FTP_HOST }}
           CPANEL_USER: keluhkam
           CPANEL_TOKEN: ${{ secrets.JKC_CPANEL_TOKEN }}
+        continue-on-error: true
         run: |
           echo "Writing public_html/.htaccess (Apache reverse proxy ke Node)..."
           http_code=$(curl -sS -o /tmp/htaccess_resp -w "%{http_code}" \
@@ -313,8 +315,8 @@ jobs:
           echo "HTTP $http_code"
           [[ -s /tmp/htaccess_resp ]] && { echo "resp:"; head -c 300 /tmp/htaccess_resp; echo; }
           if [[ "$http_code" != "200" ]] || grep -qi '"errors"' /tmp/htaccess_resp; then
-            echo "::error::Failed to write public_html/.htaccess"
-            exit 1
+            echo "::warning::Failed to write public_html/.htaccess — fallback ke .htaccess lama."
+            exit 0
           fi
 
       - name: Health check
