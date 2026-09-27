@@ -97,7 +97,7 @@ Total submission (10 tugas terakhir): ${totalSubmissions}, telat: ${totalLate} (
 ${perClassLine}
 
 Daftar tugas:
-${tugasSummary}
+${tugasesSummary}
 
 Berikan insight actionable dalam 3-4 poin singkat untuk asdos. Bahasa Indonesia, format bullet (- poin), profesional, langsung bisa ditindaklanjuti. Fokus pada: pola telat, kelas yang perlu di-reminder, rekomendasi deadline, hal penting lainnya. Maksimal 80 kata total.`;
 
