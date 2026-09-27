@@ -61,37 +61,6 @@ jobs:
           REFERENCE_CACHE_ADMIN_TOKEN: ${{ secrets.REFERENCE_CACHE_ADMIN_TOKEN }}
         run: npm run build
 
-      - name: Slim bundle — drop unused Prisma engines / wasm / edge
-        run: |
-          # Schema generates 2 engines: "native" + "debian-openssl-1.1.x".
-          # On GitHub Actions ubuntu-latest, "native" = debian-openssl-3.0.x.
-          # JKC server needs debian-openssl-1.1.x (explicit in schema). Drop the 3.0.x.
-          PRISMA_DIR=".next/standalone/node_modules/.prisma/client"
-          KEEP_ENGINE="libquery_engine-debian-openssl-1.1.x.so.node"
-          if [[ -d "$PRISMA_DIR" ]]; then
-            for f in "$PRISMA_DIR"/*.so.node; do
-              [[ -f "$f" ]] || continue
-              base=$(basename "$f")
-              if [[ "$base" != "$KEEP_ENGINE" ]]; then
-                rm -f "$f"
-                echo "  - removed: $base"
-              else
-                echo "  + kept:    $base"
-              fi
-            done
-            # Drop Windows / WASM / edge / browser (JKC = Debian Linux Node, not edge runtime)
-            for f in query_engine-windows.dll.node query_engine_bg.wasm edge.js index-browser.js; do
-              if [[ -f "$PRISMA_DIR/$f" ]]; then
-                rm -f "$PRISMA_DIR/$f"
-                echo "  - removed: $f"
-              fi
-            done
-            rm -f .next/standalone/node_modules/@prisma/client/runtime/edge-esm.js \
-                  .next/standalone/node_modules/@prisma/client/runtime/edge.js 2>/dev/null || true
-          else
-            echo "::warning::$PRISMA_DIR not found — Prisma generate may have failed"
-          fi
-
       - name: Prepare & zip deploy bundle
         run: |
           rm -rf deploy bundle-*.zip
@@ -100,6 +69,18 @@ jobs:
           cp -r .next/standalone/. deploy/
           cp -r .next/static deploy/.next/static
           cp -r public deploy/public
+          # Drop heavy/unused Prisma artifacts to keep bundle under 90MB
+          PRISMA_DIR="deploy/node_modules/.prisma/client"
+          if [[ -d "$PRISMA_DIR" ]]; then
+            # Keep only the debian-openssl-1.1.x engine (JKC = Debian Linux Node)
+            find "$PRISMA_DIR" -maxdepth 1 -name "*.so.node" ! -name "libquery_engine-debian-openssl-1.1.x.so.node" -delete 2>/dev/null || true
+            rm -f "$PRISMA_DIR/query_engine-windows.dll.node" \
+                  "$PRISMA_DIR/query_engine_bg.wasm" \
+                  "$PRISMA_DIR/edge.js" \
+                  "$PRISMA_DIR/index-browser.js" 2>/dev/null || true
+            rm -f deploy/node_modules/@prisma/client/runtime/edge-esm.js \
+                  deploy/node_modules/@prisma/client/runtime/edge.js 2>/dev/null || true
+          fi
           echo "Bundle sources:"
           echo "  .next/standalone/: $(du -sh .next/standalone | cut -f1)"
           echo "  .next/static:     $(du -sh .next/static | cut -f1)"
@@ -108,7 +89,6 @@ jobs:
           zip -qr ../bundle.zip .
           cd ..
           # Rename ke nama unik per-run: cPanel upload_files nolak "bundle.zip"
-          # meskipun probe 6 lokasi tidak menemukan file. Pasti internal cache.
           RUN_TAG="$(date +%s)-${GITHUB_RUN_ID}"
           mv bundle.zip "bundle-${RUN_TAG}.zip"
           echo "BUNDLE_FILE=bundle-${RUN_TAG}.zip" >> $GITHUB_ENV
