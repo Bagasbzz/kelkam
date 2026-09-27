@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  BarChart3,
   Loader2,
   Plus,
   ShieldCheck,
@@ -147,6 +148,15 @@ export default function TugasAdminIndex() {
           <p className="mt-2 text-sm text-slate-300">
             Bikin course baru atau buka course yang sudah ada.
           </p>
+          <div className="mt-5">
+            <Link
+              href="/tugas/admin/insights"
+              className="inline-flex items-center gap-2 rounded-full bg-violet-500/20 px-3 py-1.5 text-xs font-bold text-violet-100 transition hover:bg-violet-500/40"
+            >
+              <BarChart3 className="h-3 w-3" />
+              Global Insights (AI)
+            </Link>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

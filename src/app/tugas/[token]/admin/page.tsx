@@ -6,10 +6,12 @@ import { useParams, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   ArrowRight,
+  BarChart3,
   ClipboardList,
   Loader2,
   Plus,
   ShieldCheck,
+  UserPlus,
   Users,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -188,6 +190,20 @@ export default function CourseAdminDashboard() {
               <Users className="w-4 h-4" />
               {course.classes.length} kelas
             </span>
+            <Link
+              href={`/tugas/${token}/admin/mahasiswas`}
+              className="inline-flex items-center gap-2 rounded-full bg-violet-500/20 px-3 py-1.5 text-xs font-bold text-violet-100 transition hover:bg-violet-500/40"
+            >
+              <UserPlus className="w-3 h-3" />
+              Roster Mahasiswa
+            </Link>
+            <Link
+              href={`/tugas/${token}/admin/insights`}
+              className="inline-flex items-center gap-2 rounded-full bg-blue-500/20 px-3 py-1.5 text-xs font-bold text-blue-100 transition hover:bg-blue-500/40"
+            >
+              <BarChart3 className="w-3 h-3" />
+              AI Insights
+            </Link>
           </div>
         </div>
 

@@ -480,6 +480,7 @@ model Course {
   admins      CourseAdmin[]
   enrollments CourseEnrollment[]
   tugases     Tugas[]
+  mahasiswas Mahasiswa[]
 
   @@index([token])
   @@index([createdById])
@@ -498,6 +499,7 @@ model CourseClass {
 
   tugases     Tugas[]           @relation("TugasClass")
   submissions TugasSubmission[]
+  mahasiswas  Mahasiswa[]
 
   @@unique([courseId, name])
   @@map("course_classes")
@@ -598,4 +600,29 @@ model TugasSubmission {
   @@index([tugasId, classId])
   @@index([userId])
   @@map("tugas_submissions")
+}
+
+/**
+ * Roster mahasiswa per course (untuk validasi NIM + analytics per kelas).
+ * `classId` nullable = belum masuk kelas atau course single-class.
+ * `nim` unique per course (1 mahasiswa bisa ambil multiple course dengan
+ * NIM sama — itu by design).
+ *
+ * Bulk insert via /api/tugas/courses/[id]/mahasiswas (paste text atau AI parse).
+ */
+model Mahasiswa {
+  id        String   @id @default(cuid())
+  courseId  String   @map("course_id")
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  classId   String?  @map("class_id")
+  class     CourseClass? @relation(fields: [classId], references: [id], onDelete: SetNull)
+  nim       String   @map("nim")
+  name      String   @map("name")
+  email     String?  @map("email")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([courseId, nim])
+  @@index([courseId, classId])
+  @@map("mahasiswas")
 }

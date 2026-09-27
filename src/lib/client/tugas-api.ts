@@ -249,6 +249,119 @@ export function fetchAdminSubmissions(tugasId: string) {
 }
 
 // ---------------------------------------------------------------------------
+// Mahasiswa roster
+// ---------------------------------------------------------------------------
+
+export interface MahasiswaRow {
+  id: string;
+  nim: string;
+  name: string;
+  email: string | null;
+  classId: string | null;
+  class: { id: string; name: string } | null;
+}
+
+export function fetchMahasiswas(courseId: string, search?: string) {
+  const qs = search ? `?search=${encodeURIComponent(search)}` : "";
+  return request<{ mahasiswas: MahasiswaRow[] }>(
+    `/api/tugas/courses/${courseId}/mahasiswas${qs}`
+  );
+}
+
+export function bulkImportMahasiswas(
+  courseId: string,
+  payload: { entries: Array<{ nim: string; name: string; className?: string; email?: string }> } | { rawText: string },
+) {
+  return request<{
+    inserted: number;
+    skipped: number;
+    duplicateInDb: number;
+    totalSubmitted: number;
+    aiParsed: boolean;
+  }>(`/api/tugas/courses/${courseId}/mahasiswas`, {
+    method: "POST",
+    json: payload,
+  });
+}
+
+export function updateMahasiswa(
+  courseId: string,
+  mahasiswaId: string,
+  patch: { nim?: string; name?: string; classId?: string | null; email?: string },
+) {
+  return request<{ mahasiswa: MahasiswaRow }>(
+    `/api/tugas/courses/${courseId}/mahasiswas/${mahasiswaId}`,
+    { method: "PATCH", json: patch }
+  );
+}
+
+export function deleteMahasiswa(courseId: string, mahasiswaId: string) {
+  return request<{ success: true }>(
+    `/api/tugas/courses/${courseId}/mahasiswas/${mahasiswaId}`,
+    { method: "DELETE" }
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AI Insights
+// ---------------------------------------------------------------------------
+
+export function generateCourseInsights(courseId: string) {
+  return request<{
+    metrics: {
+      totalSubmissions: number;
+      totalLate: number;
+      lateRate: number;
+      rosterCount: number;
+      perClass: Record<string, number>;
+      tugasesCount: number;
+    };
+    aiInsights: string;
+  }>(`/api/tugas/courses/${courseId}/insights`, { method: "POST" });
+}
+
+export function generateAdminInsights() {
+  return request<{
+    courses: Array<{
+      id: string;
+      token: string;
+      name: string;
+      code: string;
+      tugasesCount: number;
+      totalSubmissions: number;
+      lateSubmissions: number;
+      lateRate: number;
+      rosterCount: number;
+    }>;
+    globalInsight: string;
+  }>("/api/tugas/admin/insights", { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Me: history submit per course
+// ---------------------------------------------------------------------------
+
+export interface MyTugasWithSubmission extends TugasSummary {
+  mySubmission?: {
+    id: string;
+    status: "SUBMITTED" | "LATE" | "REJECTED";
+    submittedAt: string;
+    position: number;
+    class: { id: string; name: string };
+    fileUpload: { id: string; originalName: string; mime: string; size: number } | null;
+  };
+}
+
+export function fetchMyCourseHistory(courseId: string) {
+  return request<{
+    submitted: MyTugasWithSubmission[];
+    missed: TugasSummary[];
+    pending: TugasSummary[];
+    counts: { submitted: number; missed: number; pending: number };
+  }>(`/api/tugas/me/submissions?courseId=${encodeURIComponent(courseId)}`);
+}
+
+// ---------------------------------------------------------------------------
 // File upload (delegasi ke endpoint existing)
 // ---------------------------------------------------------------------------
 

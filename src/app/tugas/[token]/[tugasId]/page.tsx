@@ -13,6 +13,7 @@ import {
 import Card from "@/components/ui/Card";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import SubmissionForm from "@/components/tugas/SubmissionForm";
+import SubmissionHistory from "@/components/tugas/SubmissionHistory";
 import {
   fetchCourseByToken,
   type CourseSummary,
@@ -138,6 +139,9 @@ export default function TugasDetailPage() {
           classes={course.classes}
           lockedClassId={tugas.classId}
         />
+
+        {/* History sidebar (mahasiswa login) */}
+        <SubmissionHistory courseId={course.id} token={token} />
       </div>
     </div>
   );

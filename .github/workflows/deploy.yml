@@ -43,6 +43,9 @@ jobs:
           if [[ "$rc" -ne 0 ]]; then
             echo "::warning::prisma migrate deploy gagal (exit $rc). Lanjut upload bundle."
           fi
+          # Seed super admin (idempotent — promote hensellbagas@gmail.com ke ADMIN kalau ada)
+          echo "Seeding super admin..."
+          npx --no-install tsx prisma/seed.ts 2>&1 || echo "::warning::seed skipped (tsx gak ada atau gagal)"
           exit 0
 
       - name: Build Next.js standalone
