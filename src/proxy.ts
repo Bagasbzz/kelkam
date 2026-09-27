@@ -78,7 +78,7 @@ const PUBLIC_API_EXACT_PATHS = [
  *
  * Tugas pages tidak di-protect di sini — banyak path yang read-only untuk
  * publik (mis. /tugas/[token] view course). Page handler masing-masing
- * handle auth state sendiri. `/tugas/admin` juga dicek di page level.
+ * handle auth state sendiri. `/tugas/admin694` juga dicek di page level.
  */
 const PROTECTED_PAGE_PREFIXES = [
   "/studio",

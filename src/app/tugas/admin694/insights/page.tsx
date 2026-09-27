@@ -95,7 +95,7 @@ export default function AdminInsightsPage() {
     <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
       <div className="mx-auto max-w-[1100px] space-y-6">
         <Link
-          href="/tugas/admin"
+          href="/tugas/admin694"
           className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
         >
           ← Admin index

@@ -187,7 +187,7 @@ export default function TugasLanding() {
                 </p>
               </div>
               {isAdmin && !managedLoading && (
-                <Link href="/tugas/admin">
+                <Link href="/tugas/admin694">
                   <Button variant="primary" size="sm" icon={Plus}>
                     Course Baru
                   </Button>

@@ -150,7 +150,7 @@ export default function TugasAdminIndex() {
           </p>
           <div className="mt-5">
             <Link
-              href="/tugas/admin/insights"
+              href="/tugas/admin694/insights"
               className="inline-flex items-center gap-2 rounded-full bg-violet-500/20 px-3 py-1.5 text-xs font-bold text-violet-100 transition hover:bg-violet-500/40"
             >
               <BarChart3 className="h-3 w-3" />

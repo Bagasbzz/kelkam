@@ -221,7 +221,7 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-white text-slate-800 font-sans">
       <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
-          Tools <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-indigo-600">Mahasiswa</span>
+          Tools <span className="text-blue-600">Mahasiswa</span>
           <br />
           Lebih Cepat
         </h1>
