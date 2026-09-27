@@ -1,8 +1,5 @@
 import OpenAI from "openai";
 
-const hasPrimaryKey = Boolean(process.env.AI_API_KEY || process.env.OPENAI_API_KEY);
-const hasGroqFallback = Boolean(process.env.GROK_API_KEY) && !hasPrimaryKey;
-
 /**
  * Model configuration:
  * - AI_MODEL_DEFAULT: primary model used when no special purpose specified
@@ -10,20 +7,19 @@ const hasGroqFallback = Boolean(process.env.GROK_API_KEY) && !hasPrimaryKey;
  * - AI_MODEL_REVIEW: stronger model for synthesis/review tasks
  *
  * These can be set in environment variables to allow runtime switching.
+ *
+ * Default endpoint: api.z0ne.ai (OpenAI-compatible). Override via AI_BASE_URL.
+ * If no AI_API_KEY is set, AI calls will throw — see assertAiConfigured().
  */
-export const AI_MODEL_DEFAULT =
-  process.env.AI_MODEL || (hasGroqFallback ? "llama-3.3-70b-versatile" : "gpt-5.5");
+export const AI_MODEL_DEFAULT = process.env.AI_MODEL || "gpt-5.5";
 
 export const AI_MODEL_FAST = process.env.AI_MODEL_FAST || process.env.AI_MODEL_MINI || "gpt-5-mini";
 export const AI_MODEL_REVIEW = process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE || AI_MODEL_DEFAULT;
 export const AI_MODEL = AI_MODEL_DEFAULT;
 
 function getAiRuntimeConfig() {
-  const apiKey = process.env.AI_API_KEY || process.env.OPENAI_API_KEY || process.env.GROK_API_KEY || "";
-  const baseURL =
-    process.env.AI_BASE_URL ||
-    process.env.OPENAI_BASE_URL ||
-    (process.env.GROK_API_KEY && !(process.env.AI_API_KEY || process.env.OPENAI_API_KEY) ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1");
+  const apiKey = process.env.AI_API_KEY || "";
+  const baseURL = process.env.AI_BASE_URL || "https://api.z0ne.ai/v1";
 
   return { apiKey, baseURL };
 }
