@@ -1,0 +1,95 @@
+name: Deploy to Server via SSH
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Memungkinan trigger manual dari tab Actions di GitHub
+
+jobs:
+  deploy:
+    name: Build & Deploy via SSH
+    runs-on: ubuntu-latest
+    environment: SSH_SERVER
+
+    steps:
+      - name: 🚚 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: 📦 Install Dependencies
+        run: npm ci
+
+      - name: ⚙️ Generate Prisma Client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/dummy"
+
+      - name: 🏗️ Build Next.js (Standalone)
+        run: npm run build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_SITE_URL: "https://keluhkampus.my.id"
+
+      - name: 📁 Prepare Standalone Bundle
+        run: |
+          # 1. Salin static assets & public ke dalam standalone (standar resmi Next.js)
+          cp -r .next/static .next/standalone/.next/
+          cp -r public .next/standalone/
+
+          # 2. Siapkan folder deployment
+          mkdir -p deploy/tmp
+          
+          # Salin seluruh struktur .next/standalone sehingga entry point .next/standalone/server.js tersedia
+          mkdir -p deploy/.next
+          cp -r .next/standalone deploy/.next/
+          
+          # Salin juga static assets & public ke root deploy sebagai fallback proxy Apache
+          cp -r .next/static deploy/.next/
+          cp -r public deploy/
+          
+          # Salin prisma schema, package.json, dan server.js custom
+          cp -r prisma deploy/
+          cp package.json deploy/package.json
+          cp server.js deploy/server.js
+
+          # Buat trigger restart Passenger
+          touch deploy/tmp/restart.txt
+
+          # 3. Kompresi ke tar.gz (sangat cepat, hemat bandwidth, & menjaga permission file Linux)
+          cd deploy && tar -czf ../deploy.tar.gz . && cd ..
+
+      - name: 🚀 Transfer Bundle via SCP
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "deploy.tar.gz"
+          target: ${{ secrets.SSH_DIR }}
+
+      - name: ⚡ Extract & Restart Passenger via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            cd ${{ secrets.SSH_DIR }}
+            
+            # Extract file bundle tanpa menimpa file .env atau folder uploads
+            tar -xzf deploy.tar.gz
+            rm deploy.tar.gz
+            
+            # Pastikan folder tmp ada dan sentuh restart.txt untuk reload Node.js
+            mkdir -p tmp
+            touch tmp/restart.txt
+            
+            echo "✓ Deployment complete! Node.js Passenger restarted."
