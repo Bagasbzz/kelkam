@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ArrowLeft, ArrowRight, LogIn, LogOut, UserPlus } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -33,7 +33,6 @@ export default function LoginPage() {
 }
 
 function LoginPageInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTarget = searchParams.get("redirect") || "/";
   const initialMode = searchParams.get("mode") === "register" ? "register" : "login";
@@ -47,12 +46,23 @@ function LoginPageInner() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Full-page navigation, bukan router.replace: halaman tujuan dijaga proxy
+  // yang membaca cookie sesi, dan hosting me-rewrite path ke subfolder app.
+  // Navigasi client-side ke sana bisa berhenti diam tanpa pindah halaman.
+  function goToTarget() {
+    // Hanya path internal yang diizinkan — cegah open redirect ke domain lain.
+    const safeTarget =
+      redirectTarget.startsWith("/") && !redirectTarget.startsWith("//") ? redirectTarget : "/";
+    window.location.assign(safeTarget);
+  }
+
   // Kalau user udah login, redirect sekalian ke target.
   useEffect(() => {
     if (!loading && user) {
-      router.replace(redirectTarget);
+      goToTarget();
     }
-  }, [loading, user, redirectTarget, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, user, redirectTarget]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -74,7 +84,7 @@ function LoginPageInner() {
         setError(result.error || "Gagal.");
         return;
       }
-      router.replace(redirectTarget);
+      goToTarget();
     } finally {
       setBusy(false);
     }
@@ -123,7 +133,7 @@ function LoginPageInner() {
               variant="primary"
               size="md"
               icon={ArrowRight}
-              onClick={() => router.replace(redirectTarget)}
+              onClick={goToTarget}
             >
               Lanjut ke {redirectTarget === "/" ? "beranda" : redirectTarget}
             </Button>

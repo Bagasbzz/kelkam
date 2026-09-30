@@ -226,7 +226,7 @@ export default function Home() {
           Lebih Cepat
         </h1>
         <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          ayam geprek dirancang khusus agar pengerjaan diagram, laporan, laprak, capstone, dan tugas kuliah bisa selesai jauh lebih gampang dan cepat. Tidak perlu keahlian khusus, tinggal klik.
+          Keluhkampus dibuat khusus agar pengerjaan diagram, laporan, laprak, capstone, dan tugas kuliah bisa selesai jauh lebih gampang dan cepat. Tidak perlu keahlian khusus, tinggal klik.
         </p>
 
         {/* Primary features — 3 yang paling sering diakses */}
