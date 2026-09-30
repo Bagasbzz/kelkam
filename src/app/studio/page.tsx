@@ -8,7 +8,6 @@ import {
   BrainCircuit,
   Check,
   CheckCircle2,
-  ChevronRight,
   ClipboardCheck,
   Copy,
   Download,
@@ -73,10 +72,13 @@ type SaveState = "loading" | "saved" | "saving" | "error";
 const tabs: Array<{ id: StudioTab; label: string; helper: string; icon: typeof FileText }> = [
   { id: "intake", label: "Ceritakan tugasmu", helper: "Tulis ide dan masukkan bahan", icon: Layers3 },
   { id: "questions", label: "Jawab pertanyaan", helper: "Lengkapi yang belum jelas", icon: BrainCircuit },
-  { id: "decisions", label: "Periksa jawaban", helper: "Pastikan pilihanmu sudah tepat", icon: History },
-  { id: "specification", label: "Lihat rangkuman", helper: "Cek hasil dari jawabanmu", icon: ClipboardCheck },
   { id: "artifacts", label: "Buat hasil", helper: "Kerangka dan diagram", icon: Workflow },
-  { id: "format", label: "Rapikan format", helper: "Ikuti aturan yang berlaku", icon: FileCheck2 },
+];
+
+const extraTabs: Array<{ id: StudioTab; label: string; icon: typeof FileText }> = [
+  { id: "decisions", label: "Keputusan", icon: History },
+  { id: "specification", label: "Ringkasan proyek", icon: ClipboardCheck },
+  { id: "format", label: "Rapikan format", icon: FileCheck2 },
 ];
 
 const stepGuidance: Record<StudioTab, string> = {
@@ -164,7 +166,7 @@ function SectionTitle({ icon: Icon, eyebrow, title, helper }: { icon: typeof Fil
     <div className="mb-6 flex items-start gap-4">
       <div className="rounded-2xl bg-blue-50 p-3 text-blue-600"><Icon className="h-6 w-6" /></div>
       <div>
-        <p className="text-xs font-medium text-blue-600">{eyebrow}</p>
+        <p className="text-xs font-medium text-blue-600">{eyebrow.startsWith("Langkah") ? "Studio" : eyebrow}</p>
         <h2 className="mt-1 text-2xl font-black tracking-tight text-slate-900">{title}</h2>
         <p className="mt-1 max-w-3xl text-sm font-medium leading-relaxed text-slate-500">{helper}</p>
       </div>
@@ -450,10 +452,9 @@ export default function StudioPage() {
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <Badge tone="blue">Studio</Badge>
                 {project.importedFromLegacy && <Badge tone="violet">Dari versi lama</Badge>}
-                <span className="text-xs font-bold text-slate-400">Langkah {tabs.findIndex((tab) => tab.id === activeTab) + 1} dari {tabs.length}</span>
               </div>
-              <h1 className="max-w-4xl text-3xl font-black md:text-4xl">Mulai dari ide, selesaikan satu langkah dulu</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{tabs.find((tab) => tab.id === activeTab)?.helper}. Kamu bisa kembali ke langkah sebelumnya kapan saja.</p>
+              <h1 className="max-w-4xl text-3xl font-black md:text-4xl">Studio proyek</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">Ceritakan tugasmu, lengkapi hal yang penting, lalu buat hasil yang kamu butuhkan.</p>
               <div className="mt-6 flex flex-wrap items-center gap-2">
                 <select
                   value={workspace.activeProjectId}
@@ -486,17 +487,23 @@ export default function StudioPage() {
 
         <div className="grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="h-fit rounded-3xl border border-slate-200 bg-white p-3 shadow-sm xl:sticky xl:top-24">
-            {tabs.map((tab, index) => {
+            {tabs.map((tab) => {
               const Icon = tab.icon;
               const active = tab.id === activeTab;
               return (
-                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`mb-1 flex w-full items-center gap-3 rounded-2xl p-3 text-left transition ${active ? "bg-blue-600 text-white shadow-lg shadow-blue-200" : "text-slate-600 hover:bg-slate-50"}`}>
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} aria-current={active ? "page" : undefined} className={`mb-1 flex w-full items-center gap-3 rounded-lg p-3 text-left transition ${active ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}>
                   <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${active ? "bg-white/15" : "bg-slate-100"}`}><Icon className="h-4 w-4" /></span>
-                  <span className="min-w-0 flex-1"><span className="block text-sm font-black">{index + 1}. {tab.label}</span><span className={`block text-[10px] font-bold ${active ? "text-blue-100" : "text-slate-400"}`}>{tab.helper}</span></span>
-                  <ChevronRight className="h-4 w-4 opacity-40" />
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-black">{tab.label}</span><span className={`block text-[10px] font-bold ${active ? "text-blue-100" : "text-slate-400"}`}>{tab.helper}</span></span>
                 </button>
               );
             })}
+            <details className="mt-3 border-t border-slate-200 pt-3">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-600">Lainnya</summary>
+              {extraTabs.map((tab) => {
+                const Icon = tab.icon;
+                return <button key={tab.id} onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? "page" : undefined} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm ${activeTab === tab.id ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}><Icon className="h-4 w-4" />{tab.label}</button>;
+              })}
+            </details>
           </aside>
 
           <section className={`${cardClass} min-w-0 p-5 md:p-8`}>
@@ -560,10 +567,6 @@ export default function StudioPage() {
                 update={(patch) => runMutation((current) => updateFormatProfile(current, patch), "Profil format diperbarui; dokumen turunan perlu divalidasi ulang.")}
               />
             )}
-            <div className="mt-8 flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-5">
-              {activeTab !== "intake" ? <button onClick={() => setActiveTab(tabs[tabs.findIndex((tab) => tab.id === activeTab) - 1].id)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Kembali</button> : <span />}
-              {activeTab !== "format" && <button onClick={() => setActiveTab(tabs[tabs.findIndex((tab) => tab.id === activeTab) + 1].id)} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white">Lanjut: {tabs[tabs.findIndex((tab) => tab.id === activeTab) + 1].label}<ChevronRight className="h-4 w-4" /></button>}
-            </div>
           </section>
         </div>
       </div>
@@ -586,7 +589,7 @@ interface IntakePanelProps {
 function IntakePanel({ project, sourceDraft, setSourceDraft, updateIntake, addSource, removeSource, fileInputRef, extractingFile, extractFile }: IntakePanelProps) {
   return (
     <div>
-      <SectionTitle icon={Layers3} eyebrow="Langkah 1" title="Ceritakan tugasmu" helper="Tulis topik atau instruksi yang kamu terima. Belum harus lengkap; kamu bisa kembali lagi nanti." />
+      <SectionTitle icon={Layers3} eyebrow="Proyek" title="Ceritakan tugasmu" helper="Tulis topik atau instruksi yang kamu terima. Belum harus lengkap; kamu bisa kembali lagi nanti." />
       <div className="grid gap-4 md:grid-cols-2">
         <label><span className={labelClass}>Jenis proyek</span><select className={inputClass} value={project.intake.projectType} onChange={(event) => updateIntake("projectType", event.target.value as StudioIntake["projectType"])}>{projectTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         <label className="md:col-span-2"><span className={labelClass}>Judul (boleh dikosongkan dulu)</span><input className={inputClass} value={project.intake.title} onChange={(event) => updateIntake("title", event.target.value)} placeholder="Judul sementara juga boleh" /></label>
@@ -654,7 +657,7 @@ interface QuestionsPanelProps {
 function QuestionsPanel({ questions, unresolvedCount, drafts, setDrafts, showResolved, setShowResolved, answerQuestion, waiveQuestion, runDeepScan, deepScanning, findings, manual, setManual, addManual }: QuestionsPanelProps) {
   return (
     <div>
-      <SectionTitle icon={BrainCircuit} eyebrow="Langkah 2" title="Jawab pertanyaan" helper="Tulis jawaban yang kamu tahu. Pertanyaan penting perlu dijawab sebelum membuat hasil." />
+      <SectionTitle icon={BrainCircuit} eyebrow="Pertanyaan" title="Jawab pertanyaan" helper="Tulis jawaban yang kamu tahu. Pertanyaan penting perlu dijawab sebelum membuat hasil." />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-950 p-4 text-white">
         <div><p className="text-2xl font-bold">{unresolvedCount} <span className="text-sm text-slate-300">belum dijawab</span></p></div>
         <button onClick={() => setShowResolved(!showResolved)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold">{showResolved ? "Sembunyikan yang selesai" : "Lihat semua jawaban"}</button>
@@ -692,9 +695,9 @@ function DecisionsPanel({ decisions, setStatus, manual, setManual, addManual }: 
   const active = decisions.filter((decision) => !["superseded", "rejected"].includes(decision.status));
   return (
     <div>
-      <SectionTitle icon={History} eyebrow="Langkah 3" title="Keputusan" helper="Jawaban penting dicatat di sini sebagai keputusan. Kalau keputusan diubah, hasil yang bergantung padanya ditandai perlu diperbarui." />
+      <SectionTitle icon={History} eyebrow="Catatan" title="Keputusan" helper="Jawaban penting dicatat di sini sebagai keputusan. Kalau keputusan diubah, hasil yang bergantung padanya ditandai perlu diperbarui." />
       <div className="mb-5 grid grid-cols-3 gap-3"><div className="rounded-2xl bg-slate-100 p-4"><p className="text-2xl font-black">{active.length}</p><p className="text-[10px] font-black uppercase text-slate-400">aktif</p></div><div className="rounded-2xl bg-emerald-50 p-4"><p className="text-2xl font-black text-emerald-700">{active.filter((item) => item.status === "locked").length}</p><p className="text-[10px] font-black uppercase text-emerald-600">terkunci</p></div><div className="rounded-2xl bg-amber-50 p-4"><p className="text-2xl font-black text-amber-700">{active.filter((item) => item.status !== "locked").length}</p><p className="text-[10px] font-black uppercase text-amber-600">bisa berubah</p></div></div>
-      <div className="space-y-3">{decisions.length === 0 ? <EmptyState>Jawab pertanyaan di langkah 2 untuk mengisi daftar ini.</EmptyState> : decisions.map((decision) => (
+      <div className="space-y-3">{decisions.length === 0 ? <EmptyState>Jawab pertanyaan untuk mengisi daftar ini.</EmptyState> : decisions.map((decision) => (
         <article key={decision.id} className={`rounded-2xl border p-4 ${decision.status === "locked" ? "border-emerald-200 bg-emerald-50/40" : "border-slate-200"}`}>
           <div className="flex flex-wrap items-center gap-2"><Badge tone={decision.status === "locked" ? "green" : decision.status === "rejected" ? "red" : "blue"}>{decisionStatusLabel[decision.status]}</Badge><Badge>{categoryLabels[decision.category]}</Badge><span className="text-[10px] font-bold text-slate-400">v{decision.version} · {decision.origin} · {decision.history.length} riwayat</span></div>
           <p className="mt-3 text-xs font-black uppercase tracking-wide text-slate-400">{decision.statement}</p><p className="mt-1 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-800">{decision.value}</p>
