@@ -5,6 +5,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Clock,
+  Download,
   FileText,
   MessageSquareText,
   Pencil,
@@ -142,13 +143,16 @@ export default function SubmissionRowItem({ submission, onChanged }: SubmissionR
 
         <div className="flex items-center gap-2 sm:flex-col sm:items-end">
           {submission.fileUpload ? (
-            <div className="inline-flex items-center gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700">
-              <FileText className="h-4 w-4 text-blue-500" />
+            <a
+              href={`/api/tugas/submissions/${encodeURIComponent(submission.id)}/download`}
+              className="inline-flex max-w-full items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+              title={`Unduh ${submission.fileUpload.originalName}`}
+            >
+              <FileText className="h-4 w-4 shrink-0" />
               <span className="max-w-[140px] truncate">{submission.fileUpload.originalName}</span>
-              <span className="text-slate-400">
-                ({(submission.fileUpload.size / 1024).toFixed(1)} KB)
-              </span>
-            </div>
+              <Download className="h-4 w-4 shrink-0" />
+              <span className="sr-only">Unduh file</span>
+            </a>
           ) : (
             <span className="text-xs text-slate-400">Tanpa file</span>
           )}

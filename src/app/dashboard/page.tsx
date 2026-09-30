@@ -235,11 +235,11 @@ const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice
 const createDefaultProject = (): ReportProject => ({ ...defaultProject, sources: [], outline: [], diagrams: [], tables: [], references: [], titleIdeas: [] });
 
 const builderSteps: { id: BuilderStep; label: string; helper: string }[] = [
-  { id: "setup", label: "Mulai", helper: "Judul, jenis laporan, format" },
-  { id: "context", label: "Bahan", helper: "Pedoman, contoh, kode program" },
-  { id: "plan", label: "Kerangka", helper: "Bab, tabel, referensi" },
-  { id: "execute", label: "Diagram", helper: "Buat dan setujui diagram" },
-  { id: "draft", label: "Draf", helper: "Buat laporan lengkap" },
+  { id: "setup", label: "Ceritakan tugasmu", helper: "Judul dan jenis laporan" },
+  { id: "context", label: "Masukkan bahan", helper: "Instruksi, contoh, atau catatan" },
+  { id: "plan", label: "Periksa kerangka", helper: "Susunan isi laporan" },
+  { id: "execute", label: "Tambahkan diagram", helper: "Lewati bila tidak perlu" },
+  { id: "draft", label: "Buat draf", helper: "Tulis laporan dari bahanmu" },
 ];
 
 const loadingSteps = [
@@ -282,32 +282,32 @@ const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web
 
 function plannerMessage(project: ReportProject, activeStep: BuilderStep) {
   if (activeStep === "setup") {
-    if (project.startMode === "need_title") return "Mulai dari ide kasar dulu. Isi topik/kebutuhan dosen seadanya, lalu klik Brainstorm supaya sistem kasih pilihan judul, outline, tabel, UML, dan referensi awal.";
-    if (project.startMode === "has_material") return "Upload atau tempel bahan dulu di langkah Konteks. Bahan seperti contoh laporan, pedoman dosen, atau ZIP codingan akan jadi dasar rencana laporan.";
-    return "Isi judul sementara dan topik singkat. Setelah itu sistem bisa menurunkan struktur BAB, daftar gambar, tabel, dan query jurnal yang lebih pas.";
+    if (project.startMode === "need_title") return "Belum ada judul? Tulis topiknya saja. Judul bisa dipilih setelah bahan terkumpul.";
+    if (project.startMode === "has_material") return "Lanjutkan ke langkah berikutnya untuk memasukkan file atau catatan yang sudah kamu punya.";
+    return "Tulis judul sementara dan topik singkat. Keduanya bisa diubah nanti.";
   }
 
   if (activeStep === "context") {
     return project.sources.length > 0
-      ? `Sudah ada ${project.sources.length} sumber. Kalau sumber utama sudah masuk, lanjut Brainstorm supaya daftar BAB, diagram, tabel, dan referensi tersusun.`
-      : "Masukkan minimal satu bahan utama: brief tugas, pedoman PDF/DOCX, contoh laporan benar, ZIP project codingan, atau catatan revisi dosen.";
+      ? `Sudah ada ${project.sources.length} bahan. Setelah cukup, klik Buat kerangka.`
+      : "Masukkan setidaknya satu bahan: instruksi tugas, file pedoman, contoh, atau catatanmu.";
   }
 
   if (activeStep === "plan") {
     return project.outline.length > 0
-      ? "Cek rencana dulu. Kalau judul, outline, tabel, dan referensi sudah masuk akal, lanjut eksekusi UML/gambar yang dibutuhkan."
-      : "Rencana belum ada. Jalankan Brainstorm dari konteks agar sistem menyusun daftar kerja sebelum generate laporan.";
+      ? "Baca susunan laporan. Ubah bagian yang belum sesuai sebelum melanjutkan."
+      : "Kerangka belum dibuat. Kembali ke bahan, lalu klik Buat kerangka.";
   }
 
   if (activeStep === "execute") {
     return project.diagrams.length > 0
-      ? `Ada ${project.diagrams.length} diagram/gambar yang direncanakan. Buat yang wajib dulu, approve, lalu masuk ke draft final.`
-      : "Untuk laporan non-sistem, diagram bisa kosong. Kalau butuh gambar khusus, tambahkan konteksnya lalu brainstorm ulang.";
+      ? `Ada ${project.diagrams.length} diagram yang direncanakan. Buat yang diperlukan, atau lanjut jika belum membutuhkannya.`
+      : "Tidak semua laporan perlu diagram. Kamu bisa langsung lanjut membuat draf.";
   }
 
   return project.reportDraft?.content
-    ? "Draft sudah ada. Sekarang bisa copy, generate ulang, atau revisi bagian tertentu tanpa mengulang semua dari nol."
-    : "Generate laporan baru setelah sumber, outline, tabel, referensi, dan diagram yang wajib sudah siap.";
+    ? "Draf sudah ada. Baca dulu, lalu perbaiki bagian yang belum sesuai."
+    : "Buat draf setelah bahan dan kerangka siap. Periksa hasilnya sebelum digunakan.";
 }
 
 function buildTitleIdeas(project: ReportProject): string[] {
@@ -859,7 +859,7 @@ export default function ReportBuilderPage() {
         </Link>
 
         <section className="mb-8 md:mb-10">
-          <h1 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Susun laporan</h1>
+          <h1 className="text-3xl md:text-4xl font-bold mb-4">Buat laporan langkah demi langkah</h1>
           <p className="text-slate-500 max-w-3xl text-base md:text-lg leading-relaxed">
             Pilih jenis laporan, masukkan pedoman dan bahan yang kamu punya, lalu ikuti langkahnya sampai jadi draf lengkap.
           </p>
@@ -868,17 +868,10 @@ export default function ReportBuilderPage() {
         <section className="mb-6 rounded-2xl border border-blue-100 bg-blue-50/40 p-5 md:p-6">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
-              <h2 className="text-xl font-black text-slate-900">Alur Terpadu Laporan</h2>
-              <p className="text-sm text-slate-600 mt-1">Ikuti langkah dari kiri ke kanan. Panel di bawah cuma menampilkan langkah yang sedang aktif.</p>
+              <h2 className="text-lg font-bold text-slate-900">Langkah {builderSteps.findIndex((step) => step.id === activeStep) + 1} dari {builderSteps.length}: {builderSteps.find((step) => step.id === activeStep)?.label}</h2>
+              <p className="text-sm text-slate-600 mt-1">Isi yang kamu tahu dulu. Kamu bisa kembali dan mengubahnya kapan saja.</p>
             </div>
-            <button
-              type="button"
-              onClick={resetProject}
-              disabled={isGeneratingReport || isRevisingReport}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-100 bg-white px-4 py-3 text-sm font-black text-red-600 transition-colors hover:border-red-200 hover:bg-red-50 disabled:opacity-40"
-            >
-              <Trash2 className="w-4 h-4" /> Reset proyek
-            </button>
+            <details className="text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Opsi proyek</summary><button type="button" onClick={resetProject} disabled={isGeneratingReport || isRevisingReport} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-red-100 bg-white px-3 py-2 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 className="h-4 w-4" /> Mulai ulang laporan</button></details>
           </div>
 
           <div className="mt-5 grid gap-2 md:grid-cols-5">
@@ -894,14 +887,13 @@ export default function ReportBuilderPage() {
                 <button
                   key={step.id}
                   onClick={() => setActiveStep(step.id)}
-                  className={`rounded-xl border p-3 text-left transition-colors ${active ? "border-blue-500 bg-white shadow-sm" : "border-blue-100 bg-white/70 hover:border-blue-300"}`}
+                  aria-current={active ? "step" : undefined}
+                  className={`rounded-lg border p-3 text-left transition-colors ${active ? "border-blue-500 bg-white shadow-sm" : "border-blue-100 bg-white/70 hover:border-blue-300"}`}
                 >
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <span className={`flex h-7 w-7 items-center justify-center rounded-lg text-xs font-black ${done ? "bg-green-500 text-white" : active ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-400"}`}>{done ? "OK" : index + 1}</span>
-                    {active && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-700">AKTIF</span>}
                   </div>
-                  <p className="font-black text-slate-900">{step.label}</p>
-                  <p className="mt-1 text-xs font-semibold text-slate-500 leading-snug">{step.helper}</p>
+                  <p className="text-sm font-bold text-slate-900">{step.label}</p>
                 </button>
               );
             })}
@@ -910,21 +902,16 @@ export default function ReportBuilderPage() {
           <div className="mt-5 rounded-xl border border-blue-100 bg-white p-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
-                <p className="text-sm font-medium text-slate-500">Langkah sekarang</p>
-                <p className="text-lg font-black text-slate-900">{builderSteps.find((step) => step.id === activeStep)?.label}</p>
-                <p className="text-sm text-slate-500">{builderSteps.find((step) => step.id === activeStep)?.helper}</p>
+                <p className="text-sm text-slate-600">{assistantMessage}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {activeStep === "setup" && <button onClick={() => setActiveStep("context")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut isi konteks</button>}
-                {activeStep === "context" && <button onClick={generatePlan} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white"><Lightbulb className="w-4 h-4" /> Brainstorm rencana</button>}
-                {activeStep === "plan" && <button onClick={() => setActiveStep("execute")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut eksekusi UML</button>}
-                {activeStep === "execute" && <button onClick={() => setActiveStep("draft")} className="rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white">Lanjut ke draft</button>}
-                {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0 || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : "Generate laporan"}</button>}
+                {activeStep !== "setup" && <button onClick={() => setActiveStep(builderSteps[builderSteps.findIndex((step) => step.id === activeStep) - 1].id)} className="rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Kembali</button>}
+                {activeStep === "setup" && <button onClick={() => setActiveStep("context")} className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">Lanjut: masukkan bahan</button>}
+                {activeStep === "context" && <button onClick={generatePlan} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white"><Lightbulb className="w-4 h-4" /> Buat kerangka</button>}
+                {activeStep === "plan" && <button onClick={() => setActiveStep("execute")} className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">Lanjut: diagram</button>}
+                {activeStep === "execute" && <button onClick={() => setActiveStep("draft")} className="rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white">Lanjut: buat draf</button>}
+                {activeStep === "draft" && <button onClick={generateFullReport} disabled={isGeneratingReport || project.outline.length === 0 || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Masukkan bahan dulu" : "Buat draf laporan"}</button>}
               </div>
-            </div>
-            <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
-              <p className="mb-1 text-sm font-medium text-blue-700">Saran AI</p>
-              <p className="text-sm font-semibold leading-relaxed text-slate-700">{assistantMessage}</p>
             </div>
             {isGeneratingReport && (
               <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
@@ -943,12 +930,12 @@ export default function ReportBuilderPage() {
                 </div>
               </div>
             )}
-            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <details className="mt-4 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Lihat ringkasan bahan</summary><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
               <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Sumber</p><p className="text-lg font-black">{project.sources.length}</p></div>
               <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">UML</p><p className="text-lg font-black">{approvedCount}/{project.diagrams.length}</p></div>
               <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Tabel</p><p className="text-lg font-black">{doneTableCount}/{project.tables.length}</p></div>
               <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Referensi</p><p className="text-lg font-black">{savedReferenceCount}/{project.references.length}</p></div>
-            </div>
+            </div></details>
           </div>
           {reportError && <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{reportError}</p>}
         </section>
@@ -959,8 +946,8 @@ export default function ReportBuilderPage() {
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><ClipboardList className="w-5 h-5" /></div>
                 <div>
-                  <h2 className="text-xl font-black">Setup Proyek</h2>
-                  <p className="text-sm text-slate-500">Tentukan konteks dulu supaya output tidak generik.</p>
+                  <h2 className="text-xl font-bold">Tentang laporanmu</h2>
+                  <p className="text-sm text-slate-500">Pilih jenis laporan dan tulis topiknya. Judul boleh menyusul.</p>
                 </div>
               </div>
 
@@ -989,39 +976,32 @@ export default function ReportBuilderPage() {
                   </select>
                 </label>
 
-                <label className="space-y-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Gaya bahasa</span>
-                  <select value={project.formality} onChange={(e) => updateProject("formality", e.target.value as Formality)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500">
-                    <option value="ringkas">Ringkas</option>
-                    <option value="formal">Formal</option>
-                    <option value="akademik">Akademik penuh</option>
-                  </select>
+                <label className="space-y-2 md:col-span-2">
+                  <span className="text-sm font-medium text-slate-600">Judul (boleh dikosongkan dulu)</span>
+                  <input value={project.title} onChange={(e) => updateProject("title", e.target.value)} placeholder="Contoh: Laporan hasil pengamatan lingkungan" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
                 </label>
 
                 <label className="space-y-2 md:col-span-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Judul sementara</span>
-                  <input value={project.title} onChange={(e) => updateProject("title", e.target.value)} placeholder="Contoh: Rancang Bangun Sistem Absensi QR Karyawan" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
+                  <span className="text-sm font-medium text-slate-600">Apa yang ingin kamu bahas?</span>
+                  <textarea value={project.topic} onChange={(e) => updateProject("topic", e.target.value)} placeholder="Ceritakan topik atau instruksi tugas dengan bahasamu sendiri..." className="min-h-28 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-blue-500" />
                 </label>
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Topik / kebutuhan dosen / ide kasar</span>
-                  <textarea value={project.topic} onChange={(e) => updateProject("topic", e.target.value)} placeholder="Tempel brief tugas, ide capstone, fitur aplikasi, aturan dosen, atau masalah yang ingin dibahas..." className="min-h-28 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-blue-500" />
+              </div>
+              <details className="mt-5 text-sm text-slate-700"><summary className="cursor-pointer font-semibold">Pengaturan tambahan (opsional)</summary><div className="mt-4 grid gap-4 md:grid-cols-2">
+                <label className="space-y-2"><span className="block text-sm">Gaya bahasa</span><select value={project.formality} onChange={(e) => updateProject("formality", e.target.value as Formality)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"><option value="ringkas">Ringkas</option><option value="formal">Formal</option><option value="akademik">Akademik penuh</option></select></label>
+                <label className="space-y-2">
+                  <span className="text-sm text-slate-600">Mata kuliah</span>
+                  <input value={project.course} onChange={(e) => updateProject("course", e.target.value)} placeholder="Nama mata kuliah" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
                 </label>
 
                 <label className="space-y-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Mata kuliah / konteks</span>
-                  <input value={project.course} onChange={(e) => updateProject("course", e.target.value)} placeholder="PBO, RPL, Basis Data, Capstone..." className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
-                </label>
-
-                <label className="space-y-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Sitasi</span>
+                  <span className="text-sm text-slate-600">Gaya daftar pustaka</span>
                   <select value={project.citationStyle} onChange={(e) => updateProject("citationStyle", e.target.value as ReportProject["citationStyle"])} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500">
                     <option value="APA">APA</option>
                     <option value="IEEE">IEEE</option>
                     <option value="Bebas">Bebas</option>
                   </select>
                 </label>
-              </div>
+              </div></details>
 
               {project.titleIdeas.length > 0 && (
                 <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
@@ -1036,17 +1016,15 @@ export default function ReportBuilderPage() {
                 </div>
               )}
 
-              <button onClick={generatePlan} className="mt-5 inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 transition-colors">
-                <Lightbulb className="w-4 h-4" /> Brainstorm Ulang Semua Rencana
-              </button>
+              {project.sources.length > 0 && <details className="mt-5 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Buat ulang kerangka</summary><button onClick={generatePlan} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-blue-200 px-4 py-2 text-sm font-semibold text-blue-700"><Lightbulb className="h-4 w-4" /> Susun ulang dari bahan</button></details>}
             </section>
 
             <section className={`${activeStep === "context" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
               <div className="flex items-center gap-3 mb-5">
                 <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><FileCheck2 className="w-5 h-5" /></div>
                 <div>
-                  <h2 className="text-xl font-black">Sumber & Konteks Proyek</h2>
-                  <p className="text-sm text-slate-500">Masukkan pedoman dosen, contoh laporan benar, referensi, brief tugas, atau konteks codingan sebelum brainstorming.</p>
+                  <h2 className="text-xl font-bold">Bahan untuk laporan</h2>
+                  <p className="text-sm text-slate-500">Tempel catatan atau unggah file berisi instruksi, contoh, maupun data yang akan dibahas.</p>
                 </div>
               </div>
 
@@ -1068,14 +1046,13 @@ export default function ReportBuilderPage() {
 
               <div className="rounded-2xl border border-amber-100 bg-amber-50/40 p-4 mb-4">
                 <p className="text-sm font-bold text-amber-900">{sourceKindHint[sourceDraft.kind]}</p>
-                <p className="mt-1 text-xs text-amber-700 leading-relaxed">Alur sistem: kumpulkan konteks dulu, klik brainstorm, sistem membuat outline dan daftar gambar/UML yang perlu dibuat. Diagram baru dieksekusi setelah daftar ini disetujui.</p>
               </div>
 
               <div className="grid md:grid-cols-[0.8fr_1.2fr] gap-3 items-start">
                 <div className="space-y-3">
                   <input value={sourceDraft.title} onChange={(e) => setSourceDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Judul sumber, contoh: Pedoman Dosen RPL" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-amber-500" />
                   <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-500 hover:border-amber-300 hover:text-amber-700 transition-colors">
-                    {isExtractingSource ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} {isExtractingSource ? "Membaca file..." : "Upload & baca konteks"}
+                    {isExtractingSource ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} {isExtractingSource ? "Membaca file..." : "Pilih file"}
                     <input type="file" className="hidden" disabled={isExtractingSource} accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.php,.py,.java,.sql,.html,.css,.xml,.yml,.yaml,.pdf,.docx,.zip" onChange={(e) => handleSourceFile(e.target.files?.[0])} />
                   </label>
                   {sourceDraft.fileName && <p className="text-xs font-bold text-slate-400">File dipilih: {sourceDraft.fileName}</p>}
@@ -1085,9 +1062,9 @@ export default function ReportBuilderPage() {
               </div>
 
               <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-                <p className="text-xs text-slate-500 leading-relaxed">Tips hemat token: masukkan ringkasan yang relevan saja. Untuk ZIP codingan, cukup struktur folder, fitur, route/API, database, dan flow utama.</p>
+                <p className="text-xs text-slate-500 leading-relaxed">Cukup masukkan bagian penting yang berkaitan dengan laporan.</p>
                 <button onClick={addSource} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-amber-600 transition-colors">
-                  <Plus className="w-4 h-4" /> Tambah Sumber
+                  <Plus className="w-4 h-4" /> Simpan bahan
                 </button>
               </div>
 

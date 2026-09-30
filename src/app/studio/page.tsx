@@ -71,18 +71,27 @@ type StudioTab = "intake" | "questions" | "decisions" | "specification" | "artif
 type SaveState = "loading" | "saved" | "saving" | "error";
 
 const tabs: Array<{ id: StudioTab; label: string; helper: string; icon: typeof FileText }> = [
-  { id: "intake", label: "Bahan & Sumber", helper: "Masukkan informasi awal", icon: Layers3 },
-  { id: "questions", label: "Pertanyaan", helper: "Lengkapi yang belum jelas", icon: BrainCircuit },
-  { id: "decisions", label: "Keputusan", helper: "Hal yang sudah disepakati", icon: History },
-  { id: "specification", label: "Ringkasan Proyek", helper: "Rangkuman semua keputusan", icon: ClipboardCheck },
-  { id: "artifacts", label: "Hasil & Diagram", helper: "Susun bagian demi bagian", icon: Workflow },
-  { id: "format", label: "Cek Format", helper: "Sesuaikan dengan aturan kampus", icon: FileCheck2 },
+  { id: "intake", label: "Ceritakan tugasmu", helper: "Tulis ide dan masukkan bahan", icon: Layers3 },
+  { id: "questions", label: "Jawab pertanyaan", helper: "Lengkapi yang belum jelas", icon: BrainCircuit },
+  { id: "decisions", label: "Periksa jawaban", helper: "Pastikan pilihanmu sudah tepat", icon: History },
+  { id: "specification", label: "Lihat rangkuman", helper: "Cek hasil dari jawabanmu", icon: ClipboardCheck },
+  { id: "artifacts", label: "Buat hasil", helper: "Kerangka dan diagram", icon: Workflow },
+  { id: "format", label: "Rapikan format", helper: "Ikuti aturan yang berlaku", icon: FileCheck2 },
 ];
+
+const stepGuidance: Record<StudioTab, string> = {
+  intake: "Tulis topik tugasmu, lalu masukkan instruksi atau bahan yang sudah ada.",
+  questions: "Jawab pertanyaan yang kamu tahu. Jawaban bisa diperbaiki nanti.",
+  decisions: "Periksa jawaban yang terkumpul. Pastikan sesuai dengan tugasmu.",
+  specification: "Baca rangkuman dan kembali ke jawaban bila ada yang kurang tepat.",
+  artifacts: "Buat bagian yang diperlukan untuk tugasmu, satu per satu.",
+  format: "Cocokkan aturan penulisan dengan pedoman yang kamu miliki.",
+};
 
 const projectTypeOptions: Array<{ value: StudioIntake["projectType"]; label: string }> = [
   { value: "thesis", label: "Skripsi / Tesis" },
   { value: "proposal", label: "Proposal" },
-  { value: "capstone", label: "Capstone / Projek Akhir" },
+  { value: "capstone", label: "Proyek Akhir" },
   { value: "course", label: "Tugas Mata Kuliah" },
   { value: "practicum", label: "Laporan Praktikum" },
   { value: "paper", label: "Makalah" },
@@ -93,35 +102,35 @@ const sourceKindOptions: Array<{ value: SourceKind; label: string }> = [
   { value: "lecturer_request", label: "Permintaan / revisi dosen" },
   { value: "campus_guide", label: "Pedoman kampus" },
   { value: "template", label: "Template resmi" },
-  { value: "brief", label: "Brief / rubrik tugas" },
+  { value: "brief", label: "Instruksi / penilaian tugas" },
   { value: "example", label: "Contoh laporan" },
-  { value: "code", label: "Kode / repository" },
-  { value: "dataset", label: "Dataset" },
+  { value: "code", label: "Kode program" },
+  { value: "dataset", label: "Data penelitian" },
   { value: "reference", label: "Referensi ilmiah" },
   { value: "note", label: "Catatan mentah" },
 ];
 
 const authorityOptions: Array<{ value: SourceAuthority; label: string; helper: string }> = [
-  { value: "binding", label: "Mengikat", helper: "Wajib mengalahkan sumber lain" },
+  { value: "binding", label: "Aturan wajib", helper: "Ikuti jika ada informasi yang berbeda" },
   { value: "primary", label: "Utama", helper: "Fakta inti proyek" },
   { value: "supporting", label: "Pendukung", helper: "Melengkapi keputusan" },
-  { value: "example_only", label: "Contoh saja", helper: "Pola, bukan fakta" },
-  { value: "unverified", label: "Belum terverifikasi", helper: "Perlu dikonfirmasi" },
+  { value: "example_only", label: "Contoh saja", helper: "Untuk melihat bentuknya, bukan menyalin isinya" },
+  { value: "unverified", label: "Belum pasti", helper: "Perlu dicek lagi" },
 ];
 
 const categoryLabels: Record<QuestionCategory, string> = {
   identity: "Identitas",
   scope: "Cakupan",
-  actors: "Aktor",
+  actors: "Pihak terkait",
   requirements: "Kebutuhan",
   flow: "Alur",
-  exceptions: "Exception",
+  exceptions: "Kondisi khusus",
   data: "Data",
   method: "Metode",
   format: "Format",
-  citation: "Sitasi",
+  citation: "Kutipan",
   lecturer: "Dosen",
-  conflict: "Konflik",
+  conflict: "Informasi berbeda",
 };
 
 const decisionStatusLabel: Record<DecisionStatus, string> = {
@@ -441,12 +450,10 @@ export default function StudioPage() {
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <Badge tone="blue">Studio</Badge>
                 {project.importedFromLegacy && <Badge tone="violet">Dari versi lama</Badge>}
-                <span className="text-xs font-bold text-slate-400">Revisi {project.revision}</span>
+                <span className="text-xs font-bold text-slate-400">Langkah {tabs.findIndex((tab) => tab.id === activeTab) + 1} dari {tabs.length}</span>
               </div>
-              <h1 className="max-w-4xl text-3xl font-black tracking-tight md:text-5xl">Susun ide dan kerangka laporan</h1>
-              <p className="mt-4 max-w-3xl text-sm font-medium leading-7 text-slate-300 md:text-base">
-                Kumpulkan permintaan dosen, pedoman, dan bahan kamu di satu tempat. Jawab beberapa pertanyaan, lalu hasilkan kerangka, diagram, dan draf yang saling cocok.
-              </p>
+              <h1 className="max-w-4xl text-3xl font-black md:text-4xl">Mulai dari ide, selesaikan satu langkah dulu</h1>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">{tabs.find((tab) => tab.id === activeTab)?.helper}. Kamu bisa kembali ke langkah sebelumnya kapan saja.</p>
               <div className="mt-6 flex flex-wrap items-center gap-2">
                 <select
                   value={workspace.activeProjectId}
@@ -455,25 +462,16 @@ export default function StudioPage() {
                 >
                   {workspace.projects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                 </select>
-                <button onClick={createProject} className="rounded-xl bg-blue-600 px-3 py-2 text-xs font-black hover:bg-blue-500"><Plus className="mr-1 inline h-4 w-4" /> Baru</button>
-                <button onClick={duplicateProject} className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-black text-slate-200 hover:bg-slate-800"><Copy className="mr-1 inline h-4 w-4" /> Duplikat</button>
-                <button onClick={deleteProject} className="rounded-xl border border-red-900 px-3 py-2 text-xs font-black text-red-300 hover:bg-red-950"><Trash2 className="mr-1 inline h-4 w-4" /> Hapus</button>
+                <button onClick={createProject} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold hover:bg-blue-500"><Plus className="mr-1 inline h-4 w-4" /> Proyek baru</button>
+                <details className="relative rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200"><summary className="cursor-pointer font-bold">Opsi proyek</summary><div className="mt-3 flex flex-wrap gap-2"><button onClick={duplicateProject} className="rounded-lg border border-slate-600 px-3 py-2"><Copy className="mr-1 inline h-4 w-4" /> Salin proyek</button><button onClick={deleteProject} className="rounded-lg border border-red-800 px-3 py-2 text-red-300"><Trash2 className="mr-1 inline h-4 w-4" /> Hapus proyek</button></div></details>
               </div>
             </div>
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 p-5">
-              <div className="flex items-end justify-between">
-                <div><p className="text-xs font-medium text-slate-400">Kesiapan</p><p className="mt-1 text-4xl font-black">{project.readiness.score}<span className="text-lg text-slate-500">/100</span></p></div>
-                <Badge tone={project.readiness.stage === "ready" ? "green" : project.readiness.blockerCount ? "red" : "amber"}>{project.readiness.stage}</Badge>
-              </div>
-              <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-emerald-400 transition-all" style={{ width: `${project.readiness.score}%` }} /></div>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <div className="rounded-xl bg-slate-950 p-2"><p className="text-lg font-black text-red-300">{project.readiness.blockerCount}</p><p className="text-[9px] font-bold uppercase text-slate-500">blocker</p></div>
-                <div className="rounded-xl bg-slate-950 p-2"><p className="text-lg font-black text-amber-300">{project.readiness.staleArtifactCount}</p><p className="text-[9px] font-bold uppercase text-slate-500">stale</p></div>
-                <div className="rounded-xl bg-slate-950 p-2"><p className="text-lg font-black text-blue-300">{project.readiness.formatErrorCount}</p><p className="text-[9px] font-bold uppercase text-slate-500">format error</p></div>
-              </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-5">
+              <p className="text-sm font-bold text-white">Yang perlu dilakukan</p>
+              <p className="mt-2 text-sm leading-6 text-slate-300">{stepGuidance[activeTab]}</p>
               <p className="mt-4 flex items-center gap-2 text-xs font-bold text-slate-400">
                 {saveState === "saving" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : saveState === "error" ? <XCircle className="h-3.5 w-3.5 text-red-400" /> : <Save className="h-3.5 w-3.5 text-emerald-400" />}
-                {saveState === "saving" ? "Menyimpan lokal…" : saveState === "error" ? "Penyimpanan lokal gagal" : "Tersimpan lokal · DB belum dimigrasikan"}
+                {saveState === "saving" ? "Menyimpan di perangkat…" : saveState === "error" ? "Gagal menyimpan di perangkat" : "Tersimpan di perangkat ini"}
               </p>
             </div>
           </div>
@@ -499,10 +497,6 @@ export default function StudioPage() {
                 </button>
               );
             })}
-            <div className="mt-4 rounded-2xl bg-slate-950 p-4 text-white">
-              <p className="text-xs font-medium text-slate-500">Langkah berikutnya</p>
-              <p className="mt-2 text-xs font-semibold leading-5 text-slate-300">{project.readiness.nextActions[0]}</p>
-            </div>
           </aside>
 
           <section className={`${cardClass} min-w-0 p-5 md:p-8`}>
@@ -566,6 +560,10 @@ export default function StudioPage() {
                 update={(patch) => runMutation((current) => updateFormatProfile(current, patch), "Profil format diperbarui; dokumen turunan perlu divalidasi ulang.")}
               />
             )}
+            <div className="mt-8 flex flex-wrap justify-between gap-3 border-t border-slate-200 pt-5">
+              {activeTab !== "intake" ? <button onClick={() => setActiveTab(tabs[tabs.findIndex((tab) => tab.id === activeTab) - 1].id)} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700">Kembali</button> : <span />}
+              {activeTab !== "format" && <button onClick={() => setActiveTab(tabs[tabs.findIndex((tab) => tab.id === activeTab) + 1].id)} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2 text-sm font-bold text-white">Lanjut: {tabs[tabs.findIndex((tab) => tab.id === activeTab) + 1].label}<ChevronRight className="h-4 w-4" /></button>}
+            </div>
           </section>
         </div>
       </div>
@@ -588,39 +586,41 @@ interface IntakePanelProps {
 function IntakePanel({ project, sourceDraft, setSourceDraft, updateIntake, addSource, removeSource, fileInputRef, extractingFile, extractFile }: IntakePanelProps) {
   return (
     <div>
-      <SectionTitle icon={Layers3} eyebrow="Langkah 1" title="Bahan & sumber" helper="Masukkan apa saja yang kamu punya, tidak perlu rapi dulu. Tandai mana yang aturan wajib, fakta utama, pendukung, atau sekadar contoh." />
+      <SectionTitle icon={Layers3} eyebrow="Langkah 1" title="Ceritakan tugasmu" helper="Tulis topik atau instruksi yang kamu terima. Belum harus lengkap; kamu bisa kembali lagi nanti." />
       <div className="grid gap-4 md:grid-cols-2">
         <label><span className={labelClass}>Jenis proyek</span><select className={inputClass} value={project.intake.projectType} onChange={(event) => updateIntake("projectType", event.target.value as StudioIntake["projectType"])}>{projectTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-        <label><span className={labelClass}>Deadline</span><input type="date" className={inputClass} value={project.intake.deadline} onChange={(event) => updateIntake("deadline", event.target.value)} /></label>
-        <label className="md:col-span-2"><span className={labelClass}>Judul kerja</span><input className={inputClass} value={project.intake.title} onChange={(event) => updateIntake("title", event.target.value)} placeholder="Judul boleh sementara, tetapi harus spesifik" /></label>
+        <label className="md:col-span-2"><span className={labelClass}>Judul (boleh dikosongkan dulu)</span><input className={inputClass} value={project.intake.title} onChange={(event) => updateIntake("title", event.target.value)} placeholder="Judul sementara juga boleh" /></label>
+        <label className="md:col-span-2"><span className={labelClass}>Apa yang ingin kamu bahas?</span><textarea rows={3} className={inputClass} value={project.intake.topic} onChange={(event) => updateIntake("topic", event.target.value)} placeholder="Tulis dengan bahasamu sendiri" /></label>
+      </div>
+      <details className="mt-5"><summary className="cursor-pointer text-sm font-semibold text-slate-600">Detail tambahan (opsional)</summary><div className="mt-4 grid gap-4 md:grid-cols-2">
+        <label><span className={labelClass}>Batas waktu</span><input type="date" className={inputClass} value={project.intake.deadline} onChange={(event) => updateIntake("deadline", event.target.value)} /></label>
         <label><span className={labelClass}>Institusi</span><input className={inputClass} value={project.intake.institution} onChange={(event) => updateIntake("institution", event.target.value)} placeholder="Universitas / sekolah / organisasi" /></label>
         <label><span className={labelClass}>Program / mata kuliah</span><input className={inputClass} value={project.intake.program || project.intake.course} onChange={(event) => updateIntake("program", event.target.value)} placeholder="Program studi atau mata kuliah" /></label>
         <label><span className={labelClass}>Dosen / pembimbing</span><input className={inputClass} value={project.intake.lecturer} onChange={(event) => updateIntake("lecturer", event.target.value)} placeholder="Nama atau peran reviewer" /></label>
-        <label><span className={labelClass}>Output yang diminta</span><input className={inputClass} value={project.intake.expectedOutput} onChange={(event) => updateIntake("expectedOutput", event.target.value)} placeholder="Laporan, sistem, UML, presentasi…" /></label>
-        <label className="md:col-span-2"><span className={labelClass}>Masalah yang harus diselesaikan</span><textarea rows={4} className={inputClass} value={project.intake.problem} onChange={(event) => updateIntake("problem", event.target.value)} placeholder="Kondisi saat ini, pihak terdampak, dan akibat masalah" /></label>
-        <label className="md:col-span-2"><span className={labelClass}>Tujuan terukur</span><textarea rows={3} className={inputClass} value={project.intake.objective} onChange={(event) => updateIntake("objective", event.target.value)} placeholder="Apa yang dirancang/dibangun/diuji/dianalisis dan ukuran selesai" /></label>
-        <label><span className={labelClass}>Topik / ide kasar</span><textarea rows={3} className={inputClass} value={project.intake.topic} onChange={(event) => updateIntake("topic", event.target.value)} placeholder="Tulis bebas apa yang ada di kepala" /></label>
+        <label><span className={labelClass}>Hasil yang diminta</span><input className={inputClass} value={project.intake.expectedOutput} onChange={(event) => updateIntake("expectedOutput", event.target.value)} placeholder="Laporan, diagram, presentasi…" /></label>
+        <label className="md:col-span-2"><span className={labelClass}>Masalah yang ingin diselesaikan</span><textarea rows={4} className={inputClass} value={project.intake.problem} onChange={(event) => updateIntake("problem", event.target.value)} placeholder="Apa masalahnya dan siapa yang mengalaminya?" /></label>
+        <label className="md:col-span-2"><span className={labelClass}>Tujuan tugas ini</span><textarea rows={3} className={inputClass} value={project.intake.objective} onChange={(event) => updateIntake("objective", event.target.value)} placeholder="Apa yang ingin dicapai?" /></label>
         <label><span className={labelClass}>Kondisi / bahan yang sudah ada</span><textarea rows={3} className={inputClass} value={project.intake.existingState} onChange={(event) => updateIntake("existingState", event.target.value)} placeholder="Kode, data, draft, revisi, diagram lama…" /></label>
-      </div>
+      </div></details>
 
       <div className="my-8 border-t border-slate-200" />
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
-        <div><h3 className="text-xl font-black text-slate-900">Sumber & bahan</h3><p className="mt-1 text-sm font-medium text-slate-500">Kalau ada dua sumber yang bertentangan, yang tingkatnya lebih tinggi dipakai.</p></div>
+        <div><h3 className="text-xl font-bold text-slate-900">Bahan yang kamu punya</h3><p className="mt-1 text-sm text-slate-500">Misalnya instruksi tugas, catatan, contoh, atau pedoman.</p></div>
         <input ref={fileInputRef} type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.py,.java,.sql,.html,.css,.xml,.yml,.yaml" onChange={(event) => { const file = event.target.files?.[0]; if (file) void extractFile(file); }} />
-        <button onClick={() => fileInputRef.current?.click()} disabled={extractingFile} className="rounded-xl bg-slate-950 px-4 py-2.5 text-xs font-black text-white disabled:opacity-50">{extractingFile ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Upload className="mr-2 inline h-4 w-4" />}Upload / ekstrak file</button>
+        <button onClick={() => fileInputRef.current?.click()} disabled={extractingFile} className="rounded-lg bg-slate-950 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50">{extractingFile ? <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> : <Upload className="mr-2 inline h-4 w-4" />}Pilih file</button>
       </div>
       <div className="rounded-3xl border border-blue-100 bg-blue-50/60 p-4 md:p-5">
         <div className="grid gap-4 md:grid-cols-2">
           <label><span className={labelClass}>Jenis sumber</span><select className={inputClass} value={sourceDraft.kind} onChange={(event) => setSourceDraft({ ...sourceDraft, kind: event.target.value as SourceKind })}>{sourceKindOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-          <label><span className={labelClass}>Tingkat otoritas</span><select className={inputClass} value={sourceDraft.authority} onChange={(event) => setSourceDraft({ ...sourceDraft, authority: event.target.value as SourceAuthority })}>{authorityOptions.map((option) => <option key={option.value} value={option.value}>{option.label} — {option.helper}</option>)}</select></label>
+          <label><span className={labelClass}>Seberapa penting bahan ini?</span><select className={inputClass} value={sourceDraft.authority} onChange={(event) => setSourceDraft({ ...sourceDraft, authority: event.target.value as SourceAuthority })}>{authorityOptions.map((option) => <option key={option.value} value={option.value}>{option.label} — {option.helper}</option>)}</select></label>
           <label><span className={labelClass}>Judul sumber</span><input className={inputClass} value={sourceDraft.title} onChange={(event) => setSourceDraft({ ...sourceDraft, title: event.target.value })} placeholder="Mis. Revisi dosen 22 Juli" /></label>
-          <label><span className={labelClass}>Asal / provenance</span><input className={inputClass} value={sourceDraft.provenance} onChange={(event) => setSourceDraft({ ...sourceDraft, provenance: event.target.value })} placeholder="Email dosen, LMS, PDF fakultas…" /></label>
-          <label className="md:col-span-2"><span className={labelClass}>Isi mentah</span><textarea rows={7} className={inputClass} value={sourceDraft.content} onChange={(event) => setSourceDraft({ ...sourceDraft, content: event.target.value })} placeholder="Tempel aturan, revisi, contoh, README, data, atau catatan apa adanya" /></label>
+          <label><span className={labelClass}>Dari mana bahan ini?</span><input className={inputClass} value={sourceDraft.provenance} onChange={(event) => setSourceDraft({ ...sourceDraft, provenance: event.target.value })} placeholder="Dosen, kelas, atau catatan sendiri" /></label>
+          <label className="md:col-span-2"><span className={labelClass}>Isi bahan</span><textarea rows={7} className={inputClass} value={sourceDraft.content} onChange={(event) => setSourceDraft({ ...sourceDraft, content: event.target.value })} placeholder="Tempel bagian penting dari instruksi, contoh, atau catatanmu" /></label>
         </div>
-        <button onClick={addSource} className="mt-4 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700"><Plus className="mr-2 inline h-4 w-4" />Masukkan ke vault</button>
+        <button onClick={addSource} className="mt-4 rounded-lg bg-blue-600 px-5 py-3 text-sm font-bold text-white hover:bg-blue-700"><Plus className="mr-2 inline h-4 w-4" />Simpan bahan</button>
       </div>
       <div className="mt-5 space-y-3">
-        {project.sources.length === 0 ? <EmptyState>Belum ada sumber. Minimal masukkan brief/permintaan dosen dan pedoman format.</EmptyState> : project.sources.map((source) => (
+        {project.sources.length === 0 ? <EmptyState>Belum ada bahan. Mulai dari instruksi tugas atau catatan singkat.</EmptyState> : project.sources.map((source) => (
           <article key={source.id} className="rounded-2xl border border-slate-200 p-4">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0"><div className="flex flex-wrap gap-2"><Badge tone={source.authority === "binding" ? "red" : source.authority === "primary" ? "blue" : "slate"}>{source.authority}</Badge><Badge>{sourceKindOptions.find((item) => item.value === source.kind)?.label || source.kind}</Badge></div><h4 className="mt-2 truncate font-black text-slate-900">{source.title}</h4><p className="mt-1 text-xs font-semibold text-slate-400">{source.provenance || source.fileName || "Asal belum dicatat"}</p></div>
@@ -654,11 +654,12 @@ interface QuestionsPanelProps {
 function QuestionsPanel({ questions, unresolvedCount, drafts, setDrafts, showResolved, setShowResolved, answerQuestion, waiveQuestion, runDeepScan, deepScanning, findings, manual, setManual, addManual }: QuestionsPanelProps) {
   return (
     <div>
-      <SectionTitle icon={BrainCircuit} eyebrow="Langkah 2" title="Pertanyaan" helper="Jawab pertanyaan yang paling penting dulu. Pertanyaan bertanda wajib harus dijawab sebelum lanjut membuat hasil." />
+      <SectionTitle icon={BrainCircuit} eyebrow="Langkah 2" title="Jawab pertanyaan" helper="Tulis jawaban yang kamu tahu. Pertanyaan penting perlu dijawab sebelum membuat hasil." />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-slate-950 p-4 text-white">
-        <div><p className="text-2xl font-black">{unresolvedCount} <span className="text-sm text-slate-400">belum dijawab</span></p><p className="text-xs font-semibold text-slate-500">Pertanyaan dasar tetap tersedia tanpa AI.</p></div>
-        <div className="flex gap-2"><button onClick={() => setShowResolved(!showResolved)} className="rounded-xl border border-slate-700 px-3 py-2 text-xs font-black">{showResolved ? "Sembunyikan selesai" : "Lihat semua"}</button><button onClick={() => void runDeepScan()} disabled={deepScanning} className="rounded-xl bg-violet-600 px-4 py-2 text-xs font-black disabled:opacity-50">{deepScanning ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 inline h-4 w-4" />}Cari pertanyaan dengan AI</button></div>
+        <div><p className="text-2xl font-bold">{unresolvedCount} <span className="text-sm text-slate-300">belum dijawab</span></p></div>
+        <button onClick={() => setShowResolved(!showResolved)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold">{showResolved ? "Sembunyikan yang selesai" : "Lihat semua jawaban"}</button>
       </div>
+      <details className="mb-5 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Butuh pertanyaan tambahan?</summary><button onClick={() => void runDeepScan()} disabled={deepScanning} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{deepScanning ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 inline h-4 w-4" />}Cari dengan AI</button></details>
       {findings.length > 0 && <div className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 p-4"><p className="text-xs font-bold text-violet-700">Temuan dari bahan kamu</p><ul className="mt-2 space-y-1 text-sm font-semibold text-violet-900">{findings.map((finding) => <li key={finding}>• {finding}</li>)}</ul></div>}
       <div className="space-y-4">
         {questions.length === 0 ? <EmptyState>Semua pertanyaan yang ditampilkan sudah selesai.</EmptyState> : questions.map((question, index) => {
@@ -666,25 +667,23 @@ function QuestionsPanel({ questions, unresolvedCount, drafts, setDrafts, showRes
           const tone = question.class === "blocker" ? "red" : question.class === "important" ? "amber" : "blue";
           return (
             <article key={question.id} className={`rounded-3xl border p-5 ${question.status === "unanswered" ? "border-slate-200 bg-white" : "border-emerald-100 bg-emerald-50/30"}`}>
-              <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-black text-slate-300">#{index + 1}</span><Badge tone={tone}>{question.class}</Badge><Badge>{categoryLabels[question.category]}</Badge><span className="ml-auto text-[10px] font-black uppercase text-slate-400">Prioritas {question.priority}</span></div>
+              <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-bold text-slate-400">{index + 1}</span><Badge tone={tone}>{question.class === "blocker" ? "Perlu dijawab" : question.class === "important" ? "Penting" : "Tambahan"}</Badge><Badge>{categoryLabels[question.category]}</Badge></div>
               <h3 className="mt-3 text-lg font-black leading-snug text-slate-900">{question.prompt}</h3>
               <p className="mt-2 text-sm font-medium leading-6 text-slate-500"><strong className="text-slate-700">Kenapa ditanya:</strong> {question.why}</p>
-              {question.status === "waived" ? <p className="mt-3 rounded-xl bg-amber-100 p-3 text-sm font-bold text-amber-800">Waiver: {question.waiverReason}</p> : (
+              {question.status === "waived" ? <p className="mt-3 rounded-xl bg-amber-100 p-3 text-sm font-bold text-amber-800">Dilewati: {question.waiverReason}</p> : (
                 <textarea rows={4} className={`${inputClass} mt-4`} value={answer} onChange={(event) => setDrafts((current) => ({ ...current, [question.id]: event.target.value }))} placeholder={question.answerHint} />
               )}
               <div className="mt-3 flex flex-wrap gap-2">
-                {question.status !== "waived" && <><button onClick={() => answerQuestion(question, false)} className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-black text-blue-700"><Check className="mr-1 inline h-4 w-4" />Konfirmasi</button><button onClick={() => answerQuestion(question, true)} className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-black text-white"><LockKeyhole className="mr-1 inline h-4 w-4" />Konfirmasi & kunci</button></>}
-                {question.status === "unanswered" && question.class !== "blocker" && <button onClick={() => waiveQuestion(question)} className="rounded-xl px-3 py-2 text-xs font-black text-slate-400 hover:bg-slate-100">Waive dengan alasan</button>}
-                <span className="self-center text-[10px] font-bold text-slate-400">Dampak: {question.affectedArtifactIds.length} artefak · {question.origin}</span>
+                {question.status !== "waived" && <button onClick={() => answerQuestion(question, false)} className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-bold text-white"><Check className="mr-1 inline h-4 w-4" />Simpan jawaban</button>}
+                <details className="text-xs text-slate-500"><summary className="cursor-pointer py-2 font-semibold">Opsi jawaban</summary><div className="mt-2 flex flex-wrap gap-2">{question.status !== "waived" && <button onClick={() => answerQuestion(question, true)} className="rounded-lg border border-slate-200 px-3 py-2"><LockKeyhole className="mr-1 inline h-4 w-4" />Tetapkan jawaban</button>}{question.status === "unanswered" && question.class !== "blocker" && <button onClick={() => waiveQuestion(question)} className="rounded-lg border border-slate-200 px-3 py-2">Lewati dengan alasan</button>}</div></details>
               </div>
             </article>
           );
         })}
       </div>
-      <div className="mt-6 rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-5">
-        <h3 className="font-black text-slate-900">Tambahkan pertanyaan brainstorming sendiri</h3>
+      <details className="mt-6 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5"><summary className="cursor-pointer font-semibold text-slate-900">Tulis pertanyaan sendiri</summary>
         <div className="mt-3 grid gap-3 md:grid-cols-[1fr_160px_150px_auto]"><input className={inputClass} value={manual.prompt} onChange={(event) => setManual({ ...manual, prompt: event.target.value })} placeholder="Pertanyaan dari user/dosen/reviewer…" /><select className={inputClass} value={manual.category} onChange={(event) => setManual({ ...manual, category: event.target.value as QuestionCategory })}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><select className={inputClass} value={manual.class} onChange={(event) => setManual({ ...manual, class: event.target.value as QuestionClass })}><option value="blocker">Blocker</option><option value="important">Important</option><option value="enrichment">Enrichment</option></select><button onClick={addManual} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-black text-white"><Plus className="mr-1 inline h-4 w-4" />Tambah</button></div>
-      </div>
+      </details>
     </div>
   );
 }
