@@ -120,9 +120,9 @@ export default function FixFormatPage() {
           <div className="inline-flex p-3 bg-blue-100 text-blue-600 rounded-2xl mb-6">
             <FileText className="w-7 h-7 md:w-8 md:h-8" />
           </div>
-          <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4 leading-tight">Rapikan Dokumen DOCX</h1>
+          <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4 leading-tight">Rapikan dokumen Word</h1>
           <p className="text-gray-500 max-w-2xl mx-auto leading-relaxed text-sm md:text-base px-2">
-            Pakai mode cepat untuk langsung download hasil yang sudah dirapikan, atau mode editor kalau mau bongkar struktur BAB/Sub-BAB dulu.
+            Unggah file Word kamu. Pilih cara cepat untuk langsung mengunduh hasil rapi, atau buka editor kalau mau mengatur bab dan sub-bab dulu.
           </p>
         </div>
 
@@ -211,7 +211,7 @@ export default function FixFormatPage() {
                     { label: "Paragraf", value: parseResult.stats.paragraphs },
                   ].map((stat) => (
                     <div key={stat.label} className="bg-white p-4 rounded-2xl md:rounded-3xl border border-blue-50 flex sm:flex-col justify-between items-center sm:text-center">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest sm:mb-1">{stat.label}</p>
+                      <p className="text-xs font-medium text-gray-500 sm:mb-1">{stat.label}</p>
                       <p className="text-xl md:text-2xl font-black text-blue-600">{stat.value}</p>
                     </div>
                   ))}
@@ -219,7 +219,7 @@ export default function FixFormatPage() {
 
                 <div className="bg-white rounded-2xl md:rounded-3xl border border-blue-50 overflow-hidden mb-8">
                   <div className="p-3 md:p-4 bg-gray-50 border-b border-gray-100">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Preview Struktur</p>
+                    <p className="text-xs font-medium text-gray-500">Pratinjau struktur</p>
                   </div>
                   <div className="p-3 md:p-4 max-h-80 md:max-h-96 overflow-y-auto space-y-2">
                     {doc.sections.map((chapter) => (
@@ -271,7 +271,7 @@ export default function FixFormatPage() {
           {step === 3 && mode === "import" && (
             <Card className="p-12 flex flex-col items-center justify-center text-center animate-pulse">
               <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mb-6" />
-              <p className="font-black text-xl uppercase tracking-widest text-gray-900">Mempersiapkan Editor...</p>
+              <p className="font-bold text-xl text-gray-900">Menyiapkan editor…</p>
               <p className="text-gray-400 mt-2">Menyimpan struktur ke dalam model dokumen terpadu.</p>
             </Card>
           )}

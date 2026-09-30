@@ -47,8 +47,13 @@ export default function TugasCard({
   submissionsCount,
 }: TugasCardProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const isPast = new Date(tugas.deadline).getTime() < Date.now();
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md">
+    <div
+      className={`rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md ${
+        isPast ? "opacity-80" : ""
+      }`}
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -74,7 +79,7 @@ export default function TugasCard({
             {submissionsCount !== undefined && (
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
                 <FileText className="w-3 h-3" />
-                {submissionsCount} submission
+                {submissionsCount} mengumpulkan
               </span>
             )}
           </div>
@@ -86,14 +91,14 @@ export default function TugasCard({
               {submissionsHref && (
                 <Link href={submissionsHref}>
                   <Button variant="outline" size="sm" icon={FileText}>
-                    Lihat Submission
+                    Lihat pengumpulan
                   </Button>
                 </Link>
               )}
               {editHref && (
                 <Link href={editHref}>
                   <Button variant="secondary" size="sm" icon={Pencil}>
-                    Edit
+                    Ubah
                   </Button>
                 </Link>
               )}
@@ -110,8 +115,8 @@ export default function TugasCard({
             </>
           ) : (
             <Link href={href}>
-              <Button variant="primary" size="sm">
-                Lihat / Submit
+              <Button variant={isPast ? "outline" : "primary"} size="sm">
+                {isPast ? "Lihat" : "Lihat & kumpulkan"}
               </Button>
             </Link>
           )}
@@ -124,8 +129,8 @@ export default function TugasCard({
           title={`Hapus tugas "${tugas.title}"?`}
           message={
             <>
-              Tindakan ini tidak bisa dibatalkan. Semua submission terkait
-              (termasuk file yang di-upload) akan ikut terhapus.
+              Tindakan ini tidak bisa dibatalkan. Semua pengumpulan mahasiswa
+              untuk tugas ini (termasuk file) akan ikut terhapus.
             </>
           }
           confirmLabel="Hapus"

@@ -29,7 +29,7 @@ export default function KelasPicker({
   if (!options.length) {
     return (
       <p className={`text-xs text-slate-500 ${className}`}>
-        Belum ada kelas untuk course ini.
+        Belum ada kelas untuk mata kuliah ini.
       </p>
     );
   }

@@ -65,7 +65,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat course.");
+        setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
       })
       .finally(() => {
         if (!cancelled) setLoadingCourse(false);
@@ -87,7 +87,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
           <div className="pt-2">
             <Button onClick={openLoginModal} variant="primary" size="md">
               Masuk
@@ -102,7 +102,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Course tidak ditemukan</h1>
+          <h1 className="text-2xl font-black text-slate-900">Mata kuliah tidak ditemukan</h1>
         </div>
       </div>
     );
@@ -112,8 +112,8 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
-          <p className="text-sm text-slate-600">Kamu bukan admin untuk course ini.</p>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
+          <p className="text-sm text-slate-600">Kamu bukan pengelola mata kuliah ini.</p>
         </div>
       </div>
     );
@@ -175,7 +175,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
         </button>
 
         <div className="rounded-[2rem] bg-slate-950 px-7 py-8 text-white shadow-2xl md:px-10 md:py-10">
-          <p className="text-xs font-bold uppercase tracking-widest text-blue-300">
+          <p className="text-sm font-medium text-blue-300">
             {course.name} ({course.code})
           </p>
           <h1 className="mt-2 text-2xl font-black tracking-tight md:text-3xl">
@@ -203,7 +203,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
             />
 
             <div>
-              <p className="mb-2 block text-xs font-bold uppercase tracking-widest text-slate-500">
+              <p className="mb-2 block text-sm font-medium text-slate-700">
                 Kelas (opsional): kosongkan untuk semua kelas
               </p>
               <KelasPicker
@@ -214,7 +214,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
+              <label className="mb-1 block text-sm font-medium text-slate-700">
                 Deadline
               </label>
               <input

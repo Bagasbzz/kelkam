@@ -3,29 +3,15 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  ArrowRight,
-  ClipboardList,
-  KeyRound,
-  Loader2,
-  Plus,
-  ShieldCheck,
-  Users,
-} from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import Button from "@/components/ui/Button";
-import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
-import {
-  fetchMe,
-  type ManagedCourse,
-} from "@/lib/client/tugas-api";
+import { fetchMe, type ManagedCourse } from "@/lib/client/tugas-api";
 import { useAuth } from "@/components/AuthProvider";
 
 /**
- * /tugas — Landing page.
- *
- * - Anonymous: input token untuk masuk ke course.
- * - Logged-in: token input + daftar course yang di-manage (admin/co-admin).
+ * /tugas — halaman masuk mata kuliah.
+ * Hanya kolom token. Pengelola mata kuliah melihat satu tautan kecil ke halaman kelolanya.
  */
 export default function TugasLanding() {
   const router = useRouter();
@@ -36,16 +22,14 @@ export default function TugasLanding() {
 
   const [isAdmin, setIsAdmin] = useState(false);
   const [managedCourses, setManagedCourses] = useState<ManagedCourse[]>([]);
-  const [managedLoading, setManagedLoading] = useState(false);
 
   useEffect(() => {
-    if (loading) return;
-    if (!user) {
+    if (loading || !user) {
+      setIsAdmin(false);
       setManagedCourses([]);
       return;
     }
     let cancelled = false;
-    setManagedLoading(true);
     fetchMe()
       .then((data) => {
         if (cancelled) return;
@@ -56,9 +40,6 @@ export default function TugasLanding() {
         if (cancelled) return;
         setIsAdmin(false);
         setManagedCourses([]);
-      })
-      .finally(() => {
-        if (!cancelled) setManagedLoading(false);
       });
     return () => {
       cancelled = true;
@@ -70,167 +51,72 @@ export default function TugasLanding() {
     setError(null);
     const cleaned = token.trim().toUpperCase();
     if (!cleaned) {
-      setError("Isi token course dulu.");
+      setError("Masukkan token dulu.");
       return;
     }
     setSubmitting(true);
     router.push(`/tugas/${encodeURIComponent(cleaned)}`);
   }
 
+  const showManage = isAdmin || managedCourses.length > 0;
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
-      <div className="mx-auto max-w-[1100px] space-y-6">
-        {/* Hero */}
-        <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-14">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
-            <ClipboardList className="w-4 h-4" />
-            Fitur Tugas
-          </div>
-          <h1 className="mt-3 text-3xl font-black tracking-tight md:text-5xl">
-            Kumpulkan tugas
-            <br />
-            pakai token mata kuliah.
-          </h1>
-          <p className="mt-3 max-w-xl text-sm text-slate-300 md:text-base">
-            Mahasiswa masuk lewat token, lihat tugas aktif, dan kumpulkan file
-            plus catatan sebelum deadline. Asdos dan super admin kelola course,
-            atur mahasiswa, dan pantau submission real-time.
+      <div className="mx-auto max-w-xl">
+        <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <h1 className="text-2xl font-bold text-slate-900">Masuk ke mata kuliah</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            Masukkan token 8 huruf yang dibagikan dosen atau asisten.
           </p>
+
+          <form onSubmit={onSubmit} className="mt-6 flex flex-col gap-3 sm:flex-row">
+            <Input
+              value={token}
+              onChange={(e) => setToken(e.target.value.toUpperCase())}
+              placeholder="Contoh: ABCD2345"
+              maxLength={20}
+              autoComplete="off"
+              autoFocus
+              aria-label="Token mata kuliah"
+              className="font-mono uppercase tracking-widest"
+            />
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              icon={ArrowRight}
+              isLoading={submitting}
+              disabled={submitting}
+            >
+              Buka
+            </Button>
+          </form>
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
         </div>
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          {/* Token input */}
-          <Card className="lg:col-span-2">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-              <KeyRound className="w-4 h-4" />
-              Masuk course
-            </div>
-            <h2 className="mt-2 text-xl font-black text-slate-900">
-              Punya token mata kuliah?
-            </h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Token 8 karakter, dibagikan oleh asdos. Ketik di sini untuk masuk
-              ke course.
-            </p>
-
-            <form onSubmit={onSubmit} className="mt-5 flex flex-col gap-3 sm:flex-row">
-              <Input
-                value={token}
-                onChange={(e) => setToken(e.target.value.toUpperCase())}
-                placeholder="ABCD2345"
-                maxLength={20}
-                autoComplete="off"
-                className="font-mono uppercase tracking-widest"
-              />
-              <Button
-                type="submit"
-                variant="primary"
-                size="md"
-                icon={ArrowRight}
-                isLoading={submitting}
-                disabled={submitting}
-              >
-                Buka Course
-              </Button>
-            </form>
-            {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
-          </Card>
-
-          {/* Role hint */}
-          <Card>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-              <ShieldCheck className="w-4 h-4" />
-              Peran kamu
-            </div>
-            <h2 className="mt-2 text-xl font-black text-slate-900">
-              Akses berdasarkan peran
-            </h2>
-            <ul className="mt-3 space-y-2 text-sm text-slate-600">
-              <li className="flex gap-2">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-500" />
-                <span>
-                  <strong className="text-slate-900">Mahasiswa</strong>: token,
-                  kumpulkan tugas, lihat posisi antrian.
-                </span>
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
-                <span>
-                  <strong className="text-slate-900">Asdos (admin course)</strong>:
-                  kelola course, bikin tugas, lihat semua submission.
-                </span>
-              </li>
-              <li className="flex gap-2">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-500" />
-                <span>
-                  <strong className="text-slate-900">Super admin</strong>:
-                  monitor semua course dan jalankan AI insight global.
-                </span>
-              </li>
-            </ul>
-          </Card>
-        </div>
-
-        {/* Managed courses (logged-in users) */}
-        {user && (
-          <Card>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-slate-500">
-                  <Users className="w-4 h-4" />
-                  Course yang kamu kelola
-                </div>
-                <p className="mt-1 text-sm text-slate-600">
-                  {isAdmin
-                    ? "Sebagai ADMIN kamu bisa bikin course baru."
-                    : "Sebagai CO-ADMIN kamu hanya mengelola course yang sudah ada."}
-                </p>
-              </div>
-              {isAdmin && !managedLoading && (
-                <Link href="/tugas/admin694">
-                  <Button variant="primary" size="sm" icon={Plus}>
-                    Course Baru
-                  </Button>
-                </Link>
-              )}
-            </div>
-            <div className="mt-4">
-              {managedLoading ? (
-                <div className="flex items-center gap-2 text-sm text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Memuat course...
-                </div>
-              ) : managedCourses.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  Belum ada course yang kamu kelola.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {managedCourses.map((c) => (
+        {showManage && (
+          <div className="mt-4 text-center text-sm text-slate-600">
+            {isAdmin ? (
+              <Link href="/tugas/admin694" className="font-medium text-blue-600 hover:underline">
+                Kelola mata kuliah
+              </Link>
+            ) : (
+              <span>
+                Mata kuliah yang kamu kelola:{" "}
+                {managedCourses.map((c, i) => (
+                  <span key={c.id}>
+                    {i > 0 && ", "}
                     <Link
-                      key={c.id}
                       href={`/tugas/${c.token}/admin`}
-                      className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50/40"
+                      className="font-medium text-blue-600 hover:underline"
                     >
-                      <div className="min-w-0">
-                        <p className="text-sm font-bold text-slate-900 truncate">
-                          {c.name}{" "}
-                          <span className="font-mono text-xs text-slate-500">
-                            ({c.code})
-                          </span>
-                        </p>
-                        <p className="mt-1 font-mono text-xs text-slate-500">
-                          Token: {c.token}
-                          {c.isCreator ? " • Pembuat" : " • Co-admin"}
-                        </p>
-                      </div>
-                      <ArrowRight className="w-4 h-4 shrink-0 text-slate-400" />
+                      {c.name}
                     </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-          </Card>
+                  </span>
+                ))}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>

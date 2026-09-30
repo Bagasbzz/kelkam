@@ -31,9 +31,9 @@ export default function ToolsPage() {
               <Wrench className="h-6 w-6" aria-hidden />
             </div>
             <div>
-              <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Tools</h1>
+              <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Alat PDF, Word &amp; Gambar</h1>
               <p className="text-sm text-slate-300 md:text-base">
-                Konversi, kompres, edit. Semua proses di browser — file tidak di-upload ke server.
+                Ubah format, kecilkan ukuran, atau edit file. Semua diproses di browser, file kamu tidak dikirim ke mana pun.
               </p>
             </div>
           </div>

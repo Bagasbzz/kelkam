@@ -235,11 +235,11 @@ const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice
 const createDefaultProject = (): ReportProject => ({ ...defaultProject, sources: [], outline: [], diagrams: [], tables: [], references: [], titleIdeas: [] });
 
 const builderSteps: { id: BuilderStep; label: string; helper: string }[] = [
-  { id: "setup", label: "Setup", helper: "Judul, jenis laporan, format" },
-  { id: "context", label: "Konteks", helper: "Pedoman, contoh, codingan" },
-  { id: "plan", label: "Rencana", helper: "Outline, tabel, referensi" },
-  { id: "execute", label: "Eksekusi", helper: "Buat dan approve UML" },
-  { id: "draft", label: "Draft", helper: "Generate laporan lengkap" },
+  { id: "setup", label: "Mulai", helper: "Judul, jenis laporan, format" },
+  { id: "context", label: "Bahan", helper: "Pedoman, contoh, kode program" },
+  { id: "plan", label: "Kerangka", helper: "Bab, tabel, referensi" },
+  { id: "execute", label: "Diagram", helper: "Buat dan setujui diagram" },
+  { id: "draft", label: "Draf", helper: "Buat laporan lengkap" },
 ];
 
 const loadingSteps = [
@@ -859,12 +859,9 @@ export default function ReportBuilderPage() {
         </Link>
 
         <section className="mb-8 md:mb-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 text-blue-700 text-xs font-black uppercase tracking-widest mb-4">
-            <Sparkles className="w-4 h-4" /> Laporan Builder v1
-          </div>
-          <h1 className="text-3xl md:text-5xl font-black tracking-tight mb-4">Rancang laporan, diagram, dan struktur akademik dari satu tempat.</h1>
+          <h1 className="text-3xl md:text-5xl font-bold tracking-tight mb-4">Susun laporan</h1>
           <p className="text-slate-500 max-w-3xl text-base md:text-lg leading-relaxed">
-            Pilih bentuk proyek, kumpulkan sumber seperti pedoman dosen/contoh laporan/konteks codingan, lalu sistem membantu brainstorming outline dan daftar gambar/UML sebelum eksekusi diagram satu per satu.
+            Pilih jenis laporan, masukkan pedoman dan bahan yang kamu punya, lalu ikuti langkahnya sampai jadi draf lengkap.
           </p>
         </section>
 
@@ -913,7 +910,7 @@ export default function ReportBuilderPage() {
           <div className="mt-5 rounded-xl border border-blue-100 bg-white p-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
-                <p className="text-xs font-black uppercase tracking-widest text-slate-400">Langkah sekarang</p>
+                <p className="text-sm font-medium text-slate-500">Langkah sekarang</p>
                 <p className="text-lg font-black text-slate-900">{builderSteps.find((step) => step.id === activeStep)?.label}</p>
                 <p className="text-sm text-slate-500">{builderSteps.find((step) => step.id === activeStep)?.helper}</p>
               </div>
@@ -926,7 +923,7 @@ export default function ReportBuilderPage() {
               </div>
             </div>
             <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/60 p-4">
-              <p className="mb-1 text-xs font-black uppercase tracking-widest text-blue-700">AI Planner</p>
+              <p className="mb-1 text-sm font-medium text-blue-700">Saran AI</p>
               <p className="text-sm font-semibold leading-relaxed text-slate-700">{assistantMessage}</p>
             </div>
             {isGeneratingReport && (
@@ -986,7 +983,7 @@ export default function ReportBuilderPage() {
 
               <div className="grid md:grid-cols-2 gap-4">
                 <label className="space-y-2">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400">Jenis laporan</span>
+                  <span className="text-sm font-medium text-slate-600">Jenis laporan</span>
                   <select value={project.projectType} onChange={(e) => updateProject("projectType", e.target.value as ProjectType)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500">
                     {Object.entries(projectTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                   </select>

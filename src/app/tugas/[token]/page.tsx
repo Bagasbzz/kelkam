@@ -1,17 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  ArrowLeft,
-  ClipboardList,
-  KeyRound,
-  Loader2,
-  ShieldCheck,
-} from "lucide-react";
+import { ArrowLeft, KeyRound, Loader2, Settings } from "lucide-react";
 import Card from "@/components/ui/Card";
 import TugasCard from "@/components/tugas/TugasCard";
+import SubmissionHistory from "@/components/tugas/SubmissionHistory";
 import { useAuth } from "@/components/AuthProvider";
 import {
   fetchCourseByToken,
@@ -20,10 +15,9 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token] — Public course view.
- *
- * Tampilkan info course + list tugases. Admin (kalau login & punya akses)
- * lihat tombol admin.
+ * /tugas/[token] — halaman mata kuliah untuk mahasiswa.
+ * Tugas aktif dan yang sudah lewat batas waktu ditampilkan terpisah; keduanya tetap
+ * bisa dibuka supaya mahasiswa bisa melihat riwayat pengumpulannya.
  */
 export default function CoursePage() {
   const params = useParams<{ token: string }>();
@@ -47,8 +41,7 @@ export default function CoursePage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Gagal memuat course.";
-        setError(msg);
+        setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -58,10 +51,23 @@ export default function CoursePage() {
     };
   }, [token]);
 
+  const { active, past } = useMemo(() => {
+    const now = Date.now();
+    const active: TugasSummary[] = [];
+    const past: TugasSummary[] = [];
+    for (const t of tugases) {
+      (new Date(t.deadline).getTime() < now ? past : active).push(t);
+    }
+    // Aktif: paling dekat dulu. Lewat: paling baru lewat dulu.
+    active.sort((a, b) => +new Date(a.deadline) - +new Date(b.deadline));
+    past.sort((a, b) => +new Date(b.deadline) - +new Date(a.deadline));
+    return { active, past };
+  }, [tugases]);
+
   if (loading || authLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
       </div>
     );
   }
@@ -71,16 +77,16 @@ export default function CoursePage() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100 text-red-600">
-            <KeyRound className="w-6 h-6" />
+            <KeyRound className="h-6 w-6" />
           </div>
-          <h1 className="text-2xl font-black text-slate-900">Course tidak ditemukan</h1>
-          <p className="text-sm text-slate-600">{error}</p>
+          <h1 className="text-2xl font-bold text-slate-900">Mata kuliah tidak ditemukan</h1>
+          <p className="text-sm text-slate-600">Periksa lagi token yang kamu masukkan.</p>
           <Link
             href="/tugas"
             className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Kembali ke halaman Tugas
+            <ArrowLeft className="h-4 w-4" />
+            Masukkan token lagi
           </Link>
         </div>
       </div>
@@ -94,69 +100,75 @@ export default function CoursePage() {
       <div className="mx-auto max-w-[1100px] space-y-6">
         <Link
           href="/tugas"
-          className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900"
         >
-          <ArrowLeft className="w-4 h-4" />
-          Tugas
+          <ArrowLeft className="h-4 w-4" />
+          Ganti mata kuliah
         </Link>
 
-        {/* Course header */}
-        <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-12">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
-            <ClipboardList className="w-4 h-4" />
-            {course.code}
-          </div>
-          <h1 className="mt-3 text-3xl font-black tracking-tight md:text-4xl">
-            {course.name}
-          </h1>
-          {course.description && (
-            <p className="mt-3 max-w-2xl text-sm text-slate-300">{course.description}</p>
-          )}
-          <div className="mt-5 flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white">
-              <KeyRound className="w-4 h-4" />
-              Token: <span className="font-mono">{course.token}</span>
-            </span>
-            {course.classes.map((c) => (
-              <span
-                key={c.id}
-                className="inline-flex items-center rounded-full bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-200"
-              >
-                Kelas {c.name}
-              </span>
-            ))}
-          </div>
-          {user?.role === "ADMIN" && (
-            <div className="mt-5">
+        <Card>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm text-slate-500">{course.code}</p>
+              <h1 className="mt-1 text-2xl font-bold text-slate-900 md:text-3xl">{course.name}</h1>
+              {course.description && (
+                <p className="mt-2 max-w-2xl text-sm text-slate-600">{course.description}</p>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1">
+                  <KeyRound className="h-4 w-4" />
+                  Token <span className="font-mono font-medium">{course.token}</span>
+                </span>
+                {course.classes.map((c) => (
+                  <span key={c.id} className="rounded-full bg-slate-100 px-3 py-1">
+                    Kelas {c.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+            {user?.role === "ADMIN" && (
               <Link
                 href={`/tugas/${course.token}/admin`}
-                className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2 text-sm font-bold text-slate-900 hover:bg-blue-50"
+                className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
-                <ShieldCheck className="w-4 h-4" />
-                Kelola Course
+                <Settings className="h-4 w-4" />
+                Kelola
               </Link>
-            </div>
-          )}
-        </div>
-
-        {/* Tugases list */}
-        <Card>
-          <h2 className="text-lg font-black text-slate-900">Daftar Tugas</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            {tugases.length === 0
-              ? "Belum ada tugas di course ini."
-              : `${tugases.length} tugas, urut dari yang paling dekat deadline.`}
-          </p>
-          <div className="mt-5 space-y-3">
-            {tugases.map((t) => (
-              <TugasCard
-                key={t.id}
-                tugas={t}
-                href={`/tugas/${course.token}/${t.id}`}
-              />
-            ))}
+            )}
           </div>
         </Card>
+
+        <Card>
+          <h2 className="text-lg font-bold text-slate-900">Tugas aktif</h2>
+          <p className="mt-1 text-sm text-slate-600">
+            {active.length === 0
+              ? "Tidak ada tugas yang sedang berjalan."
+              : `${active.length} tugas, urut dari batas waktu terdekat.`}
+          </p>
+          {active.length > 0 && (
+            <div className="mt-5 space-y-3">
+              {active.map((t) => (
+                <TugasCard key={t.id} tugas={t} href={`/tugas/${course.token}/${t.id}`} />
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {past.length > 0 && (
+          <Card>
+            <h2 className="text-lg font-bold text-slate-900">Sudah lewat batas waktu</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Masih bisa dibuka untuk melihat detail dan riwayat pengumpulan kamu.
+            </p>
+            <div className="mt-5 space-y-3">
+              {past.map((t) => (
+                <TugasCard key={t.id} tugas={t} href={`/tugas/${course.token}/${t.id}`} />
+              ))}
+            </div>
+          </Card>
+        )}
+
+        <SubmissionHistory courseId={course.id} token={course.token} />
       </div>
     </div>
   );

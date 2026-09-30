@@ -31,7 +31,7 @@ export default function TugasAdminIndex() {
   const [managedCourses, setManagedCourses] = useState<ManagedCourse[]>([]);
   const [managedLoading, setManagedLoading] = useState(false);
 
-  // Form bikin course
+  // Form bikin mata kuliah
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [description, setDescription] = useState("");
@@ -69,11 +69,11 @@ export default function TugasAdminIndex() {
       return;
     }
     if (user.role !== "ADMIN") {
-      setError("Hanya admin yang boleh bikin course baru.");
+      setError("Hanya admin yang bisa membuat mata kuliah baru.");
       return;
     }
     if (!name.trim() || !code.trim()) {
-      setError("Nama dan kode course wajib diisi.");
+      setError("Nama dan kode mata kuliah wajib diisi.");
       return;
     }
     const classes = classesRaw
@@ -94,7 +94,7 @@ export default function TugasAdminIndex() {
       });
       router.push(`/tugas/${course.token}/admin`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal bikin course.");
+      setError(err instanceof Error ? err.message : "Gagal bikin mata kuliah.");
     } finally {
       setSubmitting(false);
     }
@@ -105,7 +105,7 @@ export default function TugasAdminIndex() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
           <p className="text-sm text-slate-600">
             Halaman ini hanya untuk admin Tugas.
           </p>
@@ -125,9 +125,9 @@ export default function TugasAdminIndex() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
           <p className="text-sm text-slate-600">
-            Akun kamu belum punya role ADMIN. Hubungi creator course untuk invite.
+            Akun kamu belum jadi admin. Minta pembuat mata kuliah untuk menambahkan kamu.
           </p>
         </div>
       </div>
@@ -138,15 +138,15 @@ export default function TugasAdminIndex() {
     <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
       <div className="mx-auto max-w-[1100px] space-y-6">
         <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-12">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-300">
             <ShieldCheck className="w-4 h-4" />
             Admin Tugas
           </div>
           <h1 className="mt-3 text-3xl font-black tracking-tight md:text-4xl">
-            Kelola course kamu
+            Kelola mata kuliah
           </h1>
           <p className="mt-2 text-sm text-slate-300">
-            Bikin course baru atau buka course yang sudah ada.
+            Buat mata kuliah baru atau buka yang sudah ada.
           </p>
           <div className="mt-5">
             <Link
@@ -162,14 +162,14 @@ export default function TugasAdminIndex() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           {/* Form create */}
           <Card className="lg:col-span-2">
-            <h2 className="text-lg font-black text-slate-900">Bikin Course Baru</h2>
+            <h2 className="text-lg font-black text-slate-900">Buat mata kuliah baru</h2>
             <p className="mt-1 text-sm text-slate-600">
               Token unik akan di-generate otomatis. Bagikan ke mahasiswa.
             </p>
             <form onSubmit={onCreate} className="mt-5 space-y-4">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
                     Nama
                   </label>
                   <input
@@ -182,7 +182,7 @@ export default function TugasAdminIndex() {
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
                     Kode
                   </label>
                   <input
@@ -196,7 +196,7 @@ export default function TugasAdminIndex() {
                 </div>
               </div>
               <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
                   Deskripsi (opsional)
                 </label>
                 <textarea
@@ -209,7 +209,7 @@ export default function TugasAdminIndex() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-bold uppercase tracking-widest text-slate-500">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
                   Kelas (pisahkan dengan koma)
                 </label>
                 <input
@@ -230,7 +230,7 @@ export default function TugasAdminIndex() {
                   isLoading={submitting}
                   disabled={submitting}
                 >
-                  Bikin Course
+                  Buat
                 </Button>
               </div>
             </form>
@@ -238,7 +238,7 @@ export default function TugasAdminIndex() {
 
           {/* Course list */}
           <Card>
-            <h2 className="text-lg font-black text-slate-900">Course kamu</h2>
+            <h2 className="text-lg font-black text-slate-900">Mata kuliah kamu</h2>
             <p className="mt-1 text-sm text-slate-600">
               {managedLoading ? "Memuat..." : `${managedCourses.length} course.`}
             </p>
@@ -249,7 +249,7 @@ export default function TugasAdminIndex() {
                   Memuat...
                 </div>
               ) : managedCourses.length === 0 ? (
-                <p className="text-sm text-slate-500">Belum ada course.</p>
+                <p className="text-sm text-slate-500">Belum ada mata kuliah.</p>
               ) : (
                 managedCourses.map((c) => (
                   <Link

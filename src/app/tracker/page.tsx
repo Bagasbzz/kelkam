@@ -162,7 +162,7 @@ export default function TrackerPage() {
             <div className="p-3 bg-blue-50 rounded-2xl border border-blue-100 shrink-0">
               <LayoutDashboard className="w-8 h-8 text-blue-600" />
             </div>
-            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">Progress Tracker</h1>
+            <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">Pantau Progres</h1>
           </div>
           
           <Card padding="sm" className="flex items-center gap-4 bg-white border border-slate-200 shadow-sm self-start md:self-auto">
@@ -171,7 +171,7 @@ export default function TrackerPage() {
             </div>
             <div>
               <div className="text-2xl font-black">{progressPercentage}%</div>
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Progress</div>
+              <div className="text-xs font-medium text-slate-500">Total kemajuan</div>
             </div>
           </Card>
         </div>

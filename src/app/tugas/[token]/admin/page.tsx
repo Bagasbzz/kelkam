@@ -66,7 +66,7 @@ export default function CourseAdminDashboard() {
       });
       setCounts(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat course.");
+      setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
     } finally {
       setLoading(false);
     }
@@ -100,8 +100,8 @@ export default function CourseAdminDashboard() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
-          <p className="text-sm text-slate-600">Halaman admin course ini butuh login.</p>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
+          <p className="text-sm text-slate-600">Halaman pengelola mata kuliah ini perlu masuk dulu.</p>
           <div className="pt-2">
             <Button onClick={openLoginModal} variant="primary" size="md">
               Masuk
@@ -124,7 +124,7 @@ export default function CourseAdminDashboard() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Course tidak ditemukan</h1>
+          <h1 className="text-2xl font-black text-slate-900">Mata kuliah tidak ditemukan</h1>
           {error && <p className="text-sm text-slate-600">{error}</p>}
           <Link
             href="/tugas/admin694"
@@ -144,9 +144,9 @@ export default function CourseAdminDashboard() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
           <p className="text-sm text-slate-600">
-            Kamu bukan admin untuk course ini.
+            Kamu bukan pengelola mata kuliah ini.
           </p>
           <Link
             href={`/tugas/${token}`}
@@ -172,7 +172,7 @@ export default function CourseAdminDashboard() {
         </Link>
 
         <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-12">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-300">
             <ShieldCheck className="w-4 h-4" />
             {course.code}
           </div>
@@ -224,7 +224,7 @@ export default function CourseAdminDashboard() {
               icon={Plus}
               onClick={() => router.push(`/tugas/${token}/admin/tugas/new`)}
             >
-              Bikin Tugas
+              Buat tugas
             </Button>
           </div>
 
@@ -245,7 +245,7 @@ export default function CourseAdminDashboard() {
           <div className="mt-5 space-y-3">
             {tugases.length === 0 ? (
               <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                Belum ada tugas. Klik "Bikin Tugas" untuk mulai.
+                Belum ada tugas. Klik tombol &ldquo;Buat tugas&rdquo; untuk mulai.
               </p>
             ) : (
               tugases.map((t) => (

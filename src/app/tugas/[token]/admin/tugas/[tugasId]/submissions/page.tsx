@@ -3,17 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  ArrowLeft,
-  CalendarClock,
-  ClipboardList,
-  Loader2,
-} from "lucide-react";
+import { ArrowLeft, CalendarClock, Loader2 } from "lucide-react";
 import Card from "@/components/ui/Card";
+import Button from "@/components/ui/Button";
 import AdminSubmissionList from "@/components/tugas/AdminSubmissionList";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import { useAuth } from "@/components/AuthProvider";
 import {
+  ApiClientError,
   fetchAdminSubmissions,
   fetchCourseByToken,
   type CourseSummary,
@@ -21,6 +18,10 @@ import {
   type TugasSummary,
 } from "@/lib/client/tugas-api";
 
+/**
+ * Daftar pengumpulan satu tugas (admin/asisten). Hak akses diputuskan oleh API,
+ * supaya co-admin mata kuliah juga bisa masuk, bukan hanya admin global.
+ */
 export default function AdminSubmissionsPage() {
   const params = useParams<{ token: string; tugasId: string }>();
   const token = (params?.token || "").toUpperCase();
@@ -32,23 +33,28 @@ export default function AdminSubmissionsPage() {
   const [submissions, setSubmissions] = useState<SubmissionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [forbidden, setForbidden] = useState(false);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || user.role !== "ADMIN") return;
+    if (authLoading || !user) return;
     let cancelled = false;
     setLoading(true);
+    setError(null);
+    setForbidden(false);
     Promise.all([fetchCourseByToken(token), fetchAdminSubmissions(tugasId)])
       .then(([courseData, subData]) => {
         if (cancelled) return;
         setCourse(courseData.course);
-        const t = courseData.tugases.find((x) => x.id === tugasId) ?? null;
-        setTugas(t);
+        setTugas(courseData.tugases.find((x) => x.id === tugasId) ?? null);
         setSubmissions(subData.submissions);
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat submission.");
+        if (err instanceof ApiClientError && err.status === 403) {
+          setForbidden(true);
+          return;
+        }
+        setError(err instanceof Error ? err.message : "Gagal memuat pengumpulan.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -58,10 +64,14 @@ export default function AdminSubmissionsPage() {
     };
   }, [user, authLoading, token, tugasId]);
 
-  if (authLoading) {
+  function replaceRow(updated: SubmissionRow) {
+    setSubmissions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+  }
+
+  if (authLoading || (user && loading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
       </div>
     );
   }
@@ -70,35 +80,25 @@ export default function AdminSubmissionsPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
-          <div className="pt-2">
-            <button
-              onClick={openLoginModal}
-              className="rounded-2xl bg-blue-600 px-6 py-3 text-sm font-bold text-white"
-            >
-              Masuk
-            </button>
-          </div>
+          <h1 className="text-2xl font-bold text-slate-900">Masuk dulu</h1>
+          <p className="text-sm text-slate-600">Halaman ini hanya untuk pengelola mata kuliah.</p>
+          <Button onClick={openLoginModal} variant="primary" size="md">
+            Masuk
+          </Button>
         </div>
       </div>
     );
   }
 
-  if (user.role !== "ADMIN") {
+  if (forbidden) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
-          <p className="text-sm text-slate-600">Hanya admin yang boleh lihat submission.</p>
+          <h1 className="text-2xl font-bold text-slate-900">Tidak punya akses</h1>
+          <p className="text-sm text-slate-600">
+            Hanya pengelola mata kuliah ini yang bisa melihat daftar pengumpulan.
+          </p>
         </div>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
       </div>
     );
   }
@@ -107,13 +107,13 @@ export default function AdminSubmissionsPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">{error ?? "Tugas tidak ditemukan"}</h1>
+          <h1 className="text-2xl font-bold text-slate-900">{error ?? "Tugas tidak ditemukan"}</h1>
           <Link
             href={`/tugas/${token}/admin`}
             className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Kembali ke course
+            <ArrowLeft className="h-4 w-4" />
+            Kembali ke mata kuliah
           </Link>
         </div>
       </div>
@@ -125,23 +125,19 @@ export default function AdminSubmissionsPage() {
       <div className="mx-auto max-w-3xl space-y-6">
         <Link
           href={`/tugas/${token}/admin`}
-          className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900"
         >
-          <ArrowLeft className="w-4 h-4" />
+          <ArrowLeft className="h-4 w-4" />
           {course.name}
         </Link>
 
-        <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-10 md:py-12">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
-            <ClipboardList className="w-4 h-4" />
-            Submission • {course.code}
-          </div>
-          <h1 className="mt-3 text-2xl font-black tracking-tight md:text-4xl">
-            {tugas.title}
-          </h1>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white">
-              <CalendarClock className="w-4 h-4" />
+        <Card>
+          <p className="text-sm text-slate-500">{course.code}</p>
+          <h1 className="mt-1 text-2xl font-bold text-slate-900 md:text-3xl">{tugas.title}</h1>
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-700">
+            <span className="inline-flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-slate-500" />
+              Batas waktu{" "}
               {new Date(tugas.deadline).toLocaleString("id-ID", {
                 timeZone: "Asia/Jakarta",
                 day: "numeric",
@@ -153,15 +149,15 @@ export default function AdminSubmissionsPage() {
             </span>
             <CountdownTimer deadline={tugas.deadline} />
           </div>
-        </div>
+        </Card>
 
         <Card>
-          <h2 className="text-lg font-black text-slate-900">Daftar Submission</h2>
+          <h2 className="text-lg font-bold text-slate-900">Daftar pengumpulan</h2>
           <p className="mt-1 text-sm text-slate-600">
-            {submissions.length} submission, urut dari yang pertama kali ngumpul.
+            Urut dari yang pertama mengumpulkan. Kamu bisa memberi catatan ke tiap mahasiswa.
           </p>
           <div className="mt-5">
-            <AdminSubmissionList submissions={submissions} />
+            <AdminSubmissionList submissions={submissions} onChanged={replaceRow} />
           </div>
         </Card>
       </div>

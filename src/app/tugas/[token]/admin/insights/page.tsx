@@ -84,7 +84,7 @@ export default function CourseInsightsPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
           <Button onClick={openLoginModal} variant="primary" size="md">Masuk</Button>
         </div>
       </div>
@@ -95,7 +95,7 @@ export default function CourseInsightsPage() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
           <Link href={`/tugas/${token}`} className="text-sm font-bold text-blue-600 hover:underline">
             Lihat sebagai mahasiswa
           </Link>
@@ -112,11 +112,11 @@ export default function CourseInsightsPage() {
           className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
         >
           <ArrowLeft className="h-4 w-4" />
-          Course admin
+          Pengelola mata kuliah
         </Link>
 
         <div className="rounded-[2rem] bg-gradient-to-br from-blue-950 to-indigo-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-12">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
+          <div className="flex items-center gap-2 text-sm font-medium text-blue-300">
             <BarChart3 className="h-4 w-4" />
             AI Insights
           </div>
@@ -124,8 +124,8 @@ export default function CourseInsightsPage() {
             {course?.name || "..."}
           </h1>
           <p className="mt-2 max-w-xl text-sm text-slate-300">
-            AI menganalisis pola submission, telat, dan distribusi per kelas
-            untuk course ini. Klik tombol di bawah untuk generate.
+            AI merangkum pola pengumpulan, keterlambatan, dan sebaran per kelas
+            di mata kuliah ini. Klik tombol di bawah untuk membuat ringkasan.
           </p>
           <div className="mt-5">
             <Button
@@ -149,7 +149,7 @@ export default function CourseInsightsPage() {
 
         {metrics && (
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <MetricCard label="Submission" value={metrics.totalSubmissions} icon={Users} />
+            <MetricCard label="Pengumpulan" value={metrics.totalSubmissions} icon={Users} />
             <MetricCard label="Telat" value={metrics.totalLate} tone={metrics.totalLate > 0 ? "warn" : "ok"} />
             <MetricCard
               label="Late rate"
@@ -162,7 +162,7 @@ export default function CourseInsightsPage() {
 
         {aiInsights && (
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-600">
+            <div className="flex items-center gap-2 text-sm font-medium text-blue-600">
               <BarChart3 className="h-3 w-3" />
               Insight AI
             </div>
@@ -200,7 +200,7 @@ function MetricCard({
       : "border-slate-200 bg-white text-slate-900";
   return (
     <div className={`rounded-2xl border p-4 shadow-sm ${color}`}>
-      <div className="flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-slate-500">
+      <div className="flex items-center gap-1 text-xs font-medium text-slate-500">
         {Icon && <Icon className="h-3 w-3" />}
         {label}
       </div>

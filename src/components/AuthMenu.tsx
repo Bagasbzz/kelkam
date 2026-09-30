@@ -112,10 +112,10 @@ export default function AuthMenu() {
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-black text-slate-900">
-                  {mode === "login" ? "Masuk ke keluhkampus" : "Daftar keluhkampus"}
+                  {mode === "login" ? "Masuk" : "Buat akun"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Akun menjaga proyek, referensi, dan hasil laporan tetap privat.
+                  Dengan akun, tugas dan laporan kamu tersimpan dan hanya bisa dilihat oleh kamu.
                 </p>
               </div>
               <button

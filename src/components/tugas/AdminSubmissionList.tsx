@@ -6,20 +6,19 @@ import SubmissionRowItem from "./SubmissionRowItem";
 
 interface AdminSubmissionListProps {
   submissions: SubmissionRow[];
+  /** Dipanggil saat satu baris berubah (mis. catatan disimpan). */
+  onChanged?: (updated: SubmissionRow) => void;
 }
 
-/**
- * Wrapper yang map submissions ke SubmissionRowItem.
- * Tampilkan empty state kalau belum ada yang submit.
- */
-export default function AdminSubmissionList({ submissions }: AdminSubmissionListProps) {
+/** Daftar pengumpulan untuk admin, urut dari yang pertama mengumpulkan. */
+export default function AdminSubmissionList({ submissions, onChanged }: AdminSubmissionListProps) {
   if (!submissions.length) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center">
-        <Inbox className="w-8 h-8 text-slate-300" />
-        <p className="text-sm font-bold text-slate-500">Belum ada submission</p>
+        <Inbox className="h-8 w-8 text-slate-300" />
+        <p className="text-sm font-bold text-slate-500">Belum ada yang mengumpulkan</p>
         <p className="text-xs text-slate-400">
-          Submission mahasiswa akan muncul di sini, urut dari yang pertama.
+          Pengumpulan mahasiswa akan muncul di sini, urut dari yang pertama.
         </p>
       </div>
     );
@@ -27,12 +26,12 @@ export default function AdminSubmissionList({ submissions }: AdminSubmissionList
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-slate-500">
-        Total <strong>{submissions.length}</strong> submission
+      <div className="text-sm text-slate-600">
+        <strong>{submissions.length}</strong> mahasiswa sudah mengumpulkan
       </div>
       <div className="space-y-2">
         {submissions.map((s) => (
-          <SubmissionRowItem key={s.id} submission={s} />
+          <SubmissionRowItem key={s.id} submission={s} onChanged={onChanged} />
         ))}
       </div>
     </div>

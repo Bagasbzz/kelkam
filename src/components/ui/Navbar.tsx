@@ -62,35 +62,35 @@ const PRIMARY_LINKS: NavItem[] = [
 
 const MORE_GROUPS: NavGroup[] = [
   {
-    label: "Rancang",
+    label: "Buat",
     items: [
-      { href: "/uml-builder", label: "UML Builder", icon: IconFlow },
-      { href: "/template-generator", label: "Template Editor", icon: IconLayout },
+      { href: "/uml-builder", label: "Diagram", icon: IconFlow },
+      { href: "/template-generator", label: "Editor Dokumen", icon: IconLayout },
     ],
   },
   {
     label: "Olah Data",
     items: [
-      { href: "/data-synthesizer", label: "Data Synthesizer", icon: IconBook },
+      { href: "/data-synthesizer", label: "Olah Data", icon: IconBook },
     ],
   },
   {
     label: "AI",
     items: [
-      { href: "/ai-tools", label: "AI Tools", icon: IconSpark },
+      { href: "/ai-tools", label: "Alat Bantu AI", icon: IconSpark },
     ],
   },
   {
-    label: "Utilitas",
+    label: "Alat lain",
     items: [
-      { href: "/fix-format", label: "Fix Format", icon: IconType },
-      { href: "/tools", label: "PDF / DOCX / Image", icon: IconWrench },
+      { href: "/fix-format", label: "Rapikan Format", icon: IconType },
+      { href: "/tools", label: "PDF, Word & Gambar", icon: IconWrench },
     ],
   },
   {
     label: "Pantau",
     items: [
-      { href: "/tracker", label: "Tracker", icon: IconPulse },
+      { href: "/tracker", label: "Pantau Progres", icon: IconPulse },
     ],
   },
 ];

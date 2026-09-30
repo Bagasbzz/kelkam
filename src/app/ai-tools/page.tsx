@@ -56,9 +56,9 @@ export default function AIToolsPage() {
       <div className="max-w-5xl mx-auto py-12">
         
         <div className="text-center mb-16">
-          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">AI Academic Tools</h1>
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">Alat Bantu AI</h1>
           <p className="text-lg text-gray-500 max-w-lg mx-auto leading-relaxed">
-            Asisten cerdas untuk mengecek struktur dan memperbaiki gaya bahasa laporan, makalah, proposal, atau skripsi Anda.
+            Tempel tulisan kamu, lalu minta AI memeriksa struktur atau memperbaiki bahasanya.
           </p>
         </div>
 
@@ -82,7 +82,7 @@ export default function AIToolsPage() {
         <div className="grid lg:grid-cols-2 gap-12 items-start">
           <div className="space-y-6 animate-in slide-in-from-left duration-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-black text-gray-400 uppercase tracking-[0.2em]">Masukan Teks</h3>
+              <h3 className="text-sm font-medium text-gray-500">Tulisan kamu</h3>
               <button 
                 onClick={() => setInputText("")} 
                 className="text-[10px] font-black text-gray-300 hover:text-red-500 transition-colors uppercase"
@@ -116,7 +116,7 @@ export default function AIToolsPage() {
 
           <div className="space-y-6 animate-in slide-in-from-right duration-500">
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-black text-gray-400 uppercase tracking-[0.2em]">Analisis AI</h3>
+              <h3 className="text-sm font-medium text-gray-500">Hasil dari AI</h3>
               {result && (
                 <button 
                   onClick={handleCopy}
@@ -131,7 +131,7 @@ export default function AIToolsPage() {
               {isLoading ? (
                 <div className="flex-1 flex flex-col items-center justify-center space-y-4 opacity-30">
                   <div className={`w-12 h-12 border-4 rounded-full animate-spin border-t-transparent ${activeTab === 'checker' ? 'border-blue-600' : 'border-indigo-600'}`} />
-                  <p className="text-sm font-black uppercase tracking-widest">Memproses...</p>
+                  <p className="text-sm font-medium">Memproses…</p>
                 </div>
               ) : result ? (
                 <div className="prose prose-gray prose-p:leading-relaxed prose-p:text-gray-600 whitespace-pre-wrap font-serif text-lg flex-1">
@@ -139,7 +139,7 @@ export default function AIToolsPage() {
                 </div>
               ) : error ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-red-500 opacity-60">
-                   <p className="font-black text-xs uppercase tracking-[0.2em] mb-2">Terjadi Kesalahan</p>
+                   <p className="font-bold text-sm mb-2">Terjadi kesalahan</p>
                    <p className="text-sm font-medium">{error}</p>
                 </div>
               ) : (

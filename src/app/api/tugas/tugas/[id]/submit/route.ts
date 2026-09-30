@@ -1,20 +1,21 @@
 /**
- * POST /api/tugas/tugas/[id]/submit
+ * /api/tugas/tugas/[id]/submit
  * -----------------------------------------------------------------------------
- * Mahasiswa ngumpulkan tugas. Auth: login.
+ * POST  — mahasiswa mengumpulkan tugas (pertama kali).
+ * PATCH — mahasiswa mengubah pengumpulannya sendiri selama deadline belum lewat.
+ *         Urutan (position) dan status TIDAK berubah; hanya isi yang diganti dan
+ *         `updatedAt` diisi supaya UI bisa menampilkan "Diubah <waktu>".
  *
  *   body: { classId, nim, name, note?, fileUploadId? }
- *   200  : { success, submission, position, total }
- *   400  : input tidak valid / duplicate (user sudah submit di tugas ini)
- *   401  : belum login
- *   403  : kelas tidak sesuai dengan classId di tugas (kalau restricted)
- *   404  : tugas / class / file upload tidak ditemukan
- *   410  : deadline sudah lewat (return Gone)
+ *   POST  201 { success, submission, position, total }
+ *   PATCH 200 { success, submission, position, total }
+ *   400 : input tidak valid / (POST) sudah pernah mengumpulkan
+ *   401 : belum login
+ *   404 : tugas / (PATCH) pengumpulan tidak ditemukan
+ *   410 : (PATCH) deadline sudah lewat — tidak bisa diubah lagi
  *
  * Position di-assign atomic di dalam transaction (lihat position.ts).
- * Race condition di-handle via `assignPositionWithRetry()` yang retry kalau
- * kena unique constraint `(tugasId, position)`.
- * Kalau deadline lewat, status jadi 'LATE'.
+ * Kalau POST datang setelah deadline, status jadi 'LATE' tapi tetap disimpan.
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -30,14 +31,40 @@ import {
   getTugasOrThrow,
 } from "@/lib/server/tugas/access";
 import { assignPositionWithRetry, isPrismaUniqueViolation } from "@/lib/server/tugas/position";
+import { serializeSubmission, submissionInclude } from "@/lib/server/tugas/serialize";
 
 const SubmitSchema = z.object({
   classId: z.string().min(1, "Pilih kelas dulu."),
-  nim: z.string().trim().min(3).max(40, "NIM tidak valid."),
-  name: z.string().trim().min(1).max(120, "Nama tidak valid."),
+  nim: z.string().trim().min(3, "NIM terlalu pendek.").max(40, "NIM tidak valid."),
+  name: z.string().trim().min(1, "Isi nama dulu.").max(120, "Nama tidak valid."),
   note: z.string().max(8000).optional(),
   fileUploadId: z.string().min(1).optional(),
 });
+
+type ParsedInput = z.infer<typeof SubmitSchema>;
+
+async function readInput(req: Request): Promise<ParsedInput | NextResponse> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ success: false, error: "Data tidak terbaca." }, { status: 400 });
+  }
+  const parsed = SubmitSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { success: false, error: parsed.error.issues[0]?.message ?? "Data tidak valid." },
+      { status: 400 },
+    );
+  }
+  if (!parsed.data.fileUploadId && !parsed.data.note?.trim()) {
+    return NextResponse.json(
+      { success: false, error: "Isi catatan atau lampirkan file." },
+      { status: 400 },
+    );
+  }
+  return parsed.data;
+}
 
 export async function POST(
   req: Request,
@@ -48,51 +75,33 @@ export async function POST(
     return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ success: false, error: "Body harus JSON." }, { status: 400 });
-  }
-
-  const parsed = SubmitSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json(
-      { success: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." },
-      { status: 400 },
-    );
-  }
-  const { classId, nim, name, note, fileUploadId } = parsed.data;
+  const input = await readInput(req);
+  if (input instanceof NextResponse) return input;
+  const { classId, nim, name, note, fileUploadId } = input;
 
   try {
     const { id: tugasId } = await context.params;
     const tugas = await getTugasOrThrow(tugasId);
 
-    // Kelas harus compatible (kalau tugas restricted ke class tertentu).
     await assertClassCompatible(classId, tugas.courseId, tugas.classId);
-
-    // File upload (kalau ada) harus milik user.
     if (fileUploadId) {
       await assertFileUploadOwnedBy(fileUploadId, auth.user.id);
     }
 
-    // Cek duplicate submission.
     const existing = await prisma.tugasSubmission.findUnique({
       where: { tugasId_userId: { tugasId, userId: auth.user.id } },
       select: { id: true },
     });
     if (existing) {
       return NextResponse.json(
-        { success: false, error: "Kamu sudah mengumpulkan tugas ini." },
+        { success: false, error: "Kamu sudah mengumpulkan tugas ini. Gunakan tombol ubah." },
         { status: 400 },
       );
     }
 
-    const now = new Date();
-    const isLate = now > tugas.deadline;
+    const isLate = new Date() > tugas.deadline;
     const status = isLate ? "LATE" : "SUBMITTED";
 
-    // Atomic: assign position + insert dalam transaction yang sama.
     const submission = await prisma.$transaction(async (tx) => {
       const { position } = await assignPositionWithRetry(tx, tugasId);
       return tx.tugasSubmission.create({
@@ -102,15 +111,12 @@ export async function POST(
           classId,
           nim,
           name,
-          note: note ?? null,
+          note: note?.trim() || null,
           fileUploadId: fileUploadId ?? null,
           position,
           status,
         },
-        include: {
-          class: { select: { id: true, name: true } },
-          fileUpload: { select: { id: true, originalName: true, mime: true, size: true } },
-        },
+        include: submissionInclude,
       });
     });
 
@@ -119,19 +125,7 @@ export async function POST(
     return NextResponse.json(
       {
         success: true,
-        submission: {
-          id: submission.id,
-          tugasId: submission.tugasId,
-          classId: submission.classId,
-          class: submission.class,
-          nim: submission.nim,
-          name: submission.name,
-          note: submission.note,
-          fileUpload: submission.fileUpload,
-          position: submission.position,
-          status: submission.status,
-          submittedAt: submission.submittedAt.toISOString(),
-        },
+        submission: serializeSubmission(submission),
         position: submission.position,
         total,
       },
@@ -141,24 +135,91 @@ export async function POST(
     if (error instanceof ApiRequestError) {
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
     }
-    // P2002 — bisa jadi duplicate (tugasId, userId) ATAU race position (tugasId, position).
     if (isPrismaUniqueViolation(error)) {
       const target = (error as { meta?: { target?: string[] } }).meta?.target ?? [];
       if (target.includes("tugas_id_user_id")) {
         return NextResponse.json(
-          { success: false, error: "Kamu sudah mengumpulkan tugas ini." },
+          { success: false, error: "Kamu sudah mengumpulkan tugas ini. Gunakan tombol ubah." },
           { status: 400 },
         );
       }
-      // Position race — seharusnya sudah di-retry di assignPositionWithRetry.
-      // Kalau sampai bocor, server sibuk.
       console.warn("Position race bocor:", target);
       return NextResponse.json(
         { success: false, error: "Server sedang sibuk, coba lagi sebentar." },
         { status: 503 },
       );
     }
-    console.error("API /api/tugas/tugas/[id]/submit failed:", error);
+    console.error("API POST /api/tugas/tugas/[id]/submit failed:", error);
     return publicErrorResponse(error, "Gagal mengumpulkan tugas.");
+  }
+}
+
+export async function PATCH(
+  req: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  const auth = await authenticateRequestFromCookie();
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+  }
+
+  const input = await readInput(req);
+  if (input instanceof NextResponse) return input;
+  const { classId, nim, name, note, fileUploadId } = input;
+
+  try {
+    const { id: tugasId } = await context.params;
+    const tugas = await getTugasOrThrow(tugasId);
+
+    const existing = await prisma.tugasSubmission.findUnique({
+      where: { tugasId_userId: { tugasId, userId: auth.user.id } },
+      select: { id: true },
+    });
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: "Kamu belum mengumpulkan tugas ini." },
+        { status: 404 },
+      );
+    }
+
+    if (new Date() > tugas.deadline) {
+      return NextResponse.json(
+        { success: false, error: "Batas waktu sudah lewat, pengumpulan tidak bisa diubah lagi." },
+        { status: 410 },
+      );
+    }
+
+    await assertClassCompatible(classId, tugas.courseId, tugas.classId);
+    if (fileUploadId) {
+      await assertFileUploadOwnedBy(fileUploadId, auth.user.id);
+    }
+
+    const submission = await prisma.tugasSubmission.update({
+      where: { id: existing.id },
+      data: {
+        classId,
+        nim,
+        name,
+        note: note?.trim() || null,
+        fileUploadId: fileUploadId ?? null,
+        updatedAt: new Date(),
+      },
+      include: submissionInclude,
+    });
+
+    const total = await prisma.tugasSubmission.count({ where: { tugasId } });
+
+    return NextResponse.json({
+      success: true,
+      submission: serializeSubmission(submission),
+      position: submission.position,
+      total,
+    });
+  } catch (error) {
+    if (error instanceof ApiRequestError) {
+      return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
+    }
+    console.error("API PATCH /api/tugas/tugas/[id]/submit failed:", error);
+    return publicErrorResponse(error, "Gagal mengubah pengumpulan.");
   }
 }

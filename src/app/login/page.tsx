@@ -124,9 +124,9 @@ function LoginPageInner() {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-16">
         <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl">
-          <h1 className="text-2xl font-black text-slate-900">Sesi aktif</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Kamu sudah masuk</h1>
           <p className="mt-2 text-sm text-slate-600">
-            Kamu masuk sebagai <strong>{user.email || user.id}</strong>.
+            Masuk sebagai <strong>{user.email || user.id}</strong>.
           </p>
           <div className="mt-6 flex flex-col gap-3">
             <Button
@@ -135,7 +135,7 @@ function LoginPageInner() {
               icon={ArrowRight}
               onClick={goToTarget}
             >
-              Lanjut ke {redirectTarget === "/" ? "beranda" : redirectTarget}
+              Lanjutkan
             </Button>
             <Button
               variant="outline"
@@ -163,7 +163,7 @@ function LoginPageInner() {
           Beranda
         </Link>
 
-        <div className="mt-6 flex items-center gap-2 text-xs font-black uppercase tracking-widest text-blue-600">
+        <div className="mt-6 flex items-center gap-2 text-sm font-medium text-blue-600">
           {mode === "login" ? (
             <LogIn className="h-4 w-4" />
           ) : (
@@ -172,19 +172,19 @@ function LoginPageInner() {
           {mode === "login" ? "Masuk" : "Daftar"}
         </div>
         <h1 className="mt-2 text-2xl font-black text-slate-900 md:text-3xl">
-          {mode === "login" ? "Masuk ke keluhkampus" : "Buat akun keluhkampus"}
+          {mode === "login" ? "Masuk" : "Buat akun"}
         </h1>
         <p className="mt-2 text-sm text-slate-600">
           {mode === "login"
-            ? "Course, token, dan progress tugas kamu nunggu di sini."
-            : "Daftar dulu untuk mulai kumpulkan tugas dan simpan referensi."}
+            ? "Masuk untuk melihat tugas dan laporan kamu."
+            : "Buat akun untuk mulai mengumpulkan tugas dan menyimpan laporan."}
         </p>
 
         <form onSubmit={submit} className="mt-6 space-y-4">
           {mode === "register" && (
             <div>
               <label
-                className="mb-1 block text-xs font-black uppercase tracking-wider text-slate-500"
+                className="mb-1 block text-sm font-medium text-slate-700"
                 htmlFor="login-name"
               >
                 Nama (opsional)
@@ -202,7 +202,7 @@ function LoginPageInner() {
           )}
           <div>
             <label
-              className="mb-1 block text-xs font-black uppercase tracking-wider text-slate-500"
+              className="mb-1 block text-sm font-medium text-slate-700"
               htmlFor="login-email"
             >
               Email
@@ -220,7 +220,7 @@ function LoginPageInner() {
           </div>
           <div>
             <label
-              className="mb-1 block text-xs font-black uppercase tracking-wider text-slate-500"
+              className="mb-1 block text-sm font-medium text-slate-700"
               htmlFor="login-password"
             >
               Password
@@ -286,7 +286,7 @@ function LoginPageInner() {
         </div>
 
         <p className="mt-6 text-center text-[11px] text-slate-400">
-          Dengan masuk, kamu menyetujui penggunaan cookie untuk sesi.
+          Kami memakai cookie agar kamu tetap masuk.
         </p>
       </div>
     </div>

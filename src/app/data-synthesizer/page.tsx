@@ -135,8 +135,8 @@ export default function DataSynthesizerPage() {
     <div className={styles.pageContainer}>
       <main className={styles.mainContent}>
         <div className={styles.hero}>
-          <h1>Data Synthesizer</h1>
-          <p>Olah data mentah kuesioner, transkrip wawancara, atau catatan observasi menjadi draf narasi laporan yang siap dipakai.</p>
+          <h1>Olah Data</h1>
+          <p>Tempel hasil kuesioner, wawancara, atau catatan observasi. Hasilnya berupa tulisan hasil dan pembahasan yang bisa langsung dipakai.</p>
         </div>
 
         <div className={styles.card}>
@@ -256,7 +256,7 @@ export default function DataSynthesizerPage() {
             
             {result && !isGenerating && (
               <div className="flex flex-wrap gap-2 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <span className="w-full text-xs font-bold text-slate-400 mb-1 uppercase tracking-wider">Aksi Lanjutan:</span>
+                <span className="w-full text-sm font-medium text-slate-500 mb-1">Lanjutkan dengan:</span>
                 <button className="flex items-center gap-2 px-3 py-2 bg-white text-slate-700 text-sm font-medium rounded-lg border border-slate-200 hover:border-blue-400 hover:text-blue-600 transition-all shadow-sm" onClick={() => handleAction('expand')}>
                   <Sparkles size={14} /> Perpanjang Narasi
                 </button>

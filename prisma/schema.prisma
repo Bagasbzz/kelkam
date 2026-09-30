@@ -91,6 +91,7 @@ model User {
   enrollments    CourseEnrollment[]
   tugasesCreated Tugas[]            @relation("TugasCreator")
   submissions    TugasSubmission[]
+  feedbacksGiven TugasSubmission[]  @relation("SubmissionFeedbackBy")
 
   @@map("users")
 }
@@ -590,6 +591,15 @@ model TugasSubmission {
   position     Int              @map("position")
   status       SubmissionStatus @default(SUBMITTED) @map("status")
   submittedAt  DateTime         @default(now()) @map("submitted_at")
+  // Null = belum pernah diubah mahasiswa. Diisi manual saat PATCH, bukan
+  // @updatedAt, supaya feedback admin tidak ikut mengubah label "Diubah".
+  updatedAt    DateTime?        @map("updated_at")
+
+  // Feedback tunggal dari admin course; bisa diubah/dihapus.
+  feedback     String?          @db.Text
+  feedbackAt   DateTime?        @map("feedback_at")
+  feedbackById String?          @map("feedback_by_id")
+  feedbackBy   User?            @relation("SubmissionFeedbackBy", fields: [feedbackById], references: [id], onDelete: SetNull)
 
   // (tugasId, userId) — satu user cuma boleh submit 1x per tugas.
   @@unique([tugasId, userId])

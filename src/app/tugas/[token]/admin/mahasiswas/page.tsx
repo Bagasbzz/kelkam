@@ -37,7 +37,7 @@ export default function MahasiswaPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat course.");
+        setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -59,7 +59,7 @@ export default function MahasiswaPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
           <Button onClick={openLoginModal} variant="primary" size="md">
             Masuk
           </Button>
@@ -73,9 +73,9 @@ export default function MahasiswaPage() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
           <p className="text-sm text-slate-600">
-            Kamu bukan admin untuk course ini.
+            Kamu bukan pengelola mata kuliah ini.
           </p>
           <Link
             href={`/tugas/${token}`}
@@ -96,18 +96,18 @@ export default function MahasiswaPage() {
           className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
         >
           <ArrowLeft className="h-4 w-4" />
-          Course admin
+          Pengelola mata kuliah
         </Link>
 
         <div className="rounded-[2rem] bg-slate-950 px-7 py-8 text-white shadow-2xl md:px-12 md:py-10">
-          <div className="text-xs font-bold uppercase tracking-widest text-violet-300">
+          <div className="text-sm font-medium text-violet-300">
             Roster
           </div>
           <h1 className="mt-2 text-2xl font-black tracking-tight md:text-3xl">
             {course?.name || "..."}
           </h1>
           <p className="mt-2 text-sm text-slate-300">
-            Daftar mahasiswa per course. Import banyak sekaligus pakai paste
+            Daftar mahasiswa per mata kuliah. Import banyak sekaligus pakai paste
             text atau AI parse dari Excel/Word.
           </p>
         </div>
@@ -115,7 +115,7 @@ export default function MahasiswaPage() {
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Memuat course…
+            Memuat mata kuliah…
           </div>
         ) : error ? (
           <p className="text-sm text-red-600">{error}</p>

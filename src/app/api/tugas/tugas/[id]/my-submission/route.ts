@@ -16,6 +16,7 @@ import {
 } from "@/lib/server/request-guards";
 import { getTugasOrThrow } from "@/lib/server/tugas/access";
 import { getStudentView } from "@/lib/server/tugas/visibility";
+import { serializeSubmission } from "@/lib/server/tugas/serialize";
 
 export async function GET(
   _req: Request,
@@ -52,31 +53,7 @@ export async function GET(
         createdAt: view.tugas.createdAt.toISOString(),
         updatedAt: view.tugas.updatedAt.toISOString(),
       },
-      submission: view.mySubmission
-        ? {
-            id: view.mySubmission.id,
-            tugasId: view.mySubmission.tugasId,
-            classId: view.mySubmission.classId,
-            class: {
-              id: view.mySubmission.class.id,
-              name: view.mySubmission.class.name,
-            },
-            nim: view.mySubmission.nim,
-            name: view.mySubmission.name,
-            note: view.mySubmission.note,
-            fileUpload: view.mySubmission.fileUpload
-              ? {
-                  id: view.mySubmission.fileUpload.id,
-                  originalName: view.mySubmission.fileUpload.originalName,
-                  mime: view.mySubmission.fileUpload.mime,
-                  size: view.mySubmission.fileUpload.size,
-                }
-              : null,
-            position: view.mySubmission.position,
-            status: view.mySubmission.status,
-            submittedAt: view.mySubmission.submittedAt.toISOString(),
-          }
-        : null,
+      submission: view.mySubmission ? serializeSubmission(view.mySubmission) : null,
       count: view.count,
       myPosition: view.mySubmission?.position ?? null,
     });
@@ -85,6 +62,6 @@ export async function GET(
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
     }
     console.error("API /api/tugas/tugas/[id]/my-submission GET failed:", error);
-    return publicErrorResponse(error, "Gagal memuat submission.");
+    return publicErrorResponse(error, "Gagal memuat pengumpulan.");
   }
 }

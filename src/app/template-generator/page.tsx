@@ -105,9 +105,9 @@ export default function SmartTemplatePage() {
       <div className="max-w-3xl mx-auto py-12">
         
         <div className="text-center mb-16">
-          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">Template Generator</h1>
+          <h1 className="text-4xl md:text-5xl font-black tracking-tight mb-4">Editor Dokumen</h1>
           <p className="text-lg text-gray-500 max-w-lg mx-auto leading-relaxed">
-            Hasilkan struktur dokumen akademik yang rapi untuk skripsi, laporan proyek, capstone, atau tugas kuliah formal.
+            Buat kerangka dokumen yang rapi untuk skripsi, laporan proyek, capstone, atau tugas kuliah.
           </p>
         </div>
 
@@ -191,7 +191,7 @@ export default function SmartTemplatePage() {
                     className={`p-5 md:p-6 rounded-[1.5rem] md:rounded-[2rem] border-2 transition-all text-left ${formatMode === 'standard' ? 'border-blue-600 bg-blue-50/50' : 'border-gray-100 hover:border-gray-200'}`}
                   >
                       <ShieldCheck className={`w-6 h-6 md:w-8 md:h-8 mb-3 md:mb-4 ${formatMode === 'standard' ? 'text-blue-600' : 'text-gray-300'}`} />
-                      <p className="font-black text-xs md:text-sm uppercase tracking-widest mb-1">Standar Indonesia</p>
+                      <p className="font-bold text-sm mb-1">Format standar Indonesia</p>
                       <p className="text-[10px] text-gray-400 font-bold">4-4-3-3, TNR 12, Spasi 1.5</p>
                   </button>
                   <button 
@@ -199,7 +199,7 @@ export default function SmartTemplatePage() {
                     className={`p-5 md:p-6 rounded-[1.5rem] md:rounded-[2rem] border-2 transition-all text-left ${formatMode === 'manual' ? 'border-indigo-600 bg-indigo-50/50' : 'border-gray-100 hover:border-gray-200'}`}
                   >
                       <Settings2 className={`w-6 h-6 md:w-8 md:h-8 mb-3 md:mb-4 ${formatMode === 'manual' ? 'text-indigo-600' : 'text-gray-300'}`} />
-                      <p className="font-black text-xs md:text-sm uppercase tracking-widest mb-1">Format Manual</p>
+                      <p className="font-bold text-sm mb-1">Atur sendiri</p>
                       <p className="text-[10px] text-gray-400 font-bold">Atur margin & font sendiri</p>
                   </button>
               </div>
@@ -247,7 +247,7 @@ export default function SmartTemplatePage() {
                 <Button variant="dark" size="lg" onClick={() => { setStep(1); }}>
                   Buat Template Baru
                 </Button>
-                <Link href="/" className="text-sm font-bold text-gray-400 hover:text-gray-900 transition-colors uppercase tracking-widest">
+                <Link href="/" className="text-sm font-medium text-gray-400 hover:text-gray-900 transition-colors">
                   KEMBALI KE BERANDA
                 </Link>
               </div>

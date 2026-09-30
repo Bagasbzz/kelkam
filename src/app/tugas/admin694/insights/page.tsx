@@ -63,7 +63,7 @@ export default function AdminInsightsPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Login dulu</h1>
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
           <Button onClick={openLoginModal} variant="primary" size="md">Masuk</Button>
         </div>
       </div>
@@ -74,7 +74,7 @@ export default function AdminInsightsPage() {
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <ShieldCheck className="mx-auto h-10 w-10 text-slate-300" />
-          <h1 className="text-2xl font-black text-slate-900">Akses ditolak</h1>
+          <h1 className="text-2xl font-black text-slate-900">Tidak punya akses</h1>
           <p className="text-sm text-slate-600">Halaman ini hanya untuk super admin.</p>
         </div>
       </div>
@@ -102,7 +102,7 @@ export default function AdminInsightsPage() {
         </Link>
 
         <div className="rounded-[2rem] bg-gradient-to-br from-violet-950 to-indigo-950 px-7 py-10 text-white shadow-2xl md:px-12 md:py-12">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-violet-300">
+          <div className="flex items-center gap-2 text-sm font-medium text-violet-300">
             <BarChart3 className="h-4 w-4" />
             Global AI Insights
           </div>
@@ -110,7 +110,7 @@ export default function AdminInsightsPage() {
             Snapshot platform Tugas
           </h1>
           <p className="mt-2 max-w-xl text-sm text-slate-300">
-            Monitoring semua course: submission rate, late rate, roster size, dan
+            Monitoring semua mata kuliah: pengumpulan rate, late rate, roster size, dan
             rekomendasi prioritas intervensi.
           </p>
           <div className="mt-5">
@@ -134,9 +134,9 @@ export default function AdminInsightsPage() {
         )}
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Stat label="Course aktif" value={courses.length} />
+          <Stat label="Mata kuliah aktif" value={courses.length} />
           <Stat label="Total tugas" value={totals.tugases} />
-          <Stat label="Submission" value={totals.submissions} />
+          <Stat label="Pengumpulan" value={totals.submissions} />
           <Stat label="Mahasiswa" value={totals.roster} />
         </div>
 
@@ -156,14 +156,14 @@ export default function AdminInsightsPage() {
           <div className="rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-100 px-6 py-4">
               <h2 className="text-sm font-black uppercase tracking-widest text-slate-500">
-                Per-Course
+                Per-Mata kuliah
               </h2>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-500">
+                <thead className="bg-slate-50 text-xs font-medium text-slate-500">
                   <tr>
-                    <th className="px-4 py-3 text-left">Course</th>
+                    <th className="px-4 py-3 text-left">Mata kuliah</th>
                     <th className="px-4 py-3 text-right">Tugas</th>
                     <th className="px-4 py-3 text-right">Submit</th>
                     <th className="px-4 py-3 text-right">Late</th>
@@ -217,7 +217,7 @@ export default function AdminInsightsPage() {
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+      <div className="text-xs font-medium text-slate-500">
         {label}
       </div>
       <div className="mt-1 text-2xl font-black text-slate-900">{value}</div>

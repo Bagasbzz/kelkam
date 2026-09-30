@@ -50,6 +50,9 @@ export async function GET(req: Request) {
             status: true,
             submittedAt: true,
             position: true,
+            updatedAt: true,
+            feedback: true,
+            feedbackAt: true,
             class: { select: { id: true, name: true } },
             fileUpload: { select: { id: true, originalName: true, mime: true, size: true } },
           },
@@ -90,6 +93,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
     }
     console.error("API /api/tugas/me/submissions GET failed:", error);
-    return publicErrorResponse(error, "Gagal memuat history.");
+    return publicErrorResponse(error, "Gagal memuat riwayat.");
   }
 }

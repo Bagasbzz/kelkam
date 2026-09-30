@@ -33,30 +33,30 @@ const PRIMARY_FEATURES: FeatureCard[] = [
     href: "/studio",
     title: "Studio",
     description:
-      "Brainstorm + susun outline dengan AI. Mulai dari ide acak jadi kerangka laporan yang runut.",
+      "Susun ide dan kerangka laporan dengan bantuan AI.",
     icon: IconBrain,
     accent: "blue",
-    cta: "Buka Studio",
+    cta: "Buka",
     primary: true,
   },
   {
     href: "/dashboard",
     title: "Laporan",
     description:
-      "Susun laprak, makalah, capstone, laporan proyek, atau skripsi dengan alur terstruktur dan checklist kualitas.",
+      "Buat laporan praktikum, makalah, capstone, atau skripsi langkah demi langkah.",
     icon: IconChart,
     accent: "amber",
-    cta: "Bikin Laporan",
+    cta: "Buat laporan",
     primary: true,
   },
   {
     href: "/tugas",
     title: "Tugas",
     description:
-      "Platform pengumpulan tugas untuk asdos. Token mata kuliah, deadline countdown, dan posisi antrian mahasiswa.",
+      "Kumpulkan tugas lewat token mata kuliah dan lihat urutan pengumpulan kamu.",
     icon: IconCheck,
     accent: "emerald",
-    cta: "Masuk Tugas",
+    cta: "Kumpulkan tugas",
     primary: true,
   },
 ];
@@ -64,66 +64,66 @@ const PRIMARY_FEATURES: FeatureCard[] = [
 const UTILITY_FEATURES: FeatureCard[] = [
   {
     href: "/uml-builder",
-    title: "UML Builder",
+    title: "Buat Diagram",
     description:
-      "Flowchart, use case, activity diagram dengan struktur yang bisa diedit dan langsung dipakai di laporan.",
+      "Flowchart, use case, dan activity diagram yang bisa langsung dipakai di laporan.",
     icon: IconFlow,
     accent: "blue",
-    cta: "Buka UML",
+    cta: "Buat diagram",
   },
   {
     href: "/data-synthesizer",
-    title: "Data Synthesizer",
+    title: "Olah Data",
     description:
-      "Kuesioner, wawancara, observasi acak? Ubah jadi narasi hasil dan pembahasan yang rapi.",
+      "Ubah hasil kuesioner, wawancara, atau observasi jadi tulisan hasil dan pembahasan.",
     icon: IconBook,
     accent: "indigo",
-    cta: "Olah Data",
+    cta: "Olah data",
   },
   {
     href: "/template-generator",
-    title: "Template Editor",
+    title: "Editor Dokumen",
     description:
-      "Editor dokumen dengan formatting kaya Word, hasil akhir bisa di-download rapi.",
+      "Tulis dokumen seperti di Word dan unduh hasilnya dengan format rapi.",
     icon: IconLayout,
     accent: "violet",
-    cta: "Buka Editor",
+    cta: "Buka editor",
   },
   {
     href: "/ai-tools",
     title: "AI Tools",
     description:
-      "Utilitas AI: rewrite, ringkasan, terjemahan, dan prompt engineering. Respons cepat, fokus hasil.",
+      "Perbaiki kalimat, ringkas, atau terjemahkan tulisan dengan AI.",
     icon: IconSpark,
     accent: "rose",
-    cta: "Coba AI Tools",
+    cta: "Coba",
   },
   {
     href: "/fix-format",
-    title: "Fix Format",
+    title: "Rapikan Format",
     description:
-      "Rapikan dokumen yang berantakan. Heading, list, dan spasi konsisten dalam satu klik.",
+      "Rapikan judul, daftar, dan spasi dokumen Word dalam satu klik.",
     icon: IconType,
     accent: "amber",
-    cta: "Fix Format",
+    cta: "Rapikan",
   },
   {
     href: "/tools",
-    title: "PDF / DOCX / Image",
+    title: "Alat PDF, Word & Gambar",
     description:
-      "19 utility file: merge/split PDF, convert DOCX↔PDF, kompres image, semuanya di-browser.",
+      "Gabung atau pisah PDF, ubah Word ke PDF, kecilkan ukuran gambar. Semua diproses di browser.",
     icon: IconWrench,
     accent: "emerald",
-    cta: "Buka Tools",
+    cta: "Buka alat",
   },
   {
     href: "/tracker",
-    title: "Tracker",
+    title: "Pantau Progres",
     description:
-      "Pantau progress tugas dan kebiasaan belajar. Visual, simpel, tanpa ribet.",
+      "Catat kemajuan tugas dan kebiasaan belajar kamu.",
     icon: IconPulse,
     accent: "indigo",
-    cta: "Lihat Tracker",
+    cta: "Lihat",
   },
 ];
 
@@ -221,12 +221,12 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-white text-slate-800 font-sans">
       <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
-          Tools <span className="text-blue-600">Mahasiswa</span>
+          Bantuan <span className="text-blue-600">tugas kuliah</span>
           <br />
-          Lebih Cepat
+          di satu tempat
         </h1>
         <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          Keluhkampus dibuat khusus agar pengerjaan diagram, laporan, laprak, capstone, dan tugas kuliah bisa selesai jauh lebih gampang dan cepat. Tidak perlu keahlian khusus, tinggal klik.
+          Kumpulkan tugas, susun laporan, dan buat diagram tanpa ribet. Pilih yang kamu butuhkan di bawah.
         </p>
 
         {/* Primary features — 3 yang paling sering diakses */}
@@ -241,11 +241,8 @@ export default function Home() {
         {/* Utility features — sisanya, dikasih section header biar jelas. */}
         <section className="w-full max-w-6xl animate-in fade-in slide-in-from-bottom-12 duration-700 delay-500">
           <div className="mb-8 md:mb-10">
-            <p className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2">
-              Utilitas Lainnya
-            </p>
-            <h2 className="text-2xl md:text-3xl font-black text-slate-900">
-              Tools pendukung untuk detail pekerjaan
+            <h2 className="text-2xl md:text-3xl font-bold text-slate-900">
+              Alat bantu lainnya
             </h2>
           </div>
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 w-full">
@@ -259,7 +256,7 @@ export default function Home() {
           onClick={handleSkripsiClick}
           className="mt-16 md:mt-20 text-xs font-bold text-slate-400 hover:text-blue-600 transition-colors"
         >
-          Mau tau lebih lengkap? Lihat laporan builder →
+          Lihat fitur penyusun laporan →
         </button>
       </main>
 
@@ -279,9 +276,9 @@ export default function Home() {
               </button>
             </div>
 
-            <h3 className="text-xl md:text-2xl font-black text-slate-900 mb-3 md:mb-4">Laporan Builder Beta</h3>
+            <h3 className="text-xl md:text-2xl font-bold text-slate-900 mb-3 md:mb-4">Penyusun laporan</h3>
             <p className="text-slate-500 text-base md:text-lg leading-relaxed mb-8 md:mb-10 font-medium">
-              Fitur ini sekarang mendukung rancangan laprak, makalah, capstone, laporan proyek, dan skripsi. Lanjut untuk menyusun struktur awal?
+              Fitur ini membantu menyusun laporan praktikum, makalah, capstone, dan skripsi. Lanjut?
             </p>
 
             <div className="flex flex-col sm:flex-row gap-3 md:gap-4">
@@ -289,13 +286,13 @@ export default function Home() {
                 onClick={() => setShowModal(false)}
                 className="flex-1 py-3 md:py-4 px-6 rounded-xl md:rounded-2xl font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 transition-all"
               >
-                Gak Jadi
+                Batal
               </button>
               <button
                 onClick={confirmSkripsi}
                 className="flex-1 py-3 md:py-4 px-6 rounded-xl md:rounded-2xl font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-lg shadow-blue-500/30 transition-all hover:scale-[1.02]"
               >
-                Ya, Lanjutkan
+                Lanjut
               </button>
             </div>
           </div>
@@ -304,7 +301,7 @@ export default function Home() {
 
       <footer className="w-full py-8 md:py-12 mt-auto text-slate-500 text-center">
         <p className="text-sm font-medium">
-          &copy; {new Date().getFullYear()} keluhkampus. All rights reserved.
+          &copy; {new Date().getFullYear()} keluhkampus
         </p>
       </footer>
     </div>

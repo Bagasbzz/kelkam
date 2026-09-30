@@ -102,10 +102,10 @@ export async function assertClassCompatible(
   courseId: string,
   tugasClassId: string | null,
 ) {
-  if (!tugasClassId) return; // Tugas untuk semua kelas di course.
-  if (tugasClassId !== classId) {
+  if (tugasClassId && tugasClassId !== classId) {
     throw new ApiRequestError(400, "Kelas ini tidak termasuk untuk tugas tersebut.");
   }
+  // Kelas harus tetap milik course ini walau tugas terbuka untuk semua kelas.
   await assertClassBelongsToCourse(classId, courseId);
 }
 

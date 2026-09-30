@@ -74,8 +74,21 @@ export interface SubmissionRow {
   position: number;
   status: "SUBMITTED" | "LATE" | "REJECTED";
   submittedAt: string;
+  /** Terisi hanya kalau mahasiswa pernah mengubah pengumpulannya. */
+  updatedAt: string | null;
+  /** Catatan dari admin course; null kalau belum ada. */
+  feedback: string | null;
+  feedbackAt: string | null;
   user?: { id: string; email: string; name: string | null };
 }
+
+export type SubmissionInput = {
+  classId: string;
+  nim: string;
+  name: string;
+  note?: string;
+  fileUploadId?: string;
+};
 
 export interface ManagedCourse {
   id: string;
@@ -218,19 +231,34 @@ export function deleteTugas(tugasId: string) {
 // Submission
 // ---------------------------------------------------------------------------
 
-export function submitTugas(
-  tugasId: string,
-  input: {
-    classId: string;
-    nim: string;
-    name: string;
-    note?: string;
-    fileUploadId?: string;
-  },
-) {
+export function submitTugas(tugasId: string, input: SubmissionInput) {
   return request<{ submission: SubmissionRow; position: number; total: number }>(
     `/api/tugas/tugas/${tugasId}/submit`,
     { method: "POST", json: input }
+  );
+}
+
+/** Ubah pengumpulan sendiri (hanya sebelum deadline; urutan tidak berubah). */
+export function updateMySubmission(tugasId: string, input: SubmissionInput) {
+  return request<{ submission: SubmissionRow; position: number; total: number }>(
+    `/api/tugas/tugas/${tugasId}/submit`,
+    { method: "PATCH", json: input }
+  );
+}
+
+/** Admin: beri / ubah catatan untuk satu pengumpulan. */
+export function setSubmissionFeedback(submissionId: string, feedback: string) {
+  return request<{ submission: SubmissionRow }>(
+    `/api/tugas/submissions/${submissionId}/feedback`,
+    { method: "PUT", json: { feedback } }
+  );
+}
+
+/** Admin: hapus catatan. */
+export function clearSubmissionFeedback(submissionId: string) {
+  return request<{ submission: SubmissionRow }>(
+    `/api/tugas/submissions/${submissionId}/feedback`,
+    { method: "DELETE" }
   );
 }
 
@@ -347,6 +375,9 @@ export interface MyTugasWithSubmission extends TugasSummary {
     status: "SUBMITTED" | "LATE" | "REJECTED";
     submittedAt: string;
     position: number;
+    updatedAt: string | null;
+    feedback: string | null;
+    feedbackAt: string | null;
     class: { id: string; name: string };
     fileUpload: { id: string; originalName: string; mime: string; size: number } | null;
   };

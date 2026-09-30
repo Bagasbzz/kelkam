@@ -3,17 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  ArrowLeft,
-  CalendarClock,
-  ClipboardList,
-  Loader2,
-  Tag,
-} from "lucide-react";
+import { ArrowLeft, CalendarClock, Loader2 } from "lucide-react";
 import Card from "@/components/ui/Card";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import SubmissionForm from "@/components/tugas/SubmissionForm";
-import SubmissionHistory from "@/components/tugas/SubmissionHistory";
 import {
   fetchCourseByToken,
   type CourseSummary,
@@ -21,10 +14,8 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/[tugasId] — Detail tugas + form submit.
- *
- * - Public: lihat detail (title, description, deadline, countdown).
- * - Login: form submit + lihat status sendiri.
+ * /tugas/[token]/[tugasId] — detail satu tugas + form kumpulkan / ubah.
+ * Riwayat seluruh mata kuliah ada di halaman mata kuliah, bukan di sini.
  */
 export default function TugasDetailPage() {
   const params = useParams<{ token: string; tugasId: string }>();
@@ -46,7 +37,7 @@ export default function TugasDetailPage() {
         setCourse(data.course);
         const t = data.tugases.find((x) => x.id === tugasId) ?? null;
         setTugas(t);
-        if (!t) setError("Tugas tidak ditemukan di course ini.");
+        if (!t) setError("Tugas ini tidak ada di mata kuliah tersebut.");
       })
       .catch((err) => {
         if (cancelled) return;
@@ -63,7 +54,7 @@ export default function TugasDetailPage() {
   if (loading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
+        <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
       </div>
     );
   }
@@ -72,54 +63,52 @@ export default function TugasDetailPage() {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
-          <h1 className="text-2xl font-black text-slate-900">Tugas tidak ditemukan</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Tugas tidak ditemukan</h1>
           {error && <p className="text-sm text-slate-600">{error}</p>}
           <Link
             href={`/tugas/${token}`}
             className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
           >
-            <ArrowLeft className="w-4 h-4" />
-            Kembali ke course
+            <ArrowLeft className="h-4 w-4" />
+            Kembali ke mata kuliah
           </Link>
         </div>
       </div>
     );
   }
 
+  const deadlinePassed = new Date(tugas.deadline).getTime() < Date.now();
+
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
       <div className="mx-auto max-w-3xl space-y-6">
         <Link
           href={`/tugas/${token}`}
-          className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-slate-900"
+          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900"
         >
-          <ArrowLeft className="w-4 h-4" />
+          <ArrowLeft className="h-4 w-4" />
           {course.name}
         </Link>
 
-        {/* Hero detail */}
-        <div className="rounded-[2rem] bg-slate-950 px-7 py-10 text-white shadow-2xl md:px-10 md:py-12">
-          <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-widest text-blue-300">
-            <ClipboardList className="w-4 h-4" />
-            {course.code}
+        <Card>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
+            <span>{course.code}</span>
             {tugas.class && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-xs font-bold text-slate-200">
-                <Tag className="w-3 h-3" />
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
                 Kelas {tugas.class.name}
               </span>
             )}
           </div>
-          <h1 className="mt-3 text-2xl font-black tracking-tight md:text-4xl">
-            {tugas.title}
-          </h1>
+          <h1 className="mt-2 text-2xl font-bold text-slate-900 md:text-3xl">{tugas.title}</h1>
           {tugas.description && (
-            <p className="mt-3 whitespace-pre-wrap text-sm text-slate-300 md:text-base">
+            <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700 md:text-base">
               {tugas.description}
             </p>
           )}
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <span className="inline-flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs font-bold text-white">
-              <CalendarClock className="w-4 h-4" />
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-700">
+            <span className="inline-flex items-center gap-2">
+              <CalendarClock className="h-4 w-4 text-slate-500" />
+              Batas waktu{" "}
               {new Date(tugas.deadline).toLocaleString("id-ID", {
                 timeZone: "Asia/Jakarta",
                 day: "numeric",
@@ -129,19 +118,22 @@ export default function TugasDetailPage() {
                 minute: "2-digit",
               })}
             </span>
-            <CountdownTimer deadline={tugas.deadline} />
+            {deadlinePassed ? (
+              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+                Sudah lewat
+              </span>
+            ) : (
+              <CountdownTimer deadline={tugas.deadline} />
+            )}
           </div>
-        </div>
+        </Card>
 
-        {/* Submission form / status */}
         <SubmissionForm
           tugasId={tugas.id}
+          deadline={tugas.deadline}
           classes={course.classes}
           lockedClassId={tugas.classId}
         />
-
-        {/* History sidebar (mahasiswa login) */}
-        <SubmissionHistory courseId={course.id} token={token} />
       </div>
     </div>
   );

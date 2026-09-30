@@ -106,7 +106,7 @@ export default function MahasiswaTable({
         ) : (
           <div className="max-h-[480px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-slate-50 text-[10px] font-black uppercase tracking-widest text-slate-500">
+              <thead className="sticky top-0 bg-slate-50 text-xs font-medium text-slate-500">
                 <tr>
                   <th className="px-4 py-2 text-left">NIM</th>
                   <th className="px-4 py-2 text-left">Nama</th>

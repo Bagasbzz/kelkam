@@ -678,7 +678,7 @@ export default function UMLBuilder() {
 
   const handleApproveToReport = useCallback(() => {
     if (!diagramMeta.reportDiagramId) {
-      showToast('Diagram ini belum tersambung ke Laporan Builder.');
+      showToast('Diagram ini belum tersambung ke penyusun laporan.');
       return;
     }
     if (!nodes.length || !edges.length) {
@@ -707,12 +707,12 @@ export default function UMLBuilder() {
         const workspace = loadStudioWorkspace(window.localStorage);
         const studioProject = workspace.projects.find((project) => project.id === studioProjectId);
         if (!studioProject) {
-          showToast('Project Studio tidak ditemukan di penyimpanan lokal.');
+          showToast('Proyek Studio tidak ditemukan di perangkat ini.');
           return;
         }
         const artifact = studioProject.artifacts.find((item) => item.id === diagramMeta.reportDiagramId);
         if (!artifact) {
-          showToast('Artefak Studio untuk diagram ini tidak ditemukan.');
+          showToast('Bagian Studio untuk diagram ini tidak ditemukan.');
           return;
         }
         const withPayload = {
@@ -739,10 +739,10 @@ export default function UMLBuilder() {
           projects: workspace.projects.map((project) => project.id === approved.id ? approved : project),
         };
         saveStudioWorkspace(window.localStorage, nextWorkspace);
-        showToast('Diagram disetujui dan tersimpan ke Artifact Graph Studio.');
+        showToast('Diagram disetujui dan tersimpan ke Studio.');
         return;
       } catch (error) {
-        showToast(error instanceof Error ? error.message : 'Diagram belum memenuhi gate Studio.');
+        showToast(error instanceof Error ? error.message : 'Diagram belum memenuhi syarat Studio.');
         return;
       }
     }
@@ -783,7 +783,7 @@ export default function UMLBuilder() {
         }),
       };
       localStorage.setItem(reportKey, JSON.stringify(updatedProject));
-      showToast('Diagram disetujui dan masuk ke Laporan Builder.');
+      showToast('Diagram disetujui dan masuk ke penyusun laporan.');
     } catch (error) {
       console.error('Failed to approve diagram to report:', error);
       showToast('Gagal menyimpan diagram ke laporan.');
@@ -1228,8 +1228,8 @@ export default function UMLBuilder() {
         <div className={styles.controlsCard} style={layoutMode === 'side-by-side' ? { width: `${sidebarWidth}px`, minWidth: '300px' } : {}}>
           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: layoutMode === 'side-by-side' ? '1rem' : '0' }}>
             <div>
-              <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e293b', letterSpacing: '-0.025em', margin: 0 }}>UML Flow Studio</h1>
-              {layoutMode === 'side-by-side' && <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0, marginTop: '4px' }}>Editor diagram otomatis dengan quality gate.</p>}
+              <h1 style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e293b', letterSpacing: '-0.025em', margin: 0 }}>Buat Diagram</h1>
+              {layoutMode === 'side-by-side' && <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0, marginTop: '4px' }}>Buat flowchart, use case, dan activity diagram, lalu pakai di laporan.</p>}
             </div>
           </header>
 
