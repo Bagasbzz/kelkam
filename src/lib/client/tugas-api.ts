@@ -44,6 +44,14 @@ export interface CourseSummary {
   classes: { id: string; name: string }[];
 }
 
+export interface CourseMaterial {
+  id: string;
+  originalName: string;
+  mime: string;
+  size: number;
+  uploadedAt: string;
+}
+
 export interface TugasSummary {
   id: string;
   courseId: string;
@@ -442,4 +450,36 @@ export async function uploadSubmissionFile(file: File): Promise<{
     throw new ApiClientError(resp.status, json?.error || "Upload gagal.");
   }
   return json.data;
+}
+
+export function fetchCourseMaterials(courseId: string, token: string) {
+  return request<{ materials: CourseMaterial[] }>(
+    `/api/tugas/courses/${courseId}/materials?token=${encodeURIComponent(token)}`,
+    { cache: "no-store" },
+  );
+}
+
+export async function uploadCourseMaterial(courseId: string, file: File) {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await authenticatedFetch(`/api/tugas/courses/${courseId}/materials`, {
+    method: "POST",
+    body: form,
+  });
+  const payload = (await resp.json().catch(() => ({ success: false }))) as {
+    success?: boolean;
+    error?: string;
+    material?: CourseMaterial;
+  };
+  if (!resp.ok || !payload.success || !payload.material) {
+    throw new ApiClientError(resp.status, payload.error || "Upload materi gagal.");
+  }
+  return payload.material;
+}
+
+export function deleteCourseMaterial(courseId: string, materialId: string) {
+  return request<{ success: true }>(
+    `/api/tugas/courses/${courseId}/materials/${materialId}`,
+    { method: "DELETE" },
+  );
 }

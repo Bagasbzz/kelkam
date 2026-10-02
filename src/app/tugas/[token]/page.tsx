@@ -3,13 +3,15 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, KeyRound, Loader2, Settings } from "lucide-react";
+import { ArrowLeft, Download, FileText, KeyRound, Loader2, Settings } from "lucide-react";
 import Card from "@/components/ui/Card";
 import TugasCard from "@/components/tugas/TugasCard";
 import SubmissionHistory from "@/components/tugas/SubmissionHistory";
 import { useAuth } from "@/components/AuthProvider";
 import {
   fetchCourseByToken,
+  fetchCourseMaterials,
+  type CourseMaterial,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
@@ -28,16 +30,20 @@ export default function CoursePage() {
   const [tugases, setTugases] = useState<TugasSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [materials, setMaterials] = useState<CourseMaterial[]>([]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     fetchCourseByToken(token)
-      .then((data) => {
+      .then(async (data) => {
+        if (cancelled) return;
+        const materialData = await fetchCourseMaterials(data.course.id, token).catch(() => ({ materials: [] }));
         if (cancelled) return;
         setCourse(data.course);
         setTugases(data.tugases);
+        setMaterials(materialData.materials);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -137,6 +143,32 @@ export default function CoursePage() {
             )}
           </div>
         </Card>
+
+        {materials.length > 0 && (
+          <Card>
+            <h2 className="text-lg font-bold text-slate-900">Materi pertemuan</h2>
+            <div className="mt-4 divide-y divide-slate-100">
+              {materials.map((material) => (
+                <div key={material.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <FileText className="h-5 w-5 shrink-0 text-blue-600" />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">{material.originalName}</p>
+                      <p className="text-xs text-slate-500">{(material.size / 1024 / 1024).toFixed(1)} MB</p>
+                    </div>
+                  </div>
+                  <a
+                    href={`/api/tugas/courses/${course.id}/materials/${material.id}/download?token=${encodeURIComponent(course.token)}`}
+                    className="inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:underline"
+                  >
+                    <Download className="h-4 w-4" />
+                    Unduh
+                  </a>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
 
         <Card>
           <h2 className="text-lg font-bold text-slate-900">Tugas aktif</h2>

@@ -109,6 +109,7 @@ Di Setup Node.js App → app → **Environment Variables**:
 | `AI_MODEL_REVIEW` | `gpt-5.5` |
 | `AI_REPORT_TIMEOUT_MS` | `25000` |
 | `UPLOAD_DIR` | `/home/USERNAME/keluhkampus.my.id/uploads` |
+| `MATERIALS_DIR` | `/home/USERNAME/keluhkampus-data/course-materials` |
 | `MAX_UPLOAD_BYTES` | `12582912` |
 | `REFERENCE_CACHE_ADMIN_TOKEN` | random string (opsional) |
 
@@ -133,6 +134,7 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions** → *
 | `AI_MODEL` | `gpt-5.5` |
 | `AI_MODEL_FAST` | `gpt-5-mini` |
 | `AI_MODEL_REVIEW` | `gpt-5.5` |
+| `MATERIALS_DIR` | `/home/USERNAME/keluhkampus-data/course-materials` |
 | `REFERENCE_CACHE_ADMIN_TOKEN` | random (opsional) |
 
 ---
@@ -180,6 +182,11 @@ EOF
 # Folder uploads
 mkdir -p uploads
 chmod 755 uploads
+
+# Optional: use a persistent path outside the release bundle for course materials.
+# Set MATERIALS_DIR to this same path in the production environment.
+mkdir -p ~/keluhkampus-data/course-materials
+chmod 755 ~/keluhkampus-data ~/keluhkampus-data/course-materials
 
 # Restart Passenger (touch restart.txt di application root)
 mkdir -p tmp
@@ -237,6 +244,7 @@ Smoke test:
 - [ ] Login → cookie set
 - [ ] Buat project → row di `projects`
 - [ ] Upload file → row di `file_uploads`, file di disk
+- [ ] Admin course upload PPT/PPTX/PDF → mahasiswa bisa mengunduh materi
 - [ ] Reference search → 200
 - [ ] Evidence extract → row di `reference_evidence`
 - [ ] Studio project create → row di `studio_projects`

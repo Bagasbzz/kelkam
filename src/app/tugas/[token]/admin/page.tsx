@@ -18,6 +18,7 @@ import {
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import TugasCard from "@/components/tugas/TugasCard";
+import CourseMaterialsManager from "@/components/tugas/CourseMaterialsManager";
 import { useAuth } from "@/components/AuthProvider";
 import {
   deleteTugas,
@@ -290,6 +291,10 @@ export default function CourseAdminDashboard() {
               }}>Ubah</Button></>}
             </div>)}
           </div>
+        </Card>
+
+        <Card>
+          <CourseMaterialsManager courseId={course.id} token={course.token} />
         </Card>
 
         <Card>
