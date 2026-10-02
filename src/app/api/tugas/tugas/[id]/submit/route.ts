@@ -103,6 +103,7 @@ export async function POST(
     const status = isLate ? "LATE" : "SUBMITTED";
 
     const submission = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${tugasId}))`;
       const { position } = await assignPositionWithRetry(tx, tugasId);
       return tx.tugasSubmission.create({
         data: {

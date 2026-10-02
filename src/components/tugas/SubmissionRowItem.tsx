@@ -9,12 +9,14 @@ import {
   FileText,
   MessageSquareText,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Textarea from "@/components/ui/Textarea";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   clearSubmissionFeedback,
+  deleteSubmission,
   setSubmissionFeedback,
   type SubmissionRow,
 } from "@/lib/client/tugas-api";
@@ -23,6 +25,7 @@ interface SubmissionRowItemProps {
   submission: SubmissionRow;
   /** Dipanggil setelah catatan disimpan/dihapus supaya daftar induk ikut segar. */
   onChanged?: (updated: SubmissionRow) => void;
+  onDeleted?: () => Promise<void>;
 }
 
 function formatWaktu(iso: string) {
@@ -60,8 +63,9 @@ function statusBadge(status: SubmissionRow["status"]) {
   );
 }
 
-export default function SubmissionRowItem({ submission, onChanged }: SubmissionRowItemProps) {
+export default function SubmissionRowItem({ submission, onChanged, onDeleted }: SubmissionRowItemProps) {
   const [open, setOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [draft, setDraft] = useState(submission.feedback ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,6 +104,20 @@ export default function SubmissionRowItem({ submission, onChanged }: SubmissionR
       setOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal menghapus catatan.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeSubmission() {
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteSubmission(submission.id);
+      await onDeleted?.();
+      setDeleteOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Gagal menghapus pengumpulan.");
     } finally {
       setBusy(false);
     }
@@ -165,6 +183,11 @@ export default function SubmissionRowItem({ submission, onChanged }: SubmissionR
           >
             {submission.feedback ? "Ubah catatan" : "Beri catatan"}
           </Button>
+          {onDeleted && (
+            <Button type="button" variant="outline" size="sm" icon={Trash2} onClick={() => { setError(null); setDeleteOpen(true); }}>
+              Hapus pengumpulan
+            </Button>
+          )}
         </div>
       </div>
 
@@ -214,6 +237,18 @@ export default function SubmissionRowItem({ submission, onChanged }: SubmissionR
         busy={busy}
         onConfirm={() => void save()}
         onCancel={() => !busy && setOpen(false)}
+      />
+      <ConfirmDialog
+        open={deleteOpen}
+        title="Hapus pengumpulan?"
+        message={<>
+          <p>Pengumpulan #{submission.position} oleh {submission.name} akan dihapus. Nomor urut berikutnya akan diperbarui.</p>
+          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+        </>}
+        confirmLabel="Hapus pengumpulan"
+        busy={busy}
+        onConfirm={() => void removeSubmission()}
+        onCancel={() => !busy && setDeleteOpen(false)}
       />
     </div>
   );

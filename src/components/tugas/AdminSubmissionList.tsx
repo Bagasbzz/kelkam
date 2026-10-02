@@ -8,10 +8,11 @@ interface AdminSubmissionListProps {
   submissions: SubmissionRow[];
   /** Dipanggil saat satu baris berubah (mis. catatan disimpan). */
   onChanged?: (updated: SubmissionRow) => void;
+  onDeleted?: () => Promise<void>;
 }
 
 /** Daftar pengumpulan untuk admin, urut dari yang pertama mengumpulkan. */
-export default function AdminSubmissionList({ submissions, onChanged }: AdminSubmissionListProps) {
+export default function AdminSubmissionList({ submissions, onChanged, onDeleted }: AdminSubmissionListProps) {
   if (!submissions.length) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center">
@@ -31,7 +32,7 @@ export default function AdminSubmissionList({ submissions, onChanged }: AdminSub
       </div>
       <div className="space-y-2">
         {submissions.map((s) => (
-          <SubmissionRowItem key={s.id} submission={s} onChanged={onChanged} />
+          <SubmissionRowItem key={s.id} submission={s} onChanged={onChanged} onDeleted={onDeleted} />
         ))}
       </div>
     </div>

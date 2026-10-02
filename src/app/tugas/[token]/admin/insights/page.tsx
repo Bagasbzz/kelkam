@@ -16,6 +16,7 @@ import Button from "@/components/ui/Button";
 import { useAuth } from "@/components/AuthProvider";
 import {
   fetchCourseByToken,
+  fetchMe,
   generateCourseInsights,
   type CourseSummary,
 } from "@/lib/client/tugas-api";
@@ -31,6 +32,7 @@ export default function CourseInsightsPage() {
   const { user, loading: authLoading, openLoginModal } = useAuth();
 
   const [course, setCourse] = useState<CourseSummary | null>(null);
+  const [isManager, setIsManager] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [metrics, setMetrics] = useState<{
@@ -49,8 +51,12 @@ export default function CourseInsightsPage() {
     if (authLoading || !user) return;
     let cancelled = false;
     setLoading(true);
-    fetchCourseByToken(token)
-      .then((d) => !cancelled && setCourse(d.course))
+    Promise.all([fetchCourseByToken(token), fetchMe()])
+      .then(([data, me]) => {
+        if (cancelled) return;
+        setCourse(data.course);
+        setIsManager(me.isAdmin || me.managedCourses.some((item) => item.id === data.course.id));
+      })
       .catch(() => !cancelled && setCourse(null))
       .finally(() => !cancelled && setLoading(false));
     return () => {
@@ -90,7 +96,7 @@ export default function CourseInsightsPage() {
       </div>
     );
   }
-  if (user.role !== "ADMIN") {
+  if (!loading && !isManager) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
@@ -175,7 +181,7 @@ export default function CourseInsightsPage() {
         {!metrics && !insightsLoading && (
           <div className="rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
             <Clock className="mx-auto mb-3 h-6 w-6 text-slate-300" />
-            Belum ada insight. Klik "Generate Insight" di atas.
+            Belum ada insight. Klik &ldquo;Generate Insight&rdquo; di atas.
           </div>
         )}
       </div>

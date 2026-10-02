@@ -105,7 +105,9 @@ Berikan insight actionable dalam 3-4 poin singkat untuk asdos. Bahasa Indonesia,
     try {
       aiInsights = await sendToAIForPurpose(prompt, undefined, "fast");
     } catch (err) {
-      aiInsights = `_(AI belum tersedia: ${err instanceof Error ? err.message : "unknown"}_)`;
+      const status = typeof err === "object" && err !== null && "status" in err ? err.status : "unknown";
+      console.error("AI Insights generation failed (status):", status);
+      aiInsights = "AI Insights sedang tidak tersedia. Statistik pengumpulan tetap dapat dilihat. Hubungi pengelola untuk memeriksa konfigurasi AI server.";
     }
 
     return NextResponse.json({ success: true, metrics, aiInsights });

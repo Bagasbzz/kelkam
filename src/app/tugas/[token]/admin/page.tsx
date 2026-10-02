@@ -9,6 +9,7 @@ import {
   BarChart3,
   ClipboardList,
   Loader2,
+  Pencil,
   Plus,
   ShieldCheck,
   UserPlus,
@@ -22,6 +23,9 @@ import {
   deleteTugas,
   fetchAdminSubmissions,
   fetchCourseByToken,
+  fetchMe,
+  updateCourse,
+  updateCourseClass,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
@@ -41,17 +45,25 @@ export default function CourseAdminDashboard() {
   const { user, loading: authLoading, openLoginModal } = useAuth();
 
   const [course, setCourse] = useState<CourseSummary | null>(null);
+  const [isManager, setIsManager] = useState(false);
   const [tugases, setTugases] = useState<TugasSummary[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [editingCourse, setEditingCourse] = useState(false);
+  const [editingClassId, setEditingClassId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftDescription, setDraftDescription] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchCourseByToken(token);
+      const [data, me] = await Promise.all([fetchCourseByToken(token), fetchMe()]);
+      setIsManager(me.isAdmin || me.managedCourses.some((item) => item.id === data.course.id));
       setCourse(data.course);
       setTugases(data.tugases);
       // Fetch submission counts in parallel (best-effort) — sequential would
@@ -85,6 +97,36 @@ export default function CourseAdminDashboard() {
       await loadAll();
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : "Gagal hapus tugas.");
+    }
+  }
+
+  async function saveCourse() {
+    if (!course) return;
+    setSaving(true);
+    setEditError(null);
+    try {
+      const result = await updateCourse(course.id, { name: draftName, description: draftDescription });
+      setCourse(result.course);
+      setEditingCourse(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Gagal menyimpan mata kuliah.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveClass() {
+    if (!course || !editingClassId) return;
+    setSaving(true);
+    setEditError(null);
+    try {
+      const result = await updateCourseClass(course.id, editingClassId, draftName);
+      setCourse({ ...course, classes: course.classes.map((item) => item.id === editingClassId ? result.class : item) });
+      setEditingClassId(null);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Gagal menyimpan kelas.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -138,8 +180,7 @@ export default function CourseAdminDashboard() {
     );
   }
 
-  // Guard: hanya course admin yang boleh akses. user.role=ADMIN = super admin.
-  if (user.role !== "ADMIN") {
+  if (!isManager) {
     return (
       <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
@@ -206,6 +247,50 @@ export default function CourseAdminDashboard() {
             </Link>
           </div>
         </div>
+
+        <Card>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-bold text-slate-900">Detail mata kuliah</h2>
+            {!editingCourse && <Button type="button" variant="outline" size="sm" icon={Pencil} onClick={() => {
+              setEditingClassId(null);
+              setDraftName(course.name);
+              setDraftDescription(course.description ?? "");
+              setEditError(null);
+              setEditingCourse(true);
+            }}>Ubah</Button>}
+          </div>
+          {editingCourse ? (
+            <form className="mt-4 space-y-3" onSubmit={(event) => { event.preventDefault(); void saveCourse(); }}>
+              <label className="block text-sm font-medium text-slate-700">Nama mata kuliah
+                <input className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-slate-900" value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={160} required disabled={saving} />
+              </label>
+              <label className="block text-sm font-medium text-slate-700">Deskripsi
+                <textarea className="mt-1 w-full rounded-lg border border-slate-300 p-2 text-slate-900" value={draftDescription} onChange={(event) => setDraftDescription(event.target.value)} maxLength={8000} rows={3} disabled={saving} />
+              </label>
+              {editError && <p role="alert" className="text-sm text-red-600">{editError}</p>}
+              <div className="flex gap-2"><Button type="submit" disabled={saving}>Simpan</Button><Button type="button" variant="outline" disabled={saving} onClick={() => setEditingCourse(false)}>Batal</Button></div>
+            </form>
+          ) : <p className="mt-2 text-sm text-slate-600">{course.name}{course.description ? ` · ${course.description}` : ""}</p>}
+
+          <h3 className="mt-6 text-sm font-bold text-slate-900">Kelas</h3>
+          <div className="mt-2 space-y-2">
+            {course.classes.map((item) => <div key={item.id} className="flex flex-wrap items-center gap-2 border-b border-slate-100 py-2">
+              {editingClassId === item.id ? (
+                <form className="flex flex-1 flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); void saveClass(); }}>
+                  <input aria-label="Nama kelas" className="min-w-0 flex-1 rounded-lg border border-slate-300 p-2 text-slate-900" value={draftName} onChange={(event) => setDraftName(event.target.value)} maxLength={40} required disabled={saving} />
+                  <Button type="submit" size="sm" disabled={saving}>Simpan</Button>
+                  <Button type="button" variant="outline" size="sm" disabled={saving} onClick={() => setEditingClassId(null)}>Batal</Button>
+                  {editError && <p role="alert" className="w-full text-sm text-red-600">{editError}</p>}
+                </form>
+              ) : <><span className="flex-1 text-sm text-slate-700">{item.name}</span><Button type="button" variant="outline" size="sm" icon={Pencil} onClick={() => {
+                setEditingCourse(false);
+                setEditingClassId(item.id);
+                setDraftName(item.name);
+                setEditError(null);
+              }}>Ubah</Button></>}
+            </div>)}
+          </div>
+        </Card>
 
         <Card>
           <div className="flex flex-wrap items-center justify-between gap-3">

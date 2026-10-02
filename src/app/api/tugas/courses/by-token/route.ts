@@ -76,7 +76,7 @@ export async function GET(req: Request) {
           updatedAt: t.updatedAt.toISOString(),
         })),
       },
-      { headers: { "Cache-Control": "private, max-age=15" } },
+      { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (error) {
     console.error("API /api/tugas/courses/by-token failed:", error);

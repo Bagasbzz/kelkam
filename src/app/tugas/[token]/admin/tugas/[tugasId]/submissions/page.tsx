@@ -68,6 +68,11 @@ export default function AdminSubmissionsPage() {
     setSubmissions((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   }
 
+  async function refreshSubmissions() {
+    const result = await fetchAdminSubmissions(tugasId);
+    setSubmissions(result.submissions);
+  }
+
   if (authLoading || (user && loading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -157,7 +162,7 @@ export default function AdminSubmissionsPage() {
             Urut dari yang pertama mengumpulkan. Kamu bisa memberi catatan ke tiap mahasiswa.
           </p>
           <div className="mt-5">
-            <AdminSubmissionList submissions={submissions} onChanged={replaceRow} />
+            <AdminSubmissionList submissions={submissions} onChanged={replaceRow} onDeleted={refreshSubmissions} />
           </div>
         </Card>
       </div>

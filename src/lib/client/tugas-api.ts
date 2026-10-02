@@ -29,7 +29,6 @@ export class ApiClientError extends Error {
     this.name = "ApiClientError";
   }
 }
-
 // ---------------------------------------------------------------------------
 // Shared types (mirror Prisma shape — boleh ringkas)
 // ---------------------------------------------------------------------------
@@ -148,7 +147,8 @@ export function fetchMe() {
 export function fetchCourseByToken(token: string) {
   const qs = new URLSearchParams({ token }).toString();
   return request<{ course: CourseSummary; tugases: TugasSummary[] }>(
-    `/api/tugas/courses/by-token?${qs}`
+    `/api/tugas/courses/by-token?${qs}`,
+    { cache: "no-store" },
   );
 }
 
@@ -170,6 +170,19 @@ export function addCourseClass(courseId: string, name: string) {
   return request<{ class: { id: string; name: string } }>(
     `/api/tugas/courses/${courseId}/classes`,
     { method: "POST", json: { name } }
+  );
+}
+
+export function updateCourse(courseId: string, input: { name: string; description: string }) {
+  return request<{ course: CourseSummary }>(`/api/tugas/courses/${courseId}`, {
+    method: "PATCH", json: input,
+  });
+}
+
+export function updateCourseClass(courseId: string, classId: string, name: string) {
+  return request<{ class: { id: string; name: string } }>(
+    `/api/tugas/courses/${courseId}/classes/${classId}`,
+    { method: "PATCH", json: { name } },
   );
 }
 
@@ -260,6 +273,12 @@ export function clearSubmissionFeedback(submissionId: string) {
     `/api/tugas/submissions/${submissionId}/feedback`,
     { method: "DELETE" }
   );
+}
+
+export function deleteSubmission(submissionId: string) {
+  return request<{ success: true }>(`/api/tugas/submissions/${submissionId}`, {
+    method: "DELETE",
+  });
 }
 
 export function fetchMySubmission(tugasId: string) {
