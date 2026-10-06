@@ -97,8 +97,11 @@ export default function SkripsiEditor({ content, onChange }: SkripsiEditorProps)
   }, []);
 
   const editor = useEditor({
+    immediatelyRender: false,
     extensions: [
-      StarterKit,
+      StarterKit.configure({
+        heading: false,
+      }),
       Underline,
       TextStyle,
       Color,

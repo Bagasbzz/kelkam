@@ -45,6 +45,16 @@ export default function AuthMenu() {
     return subscribeLoginModal(() => setOpen(true));
   }, []);
 
+  // Tutup dengan Escape key
+  useEffect(() => {
+    if (!open) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
+
   /**
    * Submit handler. Mode 'register' dipanggil langsung ke /api/auth/register
    * untuk dapat error message yang lebih presisi dari server.
@@ -107,11 +117,19 @@ export default function AuthMenu() {
 
       {/* Modal login / register */}
       {open && (
-        <div className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auth-modal-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setOpen(false);
+          }}
+          className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm overflow-y-auto"
+        >
+          <div className="w-full max-w-md my-auto max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
-                <h2 className="text-xl font-black text-slate-900">
+                <h2 id="auth-modal-title" className="text-xl font-black text-slate-900">
                   {mode === "login" ? "Masuk" : "Buat akun"}
                 </h2>
                 <p className="mt-1 text-sm text-slate-500">
@@ -121,7 +139,7 @@ export default function AuthMenu() {
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                className="shrink-0 rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                 aria-label="Tutup"
               >
                 <X className="h-5 w-5" />

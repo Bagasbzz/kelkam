@@ -9,7 +9,7 @@ import type { Instance } from 'tippy.js'
 import type { SuggestionKeyDownProps, SuggestionProps } from '@tiptap/suggestion'
 import { 
   Heading1, Heading2, Heading3,
-  Type, Image as ImageIcon, Sparkles,
+  Type, Image as ImageIcon, Bot,
   Quote, FileText
 } from 'lucide-react'
 
@@ -137,7 +137,7 @@ export const suggestion = {
       {
         title: 'AI Paraphrase',
         description: 'Perbaiki kalimat agar lebih akademis',
-        icon: <Sparkles className="w-4 h-4" />,
+        icon: <Bot className="w-4 h-4" />,
         command: ({ editor, range }: { editor: Editor; range: Range }) => {
           const text = prompt("Masukkan kalimat yang ingin diperbaiki:")
           if (text) {

@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import FileUpload from "@/components/FileUpload";
-import { Sparkles, ArrowRight, FileText, Search, AlertCircle, Wand2, PenTool } from "lucide-react";
+import { ShieldCheck, Layers, ArrowRight, FileText, Search, AlertCircle, Wand2, PenTool } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import { useRouter } from "next/navigation";
@@ -165,7 +165,7 @@ export default function FixFormatPage() {
             <p className="text-xs text-gray-400">{mode === "format" ? "File hasil rapi langsung terunduh setelah proses selesai." : "Teks dirapikan ke dalam model dokumen terpadu."}</p>
           </Card>
           <Card className="p-5 md:p-6 border-dashed bg-gray-50/50 sm:col-span-2 md:col-span-1">
-            <Sparkles className="w-6 h-6 text-amber-500 mb-4" />
+            <ShieldCheck className="w-6 h-6 text-amber-500 mb-4" />
             <h3 className="font-bold text-sm mb-2">{mode === "format" ? "Aturan Kampus" : "Editor Terpadu"}</h3>
             <p className="text-xs text-gray-400">{mode === "format" ? "Cocok buat revisi dosen cepat sebelum print atau submit." : "Lanjutkan penulisan dengan formatting standar."}</p>
           </Card>
@@ -196,7 +196,7 @@ export default function FixFormatPage() {
               <Card className="p-5 md:p-8 border-blue-100 bg-blue-50/20">
                 <div className="flex items-center gap-4 mb-6">
                   <div className="shrink-0 w-12 h-12 bg-white rounded-2xl flex items-center justify-center shadow-sm">
-                    <Sparkles className="w-6 h-6 text-blue-600" />
+                    <Layers className="w-6 h-6 text-blue-600" />
                   </div>
                   <div>
                     <h3 className="font-black text-lg md:text-xl text-gray-900">Struktur Berhasil Dideteksi</h3>

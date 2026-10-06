@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, User, CheckCircle2, ArrowRight, Settings2, ShieldCheck, Layout } from "lucide-react";
+import { User, CheckCircle2, ArrowRight, Settings2, ShieldCheck, Layout } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Button from "@/components/ui/Button";
@@ -228,7 +228,7 @@ export default function SmartTemplatePage() {
                   variant="primary"
                   size="xl"
                   className="flex-1"
-                  icon={Sparkles}
+                  icon={Layout}
                 >
                   BUKA EDITOR DOKUMEN
                 </Button>

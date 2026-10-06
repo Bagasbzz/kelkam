@@ -5,7 +5,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Loader2,
-  Sparkles,
+  Bot,
   Upload,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -119,7 +119,7 @@ export default function MahasiswaBulkImport({
               : "border-slate-200 bg-white text-slate-500 hover:bg-slate-50"
           }`}
         >
-          <Sparkles className="mr-1 inline h-3 w-3" />
+          <Bot className="mr-1 inline h-3 w-3" />
           Analisa dengan AI
         </button>
       </div>
@@ -171,7 +171,7 @@ export default function MahasiswaBulkImport({
           <Button
             variant="primary"
             size="sm"
-            icon={tab === "ai" ? Sparkles : Upload}
+            icon={tab === "ai" ? Bot : Upload}
             onClick={() => void doImport()}
             isLoading={busy}
             disabled={busy}

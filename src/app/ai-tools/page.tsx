@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, FileSearch, Type, Copy, Check } from "lucide-react";
+import { Bot, FileSearch, Type, Copy, Check } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Textarea from "@/components/ui/Textarea";
@@ -62,7 +62,7 @@ export default function AIToolsPage() {
           </p>
         </div>
 
-        <div className="flex items-center justify-center p-1 bg-gray-50 rounded-[2rem] max-w-sm mx-auto mb-12 border border-gray-100 mx-2 sm:mx-auto">
+        <div className="flex items-center justify-center p-1 bg-gray-50 rounded-[2rem] max-w-sm mx-auto mb-12 border border-gray-100">
           <button 
             onClick={() => { setActiveTab("checker"); setInputText(""); setResult(""); setError(""); }}
             className={`flex-1 py-3 px-6 rounded-[1.8rem] text-sm font-black transition-all flex items-center justify-center gap-2 ${activeTab === "checker" ? 'bg-white shadow-lg text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
@@ -106,7 +106,7 @@ export default function AIToolsPage() {
                   disabled={isLoading || !inputText.trim()}
                   variant={activeTab === "checker" ? "primary" : "secondary"}
                   isLoading={isLoading}
-                  icon={Sparkles}
+                  icon={Bot}
                 >
                   {activeTab === "checker" ? "Cek Struktur" : "Rewrite"}
                 </Button>
@@ -143,12 +143,12 @@ export default function AIToolsPage() {
                    <p className="text-sm font-medium">{error}</p>
                 </div>
               ) : (
-                <div className="flex-1 flex flex-col items-center justify-center space-y-6 text-center opacity-20 py-20">
-                  <div className="w-20 h-20 rounded-[2rem] border-4 border-dashed border-gray-300 flex items-center justify-center">
-                    <Sparkles className="w-8 h-8" />
+                <div className="flex-1 flex flex-col items-center justify-center space-y-6 text-center opacity-30 py-20">
+                  <div className="w-20 h-20 rounded-[2rem] border-2 border-dashed border-gray-300 flex items-center justify-center text-gray-400">
+                    <Bot className="w-8 h-8" />
                   </div>
-                  <p className="max-w-[200px] text-sm font-bold leading-relaxed lowercase">
-                    Klik tombol bintang untuk melihat analisis AI di sini.
+                  <p className="max-w-[220px] text-sm font-medium leading-relaxed text-gray-500">
+                    Klik tombol di bawah teks untuk memulai pemeriksaan.
                   </p>
                 </div>
               )}

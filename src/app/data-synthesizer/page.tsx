@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from 'react';
-import { BookOpen, CheckCircle2, ClipboardCopy, Loader2, Sparkles, MessageSquare, ListTree, FileText } from 'lucide-react';
+import { BookOpen, CheckCircle2, ClipboardCopy, Loader2, Bot, FileEdit, FileSpreadsheet, MessageSquare, ListTree, FileText } from 'lucide-react';
 import styles from './synthesizer.module.css';
 import { authenticatedFetch } from "@/components/AuthProvider";
 
@@ -169,7 +169,7 @@ export default function DataSynthesizerPage() {
                 className="text-xs flex items-center gap-1 font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors"
                 title="Bingung isi apa? Klik untuk melihat contoh"
               >
-                <Sparkles size={14} /> Isi Contoh Data
+                <FileSpreadsheet size={14} /> Isi Contoh Data
               </button>
             </div>
 
@@ -217,7 +217,7 @@ export default function DataSynthesizerPage() {
                 {isGenerating ? (
                   <><Loader2 className={styles.spinner} size={20} /> Memproses Data...</>
                 ) : (
-                  <><Sparkles size={20} /> Generate Laporan</>
+                  <><Bot size={20} /> Generate Laporan</>
                 )}
               </button>
             </div>
@@ -258,7 +258,7 @@ export default function DataSynthesizerPage() {
               <div className="flex flex-wrap gap-2 mt-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
                 <span className="w-full text-sm font-medium text-slate-500 mb-1">Lanjutkan dengan:</span>
                 <button className="flex items-center gap-2 px-3 py-2 bg-white text-slate-700 text-sm font-medium rounded-lg border border-slate-200 hover:border-blue-400 hover:text-blue-600 transition-all shadow-sm" onClick={() => handleAction('expand')}>
-                  <Sparkles size={14} /> Perpanjang Narasi
+                  <FileEdit size={14} /> Perpanjang Narasi
                 </button>
                 <button className="flex items-center gap-2 px-3 py-2 bg-white text-slate-700 text-sm font-medium rounded-lg border border-slate-200 hover:border-indigo-400 hover:text-indigo-600 transition-all shadow-sm" onClick={() => handleAction('formalize')}>
                   <BookOpen size={14} /> Bahasa Lebih Formal

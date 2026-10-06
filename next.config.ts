@@ -68,7 +68,7 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self' ${siteOrigin} ${aiOrigins.join(" ")}`,
+  `connect-src 'self' ${siteOrigin} ${aiOrigins.join(" ")}${isDevelopment ? " ws: wss:" : ""}`,
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

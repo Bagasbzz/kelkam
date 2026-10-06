@@ -33,6 +33,9 @@ import {
 import { assignPositionWithRetry, isPrismaUniqueViolation } from "@/lib/server/tugas/position";
 import { serializeSubmission, submissionInclude } from "@/lib/server/tugas/serialize";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const SubmitSchema = z.object({
   classId: z.string().min(1, "Pilih kelas dulu."),
   nim: z.string().trim().min(3, "NIM terlalu pendek.").max(40, "NIM tidak valid."),

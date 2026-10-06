@@ -16,7 +16,7 @@
  *   - IconWrench  : buat /tools (utility)
  *   - IconFlow    : buat /uml-builder (flow/loop)
  *   - IconBook    : buat /data-synthesizer (data narasi)
- *   - IconSpark   : buat /ai-tools (AI sparkle)
+ *   - IconSpark   : buat /ai-tools (cognitive/neural node)
  *   - IconType    : buat /fix-format (typography)
  *   - IconLayout  : buat /template-generator (layout)
  *   - IconPulse   : buat /tracker (tracker/pulse)
@@ -134,18 +134,14 @@ export function IconBook(props: IconProps) {
   );
 }
 
-/** Sparkle — buat /ai-tools. */
+/** Neural node / cognitive assistant — pengganti sparkle bintang untuk AI. */
 export function IconSpark(props: IconProps) {
   return (
     <svg {...base(props)}>
-      <path d="M12 4v4" />
-      <path d="M12 16v4" />
-      <path d="M4 12h4" />
-      <path d="M16 12h4" />
-      <path d="m6.3 6.3 2.8 2.8" />
-      <path d="m14.9 14.9 2.8 2.8" />
-      <path d="m17.7 6.3-2.8 2.8" />
-      <path d="m9.1 14.9-2.8 2.8" />
+      <path d="M12 2a4 4 0 0 0-4 4c0 1.6.9 2.9 2.2 3.6L9 14h6l-1.2-4.4c1.3-.7 2.2-2 2.2-3.6a4 4 0 0 0-4-4Z" />
+      <path d="M9 18h6" />
+      <path d="M10 22h4" />
+      <circle cx="12" cy="6" r="1" fill="currentColor" />
     </svg>
   );
 }

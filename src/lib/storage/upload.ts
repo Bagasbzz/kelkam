@@ -42,6 +42,7 @@ import { promises as fs } from "fs";
 import { createHash } from "crypto";
 import path from "path";
 import { prisma } from "@/lib/db/prisma";
+import { Prisma } from "@prisma/client";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -128,16 +129,35 @@ export async function saveUpload(input: {
   await fs.writeFile(filePath, input.buffer);
 
   // Catat di DB.
-  const row = await prisma.fileUpload.create({
-    data: {
-      sha256,
-      ownerId: input.ownerId,
-      filePath,
-      mime: input.mime,
-      size: input.buffer.byteLength,
-      originalName: input.originalName,
-    },
-  });
+  let row;
+  try {
+    row = await prisma.fileUpload.create({
+      data: {
+        sha256,
+        ownerId: input.ownerId,
+        filePath,
+        mime: input.mime,
+        size: input.buffer.byteLength,
+        originalName: input.originalName,
+      },
+    });
+  } catch (error) {
+    // Dua upload identik yang masuk bersamaan bisa sama-sama lolos findUnique.
+    // Jadikan unique SHA256 sebagai dedup normal, lalu hapus file sementara.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      await fs.unlink(filePath).catch(() => undefined);
+      const concurrent = await prisma.fileUpload.findUnique({ where: { sha256 } });
+      if (concurrent) {
+        return {
+          id: concurrent.id,
+          sha256: concurrent.sha256,
+          filePath: concurrent.filePath,
+          deduplicated: true,
+        };
+      }
+    }
+    throw error;
+  }
 
   return { id: row.id, sha256: row.sha256, filePath: row.filePath, deduplicated: false };
 }

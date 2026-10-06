@@ -18,6 +18,7 @@ import KelasPicker from "./KelasPicker";
 import PositionBadge from "./PositionBadge";
 import { useAuth } from "@/components/AuthProvider";
 import {
+  ApiClientError,
   fetchMySubmission,
   submitTugas,
   updateMySubmission,
@@ -190,6 +191,8 @@ export default function SubmissionForm({
     }
 
     setBusy(true);
+    let submitStarted = false;
+    let submittedFileUploadId: string | null = null;
     try {
       let fileUploadId: string | undefined;
       if (file) {
@@ -206,6 +209,8 @@ export default function SubmissionForm({
         note: note.trim() || undefined,
         fileUploadId,
       };
+      submittedFileUploadId = fileUploadId ?? null;
+      submitStarted = true;
       const result = editing
         ? await updateMySubmission(tugasId, payload)
         : await submitTugas(tugasId, payload);
@@ -217,6 +222,43 @@ export default function SubmissionForm({
       setPopup({ position: result.position, total: result.total, edited: editing });
       onSubmitted?.(result.submission, result.position, result.total);
     } catch (err) {
+      // Response bisa hilang setelah server berhasil menyimpan. Baca ulang
+      // hanya setelah request submit dimulai agar upload yang gagal tidak
+      // dianggap sebagai pengumpulan yang berhasil.
+      if (submitStarted && err instanceof ApiClientError && err.status === 0) {
+        try {
+          const recovered = await fetchMySubmission(tugasId);
+          const recoveredSubmission = recovered.submission;
+          const expectedNote = note.trim() || null;
+          const matchesRequest =
+            recoveredSubmission &&
+            recoveredSubmission.classId === classId &&
+            recoveredSubmission.nim === nim.trim() &&
+            recoveredSubmission.name === name.trim() &&
+            recoveredSubmission.note === expectedNote &&
+            (recoveredSubmission.fileUpload?.id ?? null) === submittedFileUploadId;
+
+          if (matchesRequest) {
+            setExisting(recoveredSubmission);
+            setCount(recovered.count);
+            setEditing(false);
+            setFile(null);
+            setPopup({
+              position: recovered.myPosition ?? recoveredSubmission.position,
+              total: recovered.count,
+              edited: editing,
+            });
+            onSubmitted?.(
+              recoveredSubmission,
+              recovered.myPosition ?? recoveredSubmission.position,
+              recovered.count,
+            );
+            return;
+          }
+        } catch {
+          // Tampilkan error asli kalau verifikasi ulang juga gagal.
+        }
+      }
       setError(err instanceof Error ? err.message : "Gagal mengirim.");
     } finally {
       setBusy(false);

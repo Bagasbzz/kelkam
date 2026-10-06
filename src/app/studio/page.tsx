@@ -23,7 +23,6 @@ import {
   Save,
   Settings2,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Unlock,
   Upload,
@@ -662,7 +661,7 @@ function QuestionsPanel({ questions, unresolvedCount, drafts, setDrafts, showRes
         <div><p className="text-2xl font-bold">{unresolvedCount} <span className="text-sm text-slate-300">belum dijawab</span></p></div>
         <button onClick={() => setShowResolved(!showResolved)} className="rounded-lg border border-slate-700 px-3 py-2 text-xs font-semibold">{showResolved ? "Sembunyikan yang selesai" : "Lihat semua jawaban"}</button>
       </div>
-      <details className="mb-5 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Butuh pertanyaan tambahan?</summary><button onClick={() => void runDeepScan()} disabled={deepScanning} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{deepScanning ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <Sparkles className="mr-1 inline h-4 w-4" />}Cari dengan AI</button></details>
+      <details className="mb-5 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Butuh pertanyaan tambahan?</summary><button onClick={() => void runDeepScan()} disabled={deepScanning} className="mt-3 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{deepScanning ? <Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> : <BrainCircuit className="mr-1 inline h-4 w-4" />}Cari dengan AI</button></details>
       {findings.length > 0 && <div className="mb-5 rounded-2xl border border-violet-200 bg-violet-50 p-4"><p className="text-xs font-bold text-violet-700">Temuan dari bahan kamu</p><ul className="mt-2 space-y-1 text-sm font-semibold text-violet-900">{findings.map((finding) => <li key={finding}>• {finding}</li>)}</ul></div>}
       <div className="space-y-4">
         {questions.length === 0 ? <EmptyState>Semua pertanyaan yang ditampilkan sudah selesai.</EmptyState> : questions.map((question, index) => {

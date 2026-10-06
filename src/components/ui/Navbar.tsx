@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Top navigation. Karena web punya 10 halaman, navbar dipecah jadi:
  *
- *   1. PRIMARY (3 link) — yang paling sering diakses: Studio, Laporan, Tugas.
+ *   1. PRIMARY (4 link) — yang paling sering diakses: Studio, Laporan, Bimbingan AI, Tugas.
  *   2. DROPDOWN "Lainnya" — 7 utility link dikelompokkan per kategori:
  *        - Rancang (UML, Editor)
  *        - Olah Data (Data Synthesizer)
@@ -57,6 +57,7 @@ interface NavGroup {
 const PRIMARY_LINKS: NavItem[] = [
   { href: "/studio", label: "Studio", icon: IconBrain },
   { href: "/dashboard", label: "Laporan", icon: IconChart },
+  { href: "/laporan-chat", label: "Bimbingan AI", icon: IconSpark },
   { href: "/tugas", label: "Tugas", icon: IconCheck },
 ];
 

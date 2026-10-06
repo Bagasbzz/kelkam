@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
-import { Zap, CheckCircle2, Square, Sparkles, BrainCircuit, X, Upload } from 'lucide-react';
+import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData } from '@/lib/uml/diagram-guard';
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
@@ -1238,7 +1238,7 @@ export default function UMLBuilder() {
           {showOnboarding && (
             <div style={{ background: 'linear-gradient(to right, #eef2ff, #e0e7ff)', border: '1px solid #c7d2fe', borderRadius: '12px', padding: '12px 16px', fontSize: '0.85rem', color: '#3730a3', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}><Sparkles size={16} /> Cara Pakai:</strong>
+                <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}><HelpCircle size={16} /> Cara Pakai:</strong>
                 <button aria-label="Tutup petunjuk" onClick={() => { setShowOnboarding(false); localStorage.setItem('uml-onboarding-seen', '1'); }} style={{ background: 'white', border: '1px solid #c7d2fe', borderRadius: '50%', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#6366f1' }}><X size={14} /></button>
               </div>
               <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.5 }}>
@@ -1534,7 +1534,7 @@ export default function UMLBuilder() {
           onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.boxShadow = '0 4px 14px rgba(79, 70, 229, 0.4)'; }}
           title="Bikin Diagram Otomatis dengan AI"
         >
-          <Sparkles size={32} />
+          <BrainCircuit size={32} />
         </button>
       </div>
 
@@ -1576,7 +1576,7 @@ export default function UMLBuilder() {
               alignItems: 'center'
             }}>
               <h3 id="uml-ai-dialog-title" style={{ fontSize: '1rem', fontWeight: 700, color: '#4f46e5', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <Sparkles size={18} />
+                <BrainCircuit size={18} />
                 AI UML Assistant
               </h3>
               <button 
@@ -1820,7 +1820,7 @@ export default function UMLBuilder() {
                   ? <><BrainCircuit size={18} /> Mikirin Diagram...</>
                   : aiMode === 'clarify' && aiClarificationQuestions.length === 0
                     ? <><BrainCircuit size={18} /> Tanya Dulu</>
-                    : <><Sparkles size={18} /> {aiMode === 'clarify' ? 'Lanjutkan Generate' : 'Generate / Update Diagram'}</>}
+                    : <><BrainCircuit size={18} /> {aiMode === 'clarify' ? 'Lanjutkan Generate' : 'Generate / Update Diagram'}</>}
               </button>
             </div>
           </div>

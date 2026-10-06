@@ -21,7 +21,7 @@ import {
   PenLine,
   Plus,
   Save,
-  Sparkles,
+  Bot,
   Table2,
   Trash2,
   Upload,
@@ -902,7 +902,7 @@ export default function ReportBuilderPage() {
                 <p className="text-sm text-slate-600">{assistantMessage}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                {(activeStep === "setup" || activeStep === "context") && <><button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Sparkles className="w-4 h-4" /> Buat draf laporan</button><button onClick={generatePlan} className="rounded-lg border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-blue-700">{project.outline.length ? "Buat ulang kerangka" : "Lihat kerangka dulu"}</button></>}
+                {(activeStep === "setup" || activeStep === "context") && <><button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Bot className="w-4 h-4" /> Buat draf laporan</button><button onClick={generatePlan} className="rounded-lg border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-blue-700">{project.outline.length ? "Buat ulang kerangka" : "Lihat kerangka dulu"}</button></>}
               </div>
             </div>
             {isGeneratingReport && (
@@ -1272,14 +1272,14 @@ export default function ReportBuilderPage() {
         <section className={`${activeStep === "draft" ? "" : "hidden"} mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center"><Sparkles className="w-5 h-5" /></div>
+              <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center"><FileText className="w-5 h-5" /></div>
               <div>
                 <h2 className="text-xl font-black">Draft Laporan Lengkap</h2>
                 <p className="text-sm text-slate-500">Hasil akhir disusun dari konteks, outline, tabel, daftar UML, dan referensi yang sudah disimpan.</p>
               </div>
             </div>
             <button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40">
-              <Sparkles className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
+              <Bot className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
             </button>
           </div>
           {!project.reportDraft ? (

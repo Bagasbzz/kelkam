@@ -29,6 +29,32 @@ export class ApiClientError extends Error {
     this.name = "ApiClientError";
   }
 }
+
+const REQUEST_TIMEOUT_MS = 45_000;
+const UPLOAD_TIMEOUT_MS = 60_000;
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await authenticatedFetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    const message = isAbortError(error)
+      ? "Koneksi ke server terlalu lama. Coba lagi."
+      : "Koneksi ke server terputus. Periksa internet lalu coba lagi.";
+    throw new ApiClientError(0, message);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 // ---------------------------------------------------------------------------
 // Shared types (mirror Prisma shape — boleh ringkas)
 // ---------------------------------------------------------------------------
@@ -121,11 +147,15 @@ async function request<T>(
   };
   const body = json !== undefined ? JSON.stringify(json) : rest.body;
 
-  const resp = await authenticatedFetch(path, {
-    ...rest,
-    body,
-    headers: json !== undefined ? { ...headers, "Content-Type": "application/json" } : headers,
-  });
+  const resp = await fetchWithTimeout(
+    path,
+    {
+      ...rest,
+      body,
+      headers: json !== undefined ? { ...headers, "Content-Type": "application/json" } : headers,
+    },
+    REQUEST_TIMEOUT_MS,
+  );
 
   const payload = (await resp.json().catch(() => ({ success: false }))) as {
     success?: boolean;
@@ -437,19 +467,34 @@ export async function uploadSubmissionFile(file: File): Promise<{
 }> {
   const form = new FormData();
   form.append("file", file);
-  const resp = await authenticatedFetch("/api/files/upload", {
-    method: "POST",
-    body: form,
-  });
-  const json = (await resp.json().catch(() => ({ success: false }))) as {
-    success?: boolean;
-    error?: string;
-    data?: { fileId: string; sha256: string; size: number; mime: string };
-  };
-  if (!resp.ok || !json?.success || !json.data) {
-    throw new ApiClientError(resp.status, json?.error || "Upload gagal.");
+  let lastError: unknown;
+
+  // Upload boleh diulang karena endpoint melakukan deduplikasi berdasarkan SHA256.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const resp = await fetchWithTimeout(
+        "/api/files/upload",
+        { method: "POST", body: form },
+        UPLOAD_TIMEOUT_MS,
+      );
+      const json = (await resp.json().catch(() => ({ success: false }))) as {
+        success?: boolean;
+        error?: string;
+        data?: { fileId: string; sha256: string; size: number; mime: string };
+      };
+      if (!resp.ok || !json?.success || !json.data) {
+        throw new ApiClientError(resp.status, json?.error || "Upload gagal.");
+      }
+      return json.data;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof ApiClientError) || error.status !== 0 || attempt === 1) {
+        throw error;
+      }
+    }
   }
-  return json.data;
+
+  throw lastError instanceof Error ? lastError : new ApiClientError(0, "Upload gagal.");
 }
 
 export function fetchCourseMaterials(courseId: string, token: string) {

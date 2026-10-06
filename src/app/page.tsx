@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Sparkles, X } from "lucide-react";
+import { ArrowRight, Bot, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -262,13 +262,20 @@ export default function Home() {
 
       {/* Confirmation Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md transition-all">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="report-modal-title"
+          className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md transition-all"
+        >
           <div className="bg-white w-full max-w-md rounded-[2rem] md:rounded-[2.5rem] p-6 md:p-10 shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-200">
             <div className="flex justify-between items-start mb-6 md:mb-8">
-              <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center">
-                <Sparkles className="w-6 h-6 md:w-7 md:h-7" />
+              <div className="w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                <Bot className="w-6 h-6 md:w-7 md:h-7" />
               </div>
               <button
+                type="button"
+                aria-label="Tutup modal"
                 onClick={() => setShowModal(false)}
                 className="p-2 hover:bg-slate-50 rounded-full transition-colors"
               >
@@ -276,7 +283,7 @@ export default function Home() {
               </button>
             </div>
 
-            <h3 className="text-xl md:text-2xl font-bold text-slate-900 mb-3 md:mb-4">Penyusun laporan</h3>
+            <h3 id="report-modal-title" className="text-xl md:text-2xl font-bold text-slate-900 mb-3 md:mb-4">Penyusun laporan</h3>
             <p className="text-slate-500 text-base md:text-lg leading-relaxed mb-8 md:mb-10 font-medium">
               Fitur ini membantu menyusun laporan praktikum, makalah, capstone, dan skripsi. Lanjut?
             </p>

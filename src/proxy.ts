@@ -59,7 +59,6 @@ const PROTECTED_API_PREFIXES = [
   "/api/research/",
   "/api/studio/",
   "/api/files/",
-  "/api/auth/me",
   "/api/tugas/",
 ];
 
