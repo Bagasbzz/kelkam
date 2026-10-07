@@ -3,8 +3,8 @@
  * -----------------------------------------------------------------------------
  * Admin course memberi satu catatan (feedback) ke pengumpulan mahasiswa.
  *
- *   PUT    body { feedback: string }  → set / ubah catatan
- *   DELETE                            → hapus catatan
+ *   PUT    body { feedback?: string, nilai?: number|null }  → set / ubah catatan dan/atau nilai (0-100)
+ *   DELETE                            → hapus catatan (nilai tetap)
  *
  *   200 { success, submission }
  *   400 catatan kosong / terlalu panjang
@@ -20,13 +20,25 @@ import { requireCourseAdmin } from "@/lib/server/auth";
 import { ApiRequestError, publicErrorResponse } from "@/lib/server/request-guards";
 import { serializeSubmission, submissionInclude } from "@/lib/server/tugas/serialize";
 
-const FeedbackSchema = z.object({
-  feedback: z
-    .string()
-    .trim()
-    .min(1, "Catatan tidak boleh kosong.")
-    .max(4000, "Catatan terlalu panjang (maks. 4000 karakter)."),
-});
+const FeedbackSchema = z
+  .object({
+    feedback: z
+      .string()
+      .trim()
+      .min(1, "Catatan tidak boleh kosong.")
+      .max(4000, "Catatan terlalu panjang (maks. 4000 karakter).")
+      .optional(),
+    nilai: z
+      .number()
+      .int()
+      .min(0, "Nilai minimal 0.")
+      .max(100, "Nilai maksimal 100.")
+      .nullable()
+      .optional(),
+  })
+  .refine((v) => v.feedback !== undefined || v.nilai !== undefined, {
+    message: "Isi catatan atau nilai.",
+  });
 
 async function loadForAdmin(submissionId: string) {
   const row = await prisma.tugasSubmission.findUnique({
@@ -60,9 +72,22 @@ export async function PUT(
       );
     }
 
+    const now = new Date();
+    const data: Record<string, unknown> = {};
+    if (parsed.data.feedback !== undefined) {
+      data.feedback = parsed.data.feedback;
+      data.feedbackAt = now;
+      data.feedbackById = adminId;
+    }
+    if (parsed.data.nilai !== undefined) {
+      data.nilai = parsed.data.nilai;
+      data.nilaiAt = parsed.data.nilai === null ? null : now;
+      data.nilaiById = parsed.data.nilai === null ? null : adminId;
+    }
+
     const submission = await prisma.tugasSubmission.update({
       where: { id },
-      data: { feedback: parsed.data.feedback, feedbackAt: new Date(), feedbackById: adminId },
+      data,
       include: adminInclude,
     });
     return NextResponse.json({ success: true, submission: serializeSubmission(submission) });

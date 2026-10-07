@@ -92,6 +92,7 @@ model User {
   tugasesCreated Tugas[]            @relation("TugasCreator")
   submissions    TugasSubmission[]
   feedbacksGiven TugasSubmission[]  @relation("SubmissionFeedbackBy")
+  nilaiGiven     TugasSubmission[]  @relation("SubmissionNilaiBy")
 
   @@map("users")
 }
@@ -255,6 +256,7 @@ model FileUpload {
   createdAt    DateTime @default(now()) @map("created_at")
 
   submissions TugasSubmission[]
+  extracted   ExtractedText?
 
   @@index([ownerId])
   @@index([createdAt])
@@ -553,6 +555,8 @@ model Tugas {
   title       String
   description String       @db.Text
   deadline    DateTime     @map("deadline")
+  // Nomor pertemuan (1..n). Opsional; diisi manual atau ditebak AI dari judul.
+  pertemuan   Int?         @map("pertemuan")
   createdById String       @map("created_by_id")
   createdBy   User         @relation("TugasCreator", fields: [createdById], references: [id], onDelete: Cascade)
   createdAt   DateTime     @default(now()) @map("created_at")
@@ -601,6 +605,14 @@ model TugasSubmission {
   feedbackById String?          @map("feedback_by_id")
   feedbackBy   User?            @relation("SubmissionFeedbackBy", fields: [feedbackById], references: [id], onDelete: SetNull)
 
+  // Nilai angka 0-100 (huruf dihitung otomatis di aplikasi).
+  nilai        Int?             @map("nilai")
+  nilaiAt      DateTime?        @map("nilai_at")
+  nilaiById    String?          @map("nilai_by_id")
+  nilaiBy      User?            @relation("SubmissionNilaiBy", fields: [nilaiById], references: [id], onDelete: SetNull)
+
+  analysis     SubmissionAnalysis?
+
   // (tugasId, userId) — satu user cuma boleh submit 1x per tugas.
   @@unique([tugasId, userId])
   // (tugasId, position) — atomic position assignment + anti race condition
@@ -635,4 +647,79 @@ model Mahasiswa {
   @@unique([courseId, nim])
   @@index([courseId, classId])
   @@map("mahasiswas")
+}
+
+/**
+ * Teks hasil ekstraksi file upload (PDF/DOCX/ZIP/teks). Diekstrak sekali per
+ * file, dipakai ulang oleh Admin AI → hemat token & waktu.
+ * `summary` = ringkasan singkat (opsional, dibuat AI saat pertama dibaca).
+ */
+model ExtractedText {
+  id           String     @id @default(cuid())
+  fileUploadId String     @unique @map("file_upload_id")
+  fileUpload   FileUpload @relation(fields: [fileUploadId], references: [id], onDelete: Cascade)
+  kind         String     @default("note")
+  text         String     @db.Text
+  charCount    Int        @map("char_count")
+  truncated    Boolean    @default(false)
+  zipManifest  Json?      @map("zip_manifest")
+  summary      String?    @db.Text
+  extractedAt  DateTime   @default(now()) @map("extracted_at")
+
+  @@map("extracted_texts")
+}
+
+/**
+ * Hasil analisis otomatis 1 submission (kemiripan antar-submission dalam
+ * tugas yang sama + indikasi tulisan AI). Semua skor 0-100 dan bersifat
+ * INDIKASI, bukan vonis.
+ */
+model SubmissionAnalysis {
+  id             String          @id @default(cuid())
+  submissionId   String          @unique @map("submission_id")
+  submission     TugasSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  textHash       String?         @map("text_hash")
+  wordCount      Int             @default(0) @map("word_count")
+  aiScore        Int?            @map("ai_score")
+  aiSignals      Json?           @map("ai_signals")
+  simMaxScore    Int?            @map("sim_max_score")
+  simWithId      String?         @map("sim_with_id")
+  simPairs       Json?           @map("sim_pairs")
+  analyzedAt     DateTime        @default(now()) @map("analyzed_at")
+
+  @@map("submission_analyses")
+}
+
+/**
+ * Sesi chat Admin AI per course per admin. `memory` menyimpan rubric/konteks
+ * koreksi yang diberikan admin (jawaban askUser) supaya AI tidak lupa.
+ */
+model AdminChatSession {
+  id        String   @id @default(cuid())
+  courseId  String   @map("course_id")
+  userId    String   @map("user_id")
+  title     String?
+  memory    Json?
+  summary   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages AdminChatMessage[]
+
+  @@index([courseId, userId])
+  @@map("admin_chat_sessions")
+}
+
+model AdminChatMessage {
+  id        String           @id @default(cuid())
+  sessionId String           @map("session_id")
+  session   AdminChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      String
+  content   String           @db.Text
+  toolCalls Json?            @map("tool_calls")
+  tokens    Int?
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  @@index([sessionId, createdAt])
+  @@map("admin_chat_messages")
 }

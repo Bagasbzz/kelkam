@@ -48,6 +48,9 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [classId, setClassId] = useState<string | null>(initial?.classId ?? null);
+  const [pertemuan, setPertemuan] = useState<string>(
+    initial?.pertemuan != null ? String(initial.pertemuan) : "",
+  );
   const [deadlineLocal, setDeadlineLocal] = useState<string>(
     initial ? toDatetimeLocal(initial.deadline) : "",
   );
@@ -136,6 +139,12 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       setError("Format deadline tidak valid.");
       return;
     }
+    const pertemuanTrim = pertemuan.trim();
+    const pertemuanNum = pertemuanTrim === "" ? null : Number(pertemuanTrim);
+    if (pertemuanNum !== null && (!Number.isInteger(pertemuanNum) || pertemuanNum < 1 || pertemuanNum > 99)) {
+      setError("Pertemuan harus angka 1–99.");
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -145,6 +154,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
           description,
           deadline: iso,
           classId,
+          pertemuan: pertemuanNum,
         });
       } else {
         await createTugas({
@@ -153,6 +163,8 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
           title: title.trim(),
           description,
           deadline: iso,
+          // undefined → server menebak dari judul ("Pertemuan 3", "Minggu 2", "P4").
+          pertemuan: pertemuanNum ?? undefined,
         });
       }
       router.push(`/tugas/${token}/admin`);
@@ -211,6 +223,25 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
                 value={classId}
                 onChange={(id) => setClassId(id === classId ? null : id)}
               />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium text-slate-700">
+                Pertemuan ke- (opsional)
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={99}
+                step={1}
+                value={pertemuan}
+                onChange={(e) => setPertemuan(e.target.value)}
+                placeholder="Kosongkan → ditebak dari judul"
+                className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500"
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                Dipakai Asisten AI untuk &quot;siapa yang belum kumpul pertemuan N&quot;.
+              </p>
             </div>
 
             <div>

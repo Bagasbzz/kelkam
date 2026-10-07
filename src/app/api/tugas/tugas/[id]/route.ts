@@ -29,6 +29,7 @@ const TugasPatchSchema = z
     description: z.string().max(8000),
     deadline: z.string().datetime(),
     classId: z.string().min(1).nullable(),
+    pertemuan: z.number().int().min(1).max(99).nullable(),
   })
   .partial();
 
@@ -78,6 +79,9 @@ export async function PATCH(
     if (patch.classId !== undefined) {
       data.classId = patch.classId; // bisa null = semua kelas
     }
+    if (patch.pertemuan !== undefined) {
+      data.pertemuan = patch.pertemuan;
+    }
 
     const updated = await prisma.tugas.update({
       where: { id },
@@ -125,6 +129,7 @@ function serializeTugas(t: {
   title: string;
   description: string;
   deadline: Date;
+  pertemuan: number | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -136,6 +141,7 @@ function serializeTugas(t: {
     title: t.title,
     description: t.description,
     deadline: t.deadline.toISOString(),
+    pertemuan: t.pertemuan,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

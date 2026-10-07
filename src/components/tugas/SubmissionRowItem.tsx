@@ -67,25 +67,33 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
   const [open, setOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [draft, setDraft] = useState(submission.feedback ?? "");
+  const [nilaiDraft, setNilaiDraft] = useState(submission.nilai == null ? "" : String(submission.nilai));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function openDialog() {
     setDraft(submission.feedback ?? "");
+    setNilaiDraft(submission.nilai == null ? "" : String(submission.nilai));
     setError(null);
     setOpen(true);
   }
 
   async function save() {
     const text = draft.trim();
-    if (!text) {
-      setError("Catatan tidak boleh kosong.");
+    const nilaiStr = nilaiDraft.trim();
+    const nilai = nilaiStr === "" ? null : Number(nilaiStr);
+    if (nilai !== null && (!Number.isInteger(nilai) || nilai < 0 || nilai > 100)) {
+      setError("Nilai harus bilangan bulat 0–100.");
+      return;
+    }
+    if (!text && nilai === null) {
+      setError("Isi catatan atau nilai.");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const res = await setSubmissionFeedback(submission.id, text);
+      const res = await setSubmissionFeedback(submission.id, text || undefined, nilai);
       onChanged?.(res.submission);
       setOpen(false);
     } catch (err) {
@@ -139,6 +147,12 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
               Kelas {submission.class.name}
             </span>
             {statusBadge(submission.status)}
+            {submission.nilai != null && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700" title="Nilai">
+                {submission.nilai}
+                {submission.nilaiHuruf ? ` (${submission.nilaiHuruf})` : ""}
+              </span>
+            )}
           </div>
 
           <p className="mt-1 text-xs text-slate-500">
@@ -178,10 +192,10 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
             type="button"
             variant="outline"
             size="sm"
-            icon={submission.feedback ? Pencil : MessageSquareText}
+            icon={submission.feedback || submission.nilai != null ? Pencil : MessageSquareText}
             onClick={openDialog}
           >
-            {submission.feedback ? "Ubah catatan" : "Beri catatan"}
+            {submission.feedback || submission.nilai != null ? "Ubah catatan/nilai" : "Catatan & nilai"}
           </Button>
           {onDeleted && (
             <Button type="button" variant="outline" size="sm" icon={Trash2} onClick={() => { setError(null); setDeleteOpen(true); }}>
@@ -204,13 +218,26 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
       <ConfirmDialog
         open={open}
         tone="primary"
-        title={submission.feedback ? "Ubah catatan" : "Beri catatan"}
+        title={submission.feedback || submission.nilai != null ? "Ubah catatan / nilai" : "Beri catatan / nilai"}
         message={
           <div className="space-y-2">
             <p>
-              Catatan ini akan dilihat oleh <strong>{submission.name}</strong> di riwayat
+              Catatan dan nilai ini akan dilihat oleh <strong>{submission.name}</strong> di riwayat
               pengumpulannya.
             </p>
+            <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+              Nilai (0–100, kosongkan jika belum dinilai)
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={1}
+                value={nilaiDraft}
+                onChange={(e) => setNilaiDraft(e.target.value)}
+                disabled={busy}
+                className="w-24 rounded-lg border border-slate-300 px-2 py-1 text-sm text-slate-900"
+              />
+            </label>
             <Textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}

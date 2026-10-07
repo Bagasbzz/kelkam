@@ -58,6 +58,11 @@ export default function TugasCard({
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-bold text-slate-900 truncate">{tugas.title}</h3>
+            {tugas.pertemuan != null && (
+              <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+                Pertemuan {tugas.pertemuan}
+              </span>
+            )}
             {tugas.class && (
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
                 <Tag className="w-3 h-3" />

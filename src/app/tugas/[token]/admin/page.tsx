@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BarChart3,
+  Bot,
   ClipboardList,
   Loader2,
   Pencil,
@@ -245,6 +246,13 @@ export default function CourseAdminDashboard() {
             >
               <BarChart3 className="w-3 h-3" />
               AI Insights
+            </Link>
+            <Link
+              href={`/tugas/${token}/admin/assistant`}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-500/20 px-3 py-1.5 text-xs font-bold text-emerald-100 transition hover:bg-emerald-500/40"
+            >
+              <Bot className="w-3 h-3" />
+              Asisten AI
             </Link>
           </div>
         </div>

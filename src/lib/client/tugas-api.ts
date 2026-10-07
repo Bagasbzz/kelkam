@@ -86,6 +86,8 @@ export interface TugasSummary {
   title: string;
   description: string;
   deadline: string;
+  /** Nomor pertemuan (opsional). */
+  pertemuan?: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -112,6 +114,10 @@ export interface SubmissionRow {
   /** Catatan dari admin course; null kalau belum ada. */
   feedback: string | null;
   feedbackAt: string | null;
+  /** Nilai angka 0-100 dari admin; null kalau belum dinilai. */
+  nilai?: number | null;
+  nilaiHuruf?: string | null;
+  nilaiAt?: string | null;
   user?: { id: string; email: string; name: string | null };
 }
 
@@ -250,6 +256,7 @@ export function createTugas(input: {
   title: string;
   description: string;
   deadline: string; // ISO
+  pertemuan?: number | null;
 }) {
   return request<{ tugas: TugasSummary }>("/api/tugas/tugas", {
     method: "POST",
@@ -264,6 +271,7 @@ export function updateTugas(
     description: string;
     deadline: string;
     classId: string | null;
+    pertemuan: number | null;
   }>,
 ) {
   return request<{ tugas: TugasSummary }>(`/api/tugas/tugas/${tugasId}`, {
@@ -297,11 +305,18 @@ export function updateMySubmission(tugasId: string, input: SubmissionInput) {
   );
 }
 
-/** Admin: beri / ubah catatan untuk satu pengumpulan. */
-export function setSubmissionFeedback(submissionId: string, feedback: string) {
+/** Admin: beri / ubah catatan dan/atau nilai untuk satu pengumpulan. */
+export function setSubmissionFeedback(
+  submissionId: string,
+  feedback: string | undefined,
+  nilai?: number | null,
+) {
+  const json: { feedback?: string; nilai?: number | null } = {};
+  if (feedback !== undefined) json.feedback = feedback;
+  if (nilai !== undefined) json.nilai = nilai;
   return request<{ submission: SubmissionRow }>(
     `/api/tugas/submissions/${submissionId}/feedback`,
-    { method: "PUT", json: { feedback } }
+    { method: "PUT", json }
   );
 }
 
@@ -385,6 +400,68 @@ export function deleteMahasiswa(courseId: string, mahasiswaId: string) {
     `/api/tugas/courses/${courseId}/mahasiswas/${mahasiswaId}`,
     { method: "DELETE" }
   );
+}
+
+// ---------------------------------------------------------------------------
+// Admin AI Assistant (chat tool-calling)
+// ---------------------------------------------------------------------------
+
+export interface AssistantTurn {
+  sessionId: string;
+  reply: string;
+  pendingQuestion: { question: string; options?: string[] } | null;
+  toolsUsed: string[];
+  model: string;
+}
+
+export interface AssistantSessionSummary {
+  id: string;
+  title: string | null;
+  updatedAt: string;
+  _count: { messages: number };
+}
+
+export interface AssistantMessage {
+  id: string;
+  role: string;
+  content: string;
+  createdAt: string;
+}
+
+export function sendAssistantMessage(
+  courseId: string,
+  input: { message: string; sessionId?: string | null; answerTo?: string | null; deep?: boolean },
+) {
+  return request<AssistantTurn>(`/api/tugas/courses/${courseId}/assistant`, {
+    method: "POST",
+    json: input,
+  });
+}
+
+export function fetchAssistantSessions(courseId: string) {
+  return request<{ sessions: AssistantSessionSummary[] }>(`/api/tugas/courses/${courseId}/assistant`);
+}
+
+export function fetchAssistantHistory(courseId: string, sessionId: string) {
+  return request<{ session: { id: string; title: string | null }; messages: AssistantMessage[] }>(
+    `/api/tugas/courses/${courseId}/assistant?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
+export function deleteAssistantSession(courseId: string, sessionId: string) {
+  return request<{ success: true }>(
+    `/api/tugas/courses/${courseId}/assistant?sessionId=${encodeURIComponent(sessionId)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** Admin: mahasiswa roster yang belum mengumpulkan tugas ini. */
+export function fetchMissingSubmitters(tugasId: string) {
+  return request<{
+    rosterTotal: number;
+    submitted: number;
+    missing: Array<{ id: string; nim: string; name: string; email: string | null; class: { id: string; name: string } | null }>;
+  }>(`/api/tugas/tugas/${tugasId}/missing`);
 }
 
 // ---------------------------------------------------------------------------

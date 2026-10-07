@@ -25,7 +25,19 @@ export interface SerializableSubmission {
   updatedAt: Date | null;
   feedback: string | null;
   feedbackAt: Date | null;
+  nilai?: number | null;
+  nilaiAt?: Date | null;
   user?: { id: string; email: string; name: string | null } | null;
+}
+
+/** Konversi nilai angka 0-100 → huruf. */
+export function nilaiToHuruf(nilai: number | null | undefined): string | null {
+  if (nilai === null || nilai === undefined) return null;
+  if (nilai >= 85) return "A";
+  if (nilai >= 75) return "B";
+  if (nilai >= 65) return "C";
+  if (nilai >= 55) return "D";
+  return "E";
 }
 
 export function serializeSubmission(s: SerializableSubmission) {
@@ -51,6 +63,9 @@ export function serializeSubmission(s: SerializableSubmission) {
     updatedAt: s.updatedAt ? s.updatedAt.toISOString() : null,
     feedback: s.feedback,
     feedbackAt: s.feedbackAt ? s.feedbackAt.toISOString() : null,
+    nilai: s.nilai ?? null,
+    nilaiHuruf: nilaiToHuruf(s.nilai),
+    nilaiAt: s.nilaiAt ? s.nilaiAt.toISOString() : null,
     ...(s.user ? { user: { id: s.user.id, email: s.user.email, name: s.user.name } } : {}),
   };
 }

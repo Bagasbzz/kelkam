@@ -25,6 +25,7 @@ import {
   publicErrorResponse,
 } from "@/lib/server/request-guards";
 import { assertClassBelongsToCourse } from "@/lib/server/tugas/access";
+import { guessPertemuan } from "@/lib/server/tugas/pertemuan";
 
 const TugasCreateSchema = z.object({
   courseId: z.string().min(1),
@@ -32,6 +33,13 @@ const TugasCreateSchema = z.object({
   title: z.string().trim().min(1).max(160),
   description: z.string().max(8000).default(""),
   deadline: z.string().datetime({ message: "Deadline harus ISO 8601." }),
+  pertemuan: z
+    .number()
+    .int()
+    .min(1)
+    .max(99)
+    .nullable()
+    .optional(),
 });
 
 export async function POST(req: Request) {
@@ -49,7 +57,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { courseId, classId, title, description, deadline } = parsed.data;
+  const { courseId, classId, title, description, deadline, pertemuan } = parsed.data;
 
   try {
     const user = await requireCourseAdmin(courseId);
@@ -73,6 +81,7 @@ export async function POST(req: Request) {
         title,
         description,
         deadline: deadlineDate,
+        pertemuan: pertemuan === undefined ? guessPertemuan(title) : pertemuan,
         createdById: user.id,
       },
       include: { class: { select: { id: true, name: true } } },
@@ -170,6 +179,7 @@ function serializeTugas(t: {
   title: string;
   description: string;
   deadline: Date;
+  pertemuan: number | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -181,6 +191,7 @@ function serializeTugas(t: {
     title: t.title,
     description: t.description,
     deadline: t.deadline.toISOString(),
+    pertemuan: t.pertemuan,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
   };

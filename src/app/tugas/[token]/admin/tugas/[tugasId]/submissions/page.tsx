@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, CalendarClock, Loader2 } from "lucide-react";
+import { ArrowLeft, Bot, CalendarClock, Loader2 } from "lucide-react";
 import Card from "@/components/ui/Card";
 import Button from "@/components/ui/Button";
 import AdminSubmissionList from "@/components/tugas/AdminSubmissionList";
+import MissingSubmittersCard from "@/components/tugas/MissingSubmittersCard";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import { useAuth } from "@/components/AuthProvider";
 import {
@@ -153,8 +154,26 @@ export default function AdminSubmissionsPage() {
               })}
             </span>
             <CountdownTimer deadline={tugas.deadline} />
+            {tugas.pertemuan != null && (
+              <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
+                Pertemuan {tugas.pertemuan}
+              </span>
+            )}
+          </div>
+          <div className="mt-4">
+            <Link
+              href={`/tugas/${token}/admin/assistant?q=${encodeURIComponent(
+                `Koreksi semua pengumpulan tugas "${tugas.title}" yang belum dinilai. Tanya saya dulu kalau butuh rubrik.`,
+              )}`}
+              className="inline-flex items-center gap-2 rounded-full bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700"
+            >
+              <Bot className="h-3.5 w-3.5" />
+              Koreksi dengan Asisten AI
+            </Link>
           </div>
         </Card>
+
+        <MissingSubmittersCard tugasId={tugasId} />
 
         <Card>
           <h2 className="text-lg font-bold text-slate-900">Daftar pengumpulan</h2>
