@@ -1,13 +1,17 @@
 /**
  * POST /api/report-jobs/start
  * -----------------------------------------------------------------------------
- * Memulai async job untuk generate draft laporan.
+ * Memulai job generate draft laporan (per-BAB, persistent).
  *
- * Job queue di-handle oleh `src/lib/report/report-jobs.ts`:
- *   - create row di `report_jobs` (status "queued")
- *   - jalankan generateReportDraft() di background
- *   - progress di-update setiap beberapa detik (client polling)
- *   - client poll status via GET /api/report-jobs/status/[jobId]
+ * Job engine di `src/lib/report/report-jobs.ts`:
+ *   - create row `report_jobs` + 1 row `report_job_steps` per section outline
+ *   - TIDAK memanggil AI di sini. Setiap GET /api/report-jobs/status/[jobId]
+ *     mengerjakan 1 step (1 BAB) lalu return → client polling memicu step
+ *     berikutnya. Aman untuk single-process hosting & tahan restart.
+ *
+ * Body: { project, mode?: "ringkas" | "lengkap" }
+ *   - ringkas → model cepat, BAB lebih padat (Laporan cepat)
+ *   - lengkap → model utama, BAB mendalam (Studio)
  *
  * Validasi project:
  *   - title atau topic harus diisi
@@ -67,13 +71,12 @@ export async function POST(req: Request) {
 
   try {
     // 1.5MB max — handle project dengan banyak source + outline + diagram.
-    const { project } = await readJsonBody<{ project?: unknown }>(req, 1_500_000);
+    const { project, mode } = await readJsonBody<{ project?: unknown; mode?: unknown }>(req, 1_500_000);
     const validationError = validateProject(project);
     if (validationError) return NextResponse.json({ success: false, error: validationError }, { status: 400 });
 
-    // Kick off async job. Fungsi ini return immediately setelah insert row
-    // & spawn background generator (lihat src/lib/report/report-jobs.ts).
-    const job = await startReportJob(project, auth.user.id);
+    // Buat job + steps (tanpa AI). Step pertama dijalankan oleh polling /status.
+    const job = await startReportJob(project, auth.user.id, mode === "ringkas" ? "ringkas" : "lengkap");
     return NextResponse.json(
       { success: true, job },
       { headers: { "Cache-Control": "no-store" } },

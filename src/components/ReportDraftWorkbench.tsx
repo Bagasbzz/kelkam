@@ -40,6 +40,7 @@ interface ReportJob {
   result?: string;
   source?: string;
   error?: string;
+  steps?: Array<{ index: number; title: string; status: "queued" | "running" | "done" | "fallback" | "failed" }>;
 }
 
 interface SectionActionDetail {
@@ -75,7 +76,7 @@ const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice
 
 const revisionModeOptions: { value: RevisionMode; label: string; helper: string }[] = [
   { value: "format", label: "Rapikan format", helper: "Heading, numbering, bahasa, dan konsistensi." },
-  { value: "expand", label: "Tambah isi", helper: "Perpanjang bagian yang masih tipis atau terlalu umum." },
+  { value: "expand", label: "Perdalam isi", helper: "Tambah argumen/penjelasan bersubstansi pada bagian yang masih tipis." },
   { value: "citation", label: "Tambah sitasi", helper: "Pakai referensi yang sudah tersimpan dulu." },
   { value: "table", label: "Tambah tabel", helper: "Masukkan tabel markdown yang relevan." },
   { value: "bibliography", label: "Rapikan pustaka", helper: "Benahi daftar pustaka sesuai gaya sitasi." },
@@ -238,7 +239,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
         : "Jika belum cukup referensi, beri placeholder kebutuhan sitasi yang jelas.";
 
       const baseInstruction = detail.action === "expand"
-        ? `Perpanjang bagian ${detail.section.title} agar lebih detail, tetap konsisten dengan tujuan section, dan jaga alur antar paragraf. ${referenceHint}`
+        ? `Perdalam bagian ${detail.section.title}: tambahkan argumen, penjelasan mekanisme, atau contoh konkret dari sumber. Jangan menambah kalimat pengisi atau pengulangan. Tetap konsisten dengan tujuan section. ${referenceHint}`
         : detail.action === "citation"
           ? `Tambahkan sitasi yang cocok pada bagian ${detail.section.title}. Jangan mengarang sumber baru. ${referenceHint}`
           : `Tambahkan tabel markdown yang paling relevan untuk bagian ${detail.section.title}, lengkap dengan judul tabel yang jelas. ${referenceHint}`;
@@ -388,8 +389,9 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const canRevise = draft.trim().length > 80 && !loading && !isRevising;
 
   const pollJob = async (jobId: string) => {
-    for (let attempt = 0; attempt < 1800; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    // Setiap poll mengerjakan 1 BAB di server (request blocking ±15-45s).
+    for (let attempt = 0; attempt < 600; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
       const resp = await authenticatedFetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.success) {
@@ -424,7 +426,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       const resp = await authenticatedFetch("/api/report-jobs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: assembledProject }),
+        body: JSON.stringify({ project: assembledProject, mode: "lengkap" }),
       });
       const data = await resp.json().catch(() => null);
       if (!resp.ok || !data?.success || !data?.job?.id) {
@@ -590,8 +592,24 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${Math.max(0, Math.min(100, job.progress || 0))}%` }} />
           </div>
           <div className="mt-2 text-xs text-slate-500">
-            {job.status === "done" ? "Draft selesai dan disimpan lokal." : job.status === "failed" ? "Job berhenti karena error." : "AI sedang membaca konteks, menyusun struktur, diagram, lalu menulis draft secara bertahap."}
+            {job.status === "done" ? "Draft selesai dan disimpan lokal." : job.status === "failed" ? "Job berhenti karena error." : "AI menulis laporan per BAB secara berurutan. Tiap BAB disimpan, jadi aman kalau koneksi terputus."}
           </div>
+          {job.steps && job.steps.length > 0 && (
+            <ul className="mt-3 grid gap-1 text-xs sm:grid-cols-2">
+              {job.steps.map((step) => (
+                <li key={step.index} className="flex items-center gap-2 text-slate-700">
+                  <span className={`inline-block h-2 w-2 rounded-full ${
+                    step.status === "done" ? "bg-emerald-500"
+                      : step.status === "running" ? "animate-pulse bg-blue-500"
+                      : step.status === "fallback" ? "bg-amber-500"
+                      : step.status === "failed" ? "bg-red-500"
+                      : "bg-slate-300"
+                  }`} />
+                  <span className="truncate">{step.title}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -696,7 +714,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <textarea
               value={revisionInstruction}
               onChange={(e) => setRevisionInstruction(e.target.value)}
-              placeholder="Contoh: perpanjang pendahuluan 2 paragraf, tambahkan sitasi dari referensi aktif, masukkan diagram approved yang relevan, atau buat tabel ringkasan metode."
+              placeholder="Contoh: perdalam pendahuluan dengan latar belakang masalah yang lebih spesifik, tambahkan sitasi dari referensi aktif, masukkan diagram approved yang relevan, atau buat tabel ringkasan metode."
               className="mt-2 min-h-28 w-full rounded-lg border border-slate-200 p-3 text-sm text-slate-700"
             />
           </div>

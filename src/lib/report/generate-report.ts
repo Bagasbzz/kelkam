@@ -1,4 +1,4 @@
-import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 import { isAbortLikeError } from "@/lib/errors";
 
 const REPORT_TIMEOUT_MS = Number(process.env.AI_REPORT_TIMEOUT_MS || 25000);
@@ -47,6 +47,7 @@ export function compactProject(project: unknown) {
       content: truncate(item.content, 1600),
     })),
     outline: records(source.outline).slice(0, 50).map((section) => ({
+      id: truncate(section.id, 80) || undefined,
       title: truncate(section.title, 180),
       purpose: truncate(section.purpose, 600),
       requiredDiagrams: strings(section.requiredDiagrams).slice(0, 20),
@@ -156,20 +157,7 @@ function normalizeReportOutput(content: string, project: unknown) {
 export async function generateReportDraft(project: unknown) {
   assertAiConfigured();
   const compact = compactProject(project);
-  const systemPrompt = `Anda adalah penyusun laporan akademik keluhkampus untuk mahasiswa Indonesia.
-Buat draft laporan lengkap dalam Bahasa Indonesia berdasarkan konteks yang diberikan.
-
-Aturan kualitas wajib:
-1. Output hanya markdown laporan utuh, tanpa basa-basi, tanpa code fence.
-2. Ikuti outline yang tersedia secara berurutan. Setiap bagian outline harus muncul sebagai heading.
-3. Tulis dengan gaya ${compact.formality || "formal akademik"}, koheren, tidak repetitif, dan siap diedit.
-4. Jangan mengarang data spesifik, angka hasil, nama institusi, nama narasumber, nama jurnal, atau link yang tidak ada. Gunakan placeholder spesifik seperti [ISI DATA HASIL PENGUJIAN] jika belum tersedia.
-5. Gunakan semua sumber/konteks yang relevan. Jika sumber tidak cukup, jelaskan sebagai kebutuhan data, bukan fakta baru.
-6. Masukkan placeholder gambar/diagram dengan format [Gambar: Judul - status] dan caption singkat pada bagian yang paling tepat.
-7. Jika diagram sudah approved dan punya ringkasan elemen, gunakan elemen itu untuk menjelaskan isi diagram secara naratif.
-8. Buat tabel markdown sesuai daftar table plan. Jangan menambah kolom yang tidak relevan.
-9. Daftar pustaka mengikuti gaya ${compact.citationStyle || "sitasi yang dipilih"}. Jika referensi baru berupa query, tulis [Cari jurnal: query].
-10. Struktur minimal memuat: judul, pendahuluan/konteks, pembahasan sesuai outline, tabel/diagram bila ada, kesimpulan, dan daftar pustaka.`;
+  const systemPrompt = buildFullSystemPrompt(compact);
 
   try {
     const response = await aiClient.chat.completions.create({
@@ -189,4 +177,202 @@ Aturan kualitas wajib:
     }
     throw error;
   }
+}
+
+function buildFullSystemPrompt(compact: CompactProject) {
+  return `Anda adalah penyusun laporan akademik keluhkampus untuk mahasiswa Indonesia.
+Buat draft laporan lengkap dalam Bahasa Indonesia berdasarkan konteks yang diberikan.
+
+Aturan kualitas wajib:
+1. Output hanya markdown laporan utuh, tanpa basa-basi, tanpa code fence.
+2. Ikuti outline yang tersedia secara berurutan. Setiap bagian outline harus muncul sebagai heading.
+3. Tulis dengan gaya ${compact.formality || "formal akademik"}, koheren, tidak repetitif, dan siap diedit.
+4. Jangan mengarang data spesifik, angka hasil, nama institusi, nama narasumber, nama jurnal, atau link yang tidak ada. Gunakan placeholder spesifik seperti [ISI DATA HASIL PENGUJIAN] jika belum tersedia.
+5. Gunakan semua sumber/konteks yang relevan. Jika sumber tidak cukup, jelaskan sebagai kebutuhan data, bukan fakta baru.
+6. Masukkan placeholder gambar/diagram dengan format [Gambar: Judul - status] dan caption singkat pada bagian yang paling tepat.
+7. Jika diagram sudah approved dan punya ringkasan elemen, gunakan elemen itu untuk menjelaskan isi diagram secara naratif.
+8. Buat tabel markdown sesuai daftar table plan. Jangan menambah kolom yang tidak relevan.
+9. Daftar pustaka mengikuti gaya ${compact.citationStyle || "sitasi yang dipilih"}. Jika referensi baru berupa query, tulis [Cari jurnal: query].
+10. Struktur minimal memuat: judul, pendahuluan/konteks, pembahasan sesuai outline, tabel/diagram bila ada, kesimpulan, dan daftar pustaka.`;
+}
+
+// ===========================================================================
+// PER-BAB GENERATION (dipakai report-jobs step runner)
+// ===========================================================================
+
+export type ReportMode = "ringkas" | "lengkap";
+
+export interface ChapterInput {
+  /** Index section (0-based) dan total section — untuk konteks posisi. */
+  index: number;
+  total: number;
+  section: { id?: string; title: string; purpose: string; requiredDiagrams: string[] };
+  /** Ringkasan singkat BAB-BAB sebelumnya (hasil `summarizeChapter`). */
+  previousSummaries: string[];
+  mode: ReportMode;
+}
+
+export interface ChapterOutput {
+  content: string;
+  summary: string;
+  source: "ai" | "fallback";
+  finishReason: string;
+}
+
+const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 40000);
+
+/** Hapus heading level-1 dan code fence yang kadang disisipkan model. */
+function cleanChapterOutput(raw: string) {
+  let output = String(raw || "").trim();
+  output = output.replace(/^```(?:markdown|md)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  output = output.replace(/^(berikut|tentu|baik)[^\n]*\n+/i, "").trim();
+  return output;
+}
+
+/** Ambil 2-3 kalimat pertama dari paragraf pertama sebagai ringkasan murah (tanpa AI). */
+export function summarizeChapter(markdown: string, max = 420) {
+  const body = markdown
+    .split("\n")
+    .filter((line) => line.trim() && !line.trim().startsWith("#") && !line.trim().startsWith("|") && !line.trim().startsWith("["))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return body.slice(0, max);
+}
+
+/**
+ * Pilih referensi yang relevan untuk satu section: cocokkan kata kunci judul/
+ * purpose dengan query/purpose/abstract referensi. Fallback: 6 referensi pertama.
+ */
+function pickReferences(compact: CompactProject, section: ChapterInput["section"], limit: number) {
+  const keywords = `${section.title} ${section.purpose}`
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((word) => word.length > 4);
+  if (!keywords.length) return compact.references.slice(0, limit);
+
+  const scored = compact.references.map((reference) => {
+    const haystack = `${reference.query} ${reference.purpose} ${reference.abstract}`.toLowerCase();
+    const score = keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+    return { reference, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((item) => item.reference);
+}
+
+/** Placeholder BAB kalau AI gagal/timeout — tetap valid markdown. */
+export function fallbackChapter(input: ChapterInput): ChapterOutput {
+  const { section } = input;
+  const diagrams = section.requiredDiagrams.length
+    ? `\n\n${section.requiredDiagrams.map((id) => `[Gambar: ${id} - masukkan dari UML Builder]`).join("\n")}`
+    : "";
+  const content = `## ${section.title}\n\n${section.purpose || "Bagian ini perlu dikembangkan berdasarkan bahan proyek."}\n\n[ISI ${section.title.toUpperCase()}: respons AI gagal, gunakan fitur revisi untuk mengisi bagian ini]${diagrams}`;
+  return { content, summary: section.purpose || section.title, source: "fallback", finishReason: "fallback" };
+}
+
+/**
+ * Generate satu BAB. 1 panggilan AI, model dipilih dari mode:
+ *   - ringkas → AI_MODEL_FAST, target ±300-500 kata
+ *   - lengkap → AI_MODEL, target ±700-1200 kata
+ * Kalau finish_reason "length", lakukan 1x continuation.
+ */
+export async function generateChapter(project: unknown, input: ChapterInput): Promise<ChapterOutput> {
+  assertAiConfigured();
+  const compact = compactProject(project);
+  const { section, mode, index, total } = input;
+  const isRingkas = mode === "ringkas";
+
+  const sectionDiagrams = compact.diagrams.filter((diagram) => section.requiredDiagrams.includes(diagram.id));
+  const references = pickReferences(compact, section, isRingkas ? 5 : 10);
+  const sources = compact.sources.slice(0, isRingkas ? 6 : 12).map((source) => ({
+    ...source,
+    content: source.content.slice(0, isRingkas ? 700 : 1400),
+  }));
+
+  const systemPrompt = `Anda adalah penulis laporan akademik keluhkampus untuk mahasiswa Indonesia.
+Tugas: tulis SATU bagian laporan (BAB ${index + 1} dari ${total}) berjudul "${section.title}" dalam Bahasa Indonesia.
+
+Aturan wajib:
+1. Output hanya markdown bagian ini. Mulai dengan heading "## ${section.title}". Tanpa judul laporan, tanpa daftar pustaka, tanpa basa-basi, tanpa code fence.
+2. Sub-bagian pakai heading "###". Jangan buat heading "#".
+3. Gaya ${compact.formality || "formal akademik"}, ${isRingkas ? "padat dan langsung ke inti (sekitar 300-500 kata)" : "mendalam dan runtut (sekitar 700-1200 kata)"}. Hindari pengulangan isi BAB sebelumnya.
+4. Jangan mengarang data, angka, nama institusi, nama jurnal, atau link. Pakai placeholder spesifik seperti [ISI DATA ...] bila belum ada.
+5. Gunakan sumber/konteks yang relevan. Sitasi in-text pakai gaya ${compact.citationStyle || "APA"} hanya dari referensi yang diberikan; bila kurang, tulis [butuh referensi: topik].
+6. Diagram yang diminta harus muncul sebagai placeholder [Gambar: Judul - status] dengan caption, dan dijelaskan naratif memakai elemen utama bila ada.
+7. Bila ada tabel yang cocok untuk bagian ini, buat tabel markdown mengikuti rencana kolom.
+8. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan.`;
+
+  const userPayload = {
+    laporan: {
+      judul: compact.title || compact.topic,
+      topik: compact.topic,
+      jenis: compact.projectType,
+      mataKuliah: compact.course,
+    },
+    bagianIni: {
+      judul: section.title,
+      tujuan: section.purpose,
+      diagramWajib: sectionDiagrams,
+    },
+    ringkasanBabSebelumnya: input.previousSummaries.slice(-4),
+    sumber: sources,
+    rencanaTabel: compact.tables.slice(0, 8),
+    referensi: references,
+  };
+
+  const model = isRingkas ? AI_MODEL_FAST : AI_MODEL;
+  const maxTokens = isRingkas ? 1600 : 3200;
+
+  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: JSON.stringify(userPayload) },
+  ];
+
+  try {
+    const response = await aiClient.chat.completions.create({
+      model,
+      messages,
+      temperature: 0.15,
+      max_tokens: maxTokens,
+    }, { timeout: CHAPTER_TIMEOUT_MS });
+
+    const choice = response.choices[0];
+    let content = cleanChapterOutput(choice?.message.content || "");
+    let finishReason = choice?.finish_reason || "unknown";
+
+    // Satu kali continuation kalau terpotong.
+    if (finishReason === "length" && content) {
+      const cont = await aiClient.chat.completions.create({
+        model,
+        messages: [
+          ...messages,
+          { role: "assistant", content },
+          { role: "user", content: "Lanjutkan tepat dari kalimat terakhir tanpa mengulang. Output hanya kelanjutan markdown." },
+        ],
+        temperature: 0.15,
+        max_tokens: Math.round(maxTokens / 2),
+      }, { timeout: CHAPTER_TIMEOUT_MS });
+      const extra = cleanChapterOutput(cont.choices[0]?.message.content || "");
+      if (extra) content = `${content}\n${extra}`;
+      finishReason = cont.choices[0]?.finish_reason || finishReason;
+    }
+
+    if (content.length < 200) return fallbackChapter(input);
+    if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
+
+    return { content, summary: summarizeChapter(content), source: "ai", finishReason };
+  } catch (error: unknown) {
+    if (isAbortLikeError(error)) return fallbackChapter(input);
+    throw error;
+  }
+}
+
+/** Gabungkan judul + BAB + daftar pustaka menjadi satu markdown final. */
+export function assembleReport(project: unknown, chapters: string[]) {
+  const compact = compactProject(project);
+  const title = compact.title || compact.topic || "Laporan Proyek";
+  const references = compact.references.length
+    ? compact.references.map((reference) => reference.citation || `[Cari jurnal: ${reference.query || reference.purpose || "topik terkait"}]${reference.url ? ` - ${reference.url}` : ""}`).join("\n")
+    : "[Tambahkan referensi/jurnal yang relevan]";
+  return `# ${title}\n\n${chapters.join("\n\n")}\n\n## Daftar Pustaka\n${references}\n`;
 }

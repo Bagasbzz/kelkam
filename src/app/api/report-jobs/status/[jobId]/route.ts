@@ -1,17 +1,22 @@
 /**
  * GET /api/report-jobs/status/[jobId]
  * -----------------------------------------------------------------------------
- * Polling endpoint untuk status report job yang sedang berjalan.
+ * Polling endpoint SEKALIGUS step runner untuk report job.
  *
- * Client (Dashboard) poll endpoint ini tiap 1-2 detik setelah start.
+ * Setiap request mengerjakan maksimal 1 BAB yang masih queued (lihat
+ * advanceReportJob), lalu mengembalikan state terbaru. Client cukup poll
+ * berulang sampai status "done"/"failed". Request yang datang saat step
+ * lain sedang jalan hanya return state (tidak double-run).
+ *
  * Response berisi:
  *   - status: "queued" | "running" | "done" | "failed"
- *   - progress: 0-100
- *   - stage: label human-readable (mis. "Menulis draft laporan")
+ *   - progress: 0-100 (proporsional BAB selesai)
+ *   - stage: label human-readable (mis. "Menulis BAB II (2/6)")
+ *   - steps: [{ index, title, status }]
  *   - result: string draft (kalau status "done")
  *   - error: string error (kalau status "failed")
  *
- * Rate limit longgar (180 per 5 menit) — polling yang sering itu normal.
+ * Rate limit 600 per 10 menit — polling tiap ~1-2s wajar.
  *
  * Validasi jobId: pattern `report_<uuid>`.
  *
@@ -25,20 +30,23 @@
  */
 
 import { NextResponse } from "next/server";
-import { ensureReportJobRunning } from "@/lib/report/report-jobs";
+import { advanceReportJob } from "@/lib/report/report-jobs";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
 
-/** Timeout 60 detik — safety net. */
-export const maxDuration = 60;
+/**
+ * Satu request mengerjakan maks 1 BAB (1-2 panggilan AI, timeout 40s masing-
+ * masing). 120 detik = safety net.
+ */
+export const maxDuration = 120;
 
 export async function GET(req: Request, { params }: { params: Promise<{ jobId: string }> }) {
   const auth = await authenticateRequestFromCookie();
   if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
 
   const rateLimit = enforceRateLimit(`report-status:${auth.user.id}`, {
-    limit: 180,
-    windowMs: 5 * 60 * 1000,
+    limit: 600,
+    windowMs: 10 * 60 * 1000,
   });
   if (rateLimit) return rateLimit;
 
@@ -47,8 +55,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ jobId: s
     return NextResponse.json({ success: false, error: "ID job tidak valid." }, { status: 400 });
   }
 
-  // ensureReportJobRunning: cek DB + (kalau queued tapi stale) resume runner.
-  const job = await ensureReportJobRunning(jobId, auth.user.id);
+  // advanceReportJob: kerjakan 1 step kalau ada yang queued/stale, lalu return state.
+  let job;
+  try {
+    job = await advanceReportJob(jobId, auth.user.id);
+  } catch (error) {
+    console.error("API /api/report-jobs/status failed:", error);
+    return NextResponse.json({ success: false, error: "Gagal memproses job laporan." }, { status: 500 });
+  }
 
   if (!job) {
     return NextResponse.json(

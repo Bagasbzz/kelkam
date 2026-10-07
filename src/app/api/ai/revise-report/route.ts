@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { authenticateRequestFromCookie } from "@/lib/server/auth";
+import { enforceRateLimit } from "@/lib/server/request-guards";
 
 export const maxDuration = 60;
 
@@ -9,7 +11,7 @@ const MAX_INSTRUCTION_CHARS = 1_200;
 
 const revisionLabel: Record<string, string> = {
   format: "rapikan format, heading, numbering, dan konsistensi bahasa",
-  expand: "tambahkan isi yang relevan pada bagian yang diminta",
+  expand: "perdalam bagian yang diminta dengan argumen, penjelasan, atau contoh yang relevan dari sumber — bukan menambah kata tanpa substansi",
   citation: "tambahkan sitasi dari referensi yang tersedia dan tandai placeholder jika kurang sumber",
   table: "tambahkan atau rapikan tabel markdown yang relevan",
   bibliography: "rapikan daftar pustaka sesuai gaya sitasi",
@@ -137,6 +139,15 @@ function compactProject(projectInput: unknown): CompactProject {
 }
 
 export async function POST(req: Request) {
+  const auth = await authenticateRequestFromCookie();
+  if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+
+  const rateLimit = enforceRateLimit(`report-revise:${auth.user.id}`, {
+    limit: 20,
+    windowMs: 10 * 60 * 1000,
+  });
+  if (rateLimit) return rateLimit;
+
   try {
     assertAiConfigured();
     const body = await readJsonBody(req);

@@ -1,43 +1,37 @@
 /**
  * src/lib/report/report-jobs.ts
  * -----------------------------------------------------------------------------
- * Async job queue untuk Report Generation.
+ * Report generation job — persistent, per-BAB (step-based).
  *
  * ARSITEKTUR:
- *   - Setiap job punya ID `report_<uuid>`, disimpan di tabel `report_jobs`
- *     (DB) + Map di memory (untuk fast access dari polling).
- *   - Runner background di-spawn saat `startReportJob()`. Status di-update
- *     tiap stage (lihat array `stages` di bawah) → client polling liat
- *     progress real-time.
- *   - Job "queued" yang stale (worker restart) akan di-resume otomatis
- *     saat ada GET /status request (lihat ensureReportJobRunning).
+ *   - Job disimpan di `report_jobs`, tiap section outline jadi 1 row di
+ *     `report_job_steps`. Payload project (sanitized) disimpan di job.
+ *   - Tidak ada worker background panjang. Setiap request (start/status)
+ *     memanggil `advanceReportJob()` yang mengerjakan MAKSIMAL 1 step
+ *     (1 panggilan AI) lalu return. Client polling memicu step berikutnya.
+ *     Ini aman untuk hosting single-process (Passenger) dan tahan restart.
+ *   - Lock anti double-run per job via Set in-memory + step.status "running"
+ *     dengan deteksi stale (>STALE_STEP_MS → dianggap mati, di-retry).
+ *   - Status "done" hanya saat semua step done/fallback. Result = assembleReport().
  *
- * STATE TRANSITIONS:
- *
- *   queued → running → done
- *                ↘ failed
- *
- * FIELDS:
- *   - status  : ReportJobStatus
- *   - progress: 0-100
- *   - stage   : label human-readable untuk UI
- *   - result  : string draft (kalau done)
- *   - source  : "ai" | "fallback-timeout" (untuk UI indicator)
- *   - error   : string error (kalau failed)
- *
- * MEMORY MAPS (globalThis):
- *   - jobs: Map<jobId, ReportJob> — cache state in-memory
- *   - jobOwners: Map<jobId, ownerId> — ownership check
- *   - jobRunners: Set<jobId> — runner yang lagi aktif (anti double-run)
+ * STATE:
+ *   job.status : queued → running → done | failed
+ *   step.status: queued → running → done | fallback | failed
  *
  * Dipakai oleh:
- *   - POST /api/report-jobs/start → startReportJob()
- *   - GET /api/report-jobs/status/[jobId] → getReportJob() / ensureReportJobRunning()
+ *   - POST /api/report-jobs/start         → startReportJob()
+ *   - GET  /api/report-jobs/status/[jobId] → advanceReportJob()
  * -----------------------------------------------------------------------------
  */
 
 import { prisma } from "@/lib/db/prisma";
-import { generateReportDraft } from "@/lib/report/generate-report";
+import {
+  assembleReport,
+  compactProject,
+  fallbackChapter,
+  generateChapter,
+  type ReportMode,
+} from "@/lib/report/generate-report";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 
 // ---------------------------------------------------------------------------
@@ -45,333 +39,305 @@ import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 // ---------------------------------------------------------------------------
 
 export type ReportJobStatus = "queued" | "running" | "done" | "failed";
+export type ReportStepStatus = "queued" | "running" | "done" | "fallback" | "failed";
+
+export interface ReportJobStep {
+  index: number;
+  title: string;
+  status: ReportStepStatus;
+  error?: string;
+}
 
 export interface ReportJob {
   id: string;
   status: ReportJobStatus;
   progress: number;
   stage: string;
+  mode: ReportMode;
   createdAt: string;
   updatedAt: string;
   result?: string;
   source?: string;
   error?: string;
+  steps?: ReportJobStep[];
 }
 
 // ---------------------------------------------------------------------------
-// In-memory state (di-attach ke globalThis supaya konsisten di hot-reload)
+// Constants & in-memory lock
 // ---------------------------------------------------------------------------
 
-const globalForJobs = globalThis as typeof globalThis & {
-  __reportJobs?: Map<string, ReportJob>;
-  __reportJobOwners?: Map<string, string>;
-  __reportJobRunners?: Set<string>;
-};
+/** Step "running" tanpa update lebih lama dari ini dianggap mati → retry. */
+const STALE_STEP_MS = 90_000;
+/** Maks percobaan per step sebelum pakai fallback. */
+const MAX_STEP_ATTEMPTS = 2;
+/** Maks section yang diproses. */
+const MAX_STEPS = 50;
 
-const jobs = globalForJobs.__reportJobs || new Map<string, ReportJob>();
-const jobOwners = globalForJobs.__reportJobOwners || new Map<string, string>();
-const jobRunners = globalForJobs.__reportJobRunners || new Set<string>();
-globalForJobs.__reportJobs = jobs;
-globalForJobs.__reportJobOwners = jobOwners;
-globalForJobs.__reportJobRunners = jobRunners;
+const globalForJobs = globalThis as typeof globalThis & { __reportJobLocks?: Set<string> };
+const jobLocks = globalForJobs.__reportJobLocks || new Set<string>();
+globalForJobs.__reportJobLocks = jobLocks;
 
 // ---------------------------------------------------------------------------
-// Constants
+// Helpers
 // ---------------------------------------------------------------------------
 
-/** Kalau job stuck di status "queued"/"running" > 20 detik tanpa update,
- *  anggap stale — next polling akan resume. */
-const STALE_JOB_MS = 20_000;
+type JobRow = NonNullable<Awaited<ReturnType<typeof readJob>>>;
 
-/** Memory entries expire setelah 6 jam (untuk pruning). */
-const MEMORY_JOB_TTL_MS = 6 * 60 * 60 * 1000;
-
-/** Hard cap jumlah memory entries. */
-const MAX_MEMORY_JOBS = 100;
-
-/**
- * Stage progress. Real AI call ada di stage ke-5 ("Menulis draft laporan").
- * Stage 1-4 fake progress supaya UI kelihatan hidup (UX trick).
- * Total: 6 stage, progress 8 → 18 → 34 → 52 → 72 → 92 → 100.
- */
-const stages = [
-  { progress: 8, stage: "Menyiapkan job laporan" },
-  { progress: 18, stage: "Membaca konteks proyek" },
-  { progress: 34, stage: "Menyusun struktur laporan" },
-  { progress: 52, stage: "Menyusun tabel, diagram, dan referensi" },
-  { progress: 72, stage: "Menulis draft laporan" },
-  { progress: 92, stage: "Merapikan hasil akhir" },
-];
-
-// ---------------------------------------------------------------------------
-// Memory pruning
-// ---------------------------------------------------------------------------
-
-/** Hapus memory entries yang expired + trim kalau overflow. */
-function pruneMemoryJobs() {
-  const now = Date.now();
-  for (const [id, job] of jobs) {
-    const updatedAt = new Date(job.updatedAt).getTime();
-    if (!Number.isFinite(updatedAt) || now - updatedAt > MEMORY_JOB_TTL_MS) {
-      jobs.delete(id);
-      jobOwners.delete(id);
-      jobRunners.delete(id);
-    }
-  }
-
-  if (jobs.size <= MAX_MEMORY_JOBS) return;
-  const oldest = [...jobs.values()]
-    .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime())
-    .slice(0, jobs.size - MAX_MEMORY_JOBS);
-  for (const job of oldest) {
-    jobs.delete(job.id);
-    jobOwners.delete(job.id);
-    jobRunners.delete(job.id);
-  }
+async function readJob(id: string, ownerId: string) {
+  return prisma.reportJob.findFirst({
+    where: { id, ownerId },
+    include: { steps: { orderBy: { index: "asc" } } },
+  });
 }
 
-// ---------------------------------------------------------------------------
-// Row mappers
-// ---------------------------------------------------------------------------
-
-type RowSnapshot = {
-  id: string;
-  ownerId: string;
-  status: ReportJobStatus;
-  progress: number;
-  stage: string;
-  createdAt: Date;
-  updatedAt: Date;
-  result: string | null;
-  source: string | null;
-  error: string | null;
-  payload: unknown;
-};
-
-/** DB row → ReportJob (untuk response API). */
-function fromRow(row: RowSnapshot): ReportJob {
+function toPublic(row: JobRow): ReportJob {
   return {
     id: row.id,
-    status: row.status,
+    status: row.status as ReportJobStatus,
     progress: row.progress,
     stage: row.stage,
+    mode: row.mode === "ringkas" ? "ringkas" : "lengkap",
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     result: row.result || undefined,
     source: row.source || undefined,
     error: row.error || undefined,
+    steps: row.steps.map((step) => ({
+      index: step.index,
+      title: step.title,
+      status: step.status as ReportStepStatus,
+      error: step.error || undefined,
+    })),
   };
 }
 
-/** Patch object → data field untuk Prisma update. */
-function toPatch(patch: Partial<ReportJob>) {
-  return {
-    status: patch.status,
-    progress: patch.progress,
-    stage: patch.stage,
-    updatedAt: new Date(),
-    result: patch.result,
-    source: patch.source,
-    error: patch.error,
-  };
+function isStepFinished(status: string) {
+  return status === "done" || status === "fallback";
 }
 
-// ---------------------------------------------------------------------------
-// DB ops
-// ---------------------------------------------------------------------------
-
-/** Baca row dari DB. Return null kalau bukan milik owner. */
-async function readJobRow(id: string, ownerId: string): Promise<RowSnapshot | null> {
-  const row = await prisma.reportJob.findUnique({
-    where: { id },
-  });
-  if (!row || row.ownerId !== ownerId) return null;
-  return row as RowSnapshot;
+/** projectId valid dan milik owner → pakai, selain itu null (kolom nullable). */
+async function resolveProjectId(project: unknown, ownerId: string) {
+  if (!project || typeof project !== "object") return null;
+  const raw = (project as Record<string, unknown>).projectId;
+  if (typeof raw !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{2,79}$/.test(raw)) return null;
+  const found = await prisma.project.findFirst({ where: { projectId: raw, ownerId }, select: { projectId: true } });
+  return found?.projectId ?? null;
 }
 
-/** Insert or update job row + simpan payload (project sanitized). */
-async function saveJob(job: ReportJob, payload: unknown, ownerId: string) {
-  try {
-    await prisma.reportJob.upsert({
-      where: { id: job.id },
-      create: {
-        id: job.id,
-        ownerId,
-        projectId: extractProjectId(payload),
-        status: job.status,
-        progress: job.progress,
-        stage: job.stage,
-        result: job.result || null,
-        source: job.source || null,
-        error: job.error || null,
-        payload: (payload as object) ?? undefined,
-      },
-      update: {
-        status: job.status,
-        progress: job.progress,
-        stage: job.stage,
-        result: job.result || null,
-        source: job.source || null,
-        error: job.error || null,
-        payload: (payload as object) ?? undefined,
-      },
-    });
-  } catch (err) {
-    console.error("report_jobs upsert failed:", err instanceof Error ? err.message : "unknown");
-  }
-}
-
-/** Update sebagian field (partial update). Update memory cache + DB. */
-async function patchJob(id: string, ownerId: string, patch: Partial<ReportJob>) {
-  const current = jobs.get(id);
-  const updatedAt = new Date().toISOString();
-
-  if (current && jobOwners.get(id) === ownerId) {
-    jobs.set(id, { ...current, ...patch, updatedAt });
-  }
-
-  try {
-    await prisma.reportJob.updateMany({
-      where: { id, ownerId },
-      data: toPatch({ ...patch, updatedAt } as Partial<ReportJob>) as never,
-    });
-  } catch (err) {
-    console.error("report_jobs update failed:", err instanceof Error ? err.message : "unknown");
-  }
-}
-
-/** Ambil job dari memory (kalau ada & owner match). */
-function getOwnedMemoryJob(id: string, ownerId: string) {
-  return jobOwners.get(id) === ownerId ? jobs.get(id) || null : null;
-}
-
-/**
- * Extract projectId dari payload (kalau ada) atau fallback ke "unscoped".
- * Dipakai untuk FK constraint di tabel `report_jobs`.
- */
-function extractProjectId(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "unscoped";
-  const obj = payload as Record<string, unknown>;
-  const id = obj.projectId || obj.project_id || obj.id;
-  if (typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{2,79}$/.test(id)) return id;
-  return "unscoped";
+/** Progress 5..95 proporsional ke step selesai; 100 hanya saat finalize. */
+function progressFor(done: number, total: number) {
+  if (total <= 0) return 5;
+  return Math.min(95, 5 + Math.round((done / total) * 90));
 }
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Ambil status job (DB → memory fallback). Return null kalau bukan milik user. */
+/** Baca status job tanpa memicu step. */
 export async function getReportJob(id: string, ownerId: string) {
-  pruneMemoryJobs();
-  const row = await readJobRow(id, ownerId);
-  if (row) return fromRow(row);
-  return getOwnedMemoryJob(id, ownerId);
+  const row = await readJob(id, ownerId);
+  return row ? toPublic(row) : null;
 }
 
 /**
- * Pastikan job lagi running. Kalau queued tapi stale (>20s tanpa update),
- * resume runner. Dipakai untuk recovery setelah server restart.
+ * Buat job + steps dari outline. Tidak memanggil AI di sini — step pertama
+ * dijalankan oleh polling status (atau panggil advanceReportJob setelah ini).
  */
-export async function ensureReportJobRunning(id: string, ownerId: string) {
-  pruneMemoryJobs();
-  const row = await readJobRow(id, ownerId);
-  const job = row ? fromRow(row) : getOwnedMemoryJob(id, ownerId);
-  if (!job || job.status === "done" || job.status === "failed") return job;
-  if (jobRunners.has(id)) return job;  // Runner sudah jalan → return state.
+export async function startReportJob(project: unknown, ownerId: string, mode: ReportMode = "lengkap") {
+  const safeProject = sanitizeForPersistence(project);
+  const compact = compactProject(safeProject);
+  const outline = compact.outline.slice(0, MAX_STEPS);
+  if (!outline.length) throw new Error("Outline kosong.");
 
-  const payload = (row?.payload as unknown) ?? null;
-  const stale = Date.now() - new Date(job.updatedAt).getTime() > STALE_JOB_MS;
-  const shouldResume = job.status === "queued" || stale;
+  const id = `report_${crypto.randomUUID()}`;
+  const projectId = await resolveProjectId(safeProject, ownerId);
 
-  if (!payload || !shouldResume) return job;
+  const row = await prisma.reportJob.create({
+    data: {
+      id,
+      ownerId,
+      projectId,
+      status: "queued",
+      progress: 2,
+      stage: `Menyiapkan ${outline.length} bagian laporan`,
+      mode,
+      totalSteps: outline.length,
+      payload: safeProject as object,
+      steps: {
+        create: outline.map((section, index) => ({
+          index,
+          sectionId: section.id ?? null,
+          title: section.title || `Bagian ${index + 1}`,
+          status: "queued",
+        })),
+      },
+    },
+    include: { steps: { orderBy: { index: "asc" } } },
+  });
 
-  await runReportJob(id, payload, ownerId);
-  return getReportJob(id, ownerId);
+  return toPublic(row);
 }
 
-/** Kick off job baru: insert DB row, spawn background runner. Return initial state. */
-export async function startReportJob(project: unknown, ownerId: string) {
-  pruneMemoryJobs();
-  const safeProject = sanitizeForPersistence(project);
-  const id = `report_${crypto.randomUUID()}`;
-  const now = new Date().toISOString();
-  const job: ReportJob = {
-    id,
-    status: "queued",
-    progress: 2,
-    stage: "Masuk antrean generate laporan",
-    createdAt: now,
-    updatedAt: now,
+/**
+ * Kerjakan maksimal SATU step untuk job ini, lalu return state terbaru.
+ * Idempotent: kalau job sudah selesai / sedang dikerjakan request lain,
+ * hanya return state.
+ */
+export async function advanceReportJob(id: string, ownerId: string): Promise<ReportJob | null> {
+  const row = await readJob(id, ownerId);
+  if (!row) return null;
+  if (row.status === "done" || row.status === "failed") return toPublic(row);
+  if (jobLocks.has(id)) return toPublic(row);
+
+  jobLocks.add(id);
+  try {
+    return await runNextStep(row, ownerId);
+  } finally {
+    jobLocks.delete(id);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Step runner
+// ---------------------------------------------------------------------------
+
+async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
+  const now = Date.now();
+  const steps = row.steps;
+
+  // Step "running" milik proses lain yang masih hidup → tunggu.
+  const liveRunning = steps.find(
+    (step) => step.status === "running" && now - step.updatedAt.getTime() < STALE_STEP_MS,
+  );
+  if (liveRunning) return toPublic(row);
+
+  // Kandidat: queued, running-stale (retry), atau failed yang masih punya attempt.
+  const next = steps.find((step) =>
+    step.status === "queued"
+    || step.status === "running"
+    || (step.status === "failed" && step.attempts < MAX_STEP_ATTEMPTS),
+  );
+
+  if (!next) return finalizeJob(row, ownerId);
+
+  const project = row.payload as unknown;
+  const compact = compactProject(project);
+  const section = compact.outline[next.index] ?? {
+    id: next.sectionId ?? undefined,
+    title: next.title,
+    purpose: "",
+    requiredDiagrams: [],
+  };
+  const previousSummaries = steps
+    .filter((step) => step.index < next.index && step.summary)
+    .map((step) => step.summary as string);
+
+  await prisma.$transaction([
+    prisma.reportJobStep.update({
+      where: { id: next.id },
+      data: { status: "running", attempts: { increment: 1 }, error: null },
+    }),
+    prisma.reportJob.update({
+      where: { id: row.id },
+      data: {
+        status: "running",
+        stage: `Menulis ${next.title} (${next.index + 1}/${row.totalSteps})`,
+        progress: progressFor(steps.filter((step) => isStepFinished(step.status)).length, row.totalSteps),
+      },
+    }),
+  ]);
+
+  const chapterInput = {
+    index: next.index,
+    total: row.totalSteps,
+    section,
+    previousSummaries,
+    mode: (row.mode === "ringkas" ? "ringkas" : "lengkap") as ReportMode,
   };
 
-  jobs.set(id, job);
-  jobOwners.set(id, ownerId);
-  await saveJob(job, safeProject, ownerId);
-
-  // Fire-and-forget: jalan di background. Client poll via /status endpoint.
-  void runReportJob(id, safeProject, ownerId);
-  return job;
-}
-
-/**
- * Background runner. Update progress tiap stage, panggil AI di stage 5,
- * finalize di stage akhir. Catch error → set status "failed".
- *
- * Anti double-run: pakai `jobRunners` Set.
- */
-async function runReportJob(id: string, project: unknown, ownerId: string) {
-  if (jobRunners.has(id)) return;
-  jobRunners.add(id);
-
   try {
-    jobOwners.set(id, ownerId);
-    await patchJob(id, ownerId, {
-      status: "running",
-      progress: stages[0].progress,
-      stage: stages[0].stage,
-    });
-
-    // Fake progress 1→4 (UX trick, supaya user tau lagi proses)
-    for (const item of stages.slice(1, 4)) {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      await patchJob(id, ownerId, {
-        progress: item.progress,
-        stage: item.stage,
-      });
-    }
-
-    // Real work — panggil AI.
-    await patchJob(id, ownerId, {
-      progress: stages[4].progress,
-      stage: stages[4].stage,
-    });
-    const draft = await generateReportDraft(project);
-    await patchJob(id, ownerId, {
-      progress: stages[5].progress,
-      stage: stages[5].stage,
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    await patchJob(id, ownerId, {
-      status: "done",
-      progress: 100,
-      stage:
-        draft.source === "fallback-timeout"
-          ? "Draft cepat selesai, siap direvisi/diperpanjang"
-          : "Laporan selesai disusun",
-      result: draft.content,
-      source: draft.source,
+    const chapter = await generateChapter(project, chapterInput);
+    await prisma.reportJobStep.update({
+      where: { id: next.id },
+      data: {
+        status: chapter.source === "ai" ? "done" : "fallback",
+        output: chapter.content,
+        summary: chapter.summary,
+      },
     });
   } catch (error) {
-    console.error("Report job failed:", error);
-    await patchJob(id, ownerId, {
-      status: "failed",
-      progress: 100,
-      stage: "Generate laporan gagal",
-      error: "Laporan gagal dibuat. Periksa bahan proyek lalu coba lagi.",
-    });
-  } finally {
-    jobRunners.delete(id);
+    const attemptsUsed = next.attempts + 1;
+    const message = error instanceof Error ? error.message.slice(0, 300) : "unknown";
+    console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptsUsed}):`, message);
+
+    if (attemptsUsed >= MAX_STEP_ATTEMPTS) {
+      // Habis percobaan → fallback placeholder supaya laporan tetap utuh.
+      const fallback = fallbackChapter(chapterInput);
+      await prisma.reportJobStep.update({
+        where: { id: next.id },
+        data: { status: "fallback", output: fallback.content, summary: fallback.summary, error: message },
+      });
+    } else {
+      await prisma.reportJobStep.update({
+        where: { id: next.id },
+        data: { status: "failed", error: message },
+      });
+    }
   }
+
+  const fresh = await readJob(row.id, ownerId);
+  if (!fresh) throw new Error("Job hilang saat diproses.");
+
+  const remaining = fresh.steps.some((step) => !isStepFinished(step.status));
+  if (!remaining) return finalizeJob(fresh, ownerId);
+
+  const doneCount = fresh.steps.filter((step) => isStepFinished(step.status)).length;
+  const updated = await prisma.reportJob.update({
+    where: { id: fresh.id },
+    data: {
+      progress: progressFor(doneCount, fresh.totalSteps),
+      stage: `${doneCount}/${fresh.totalSteps} bagian selesai`,
+    },
+    include: { steps: { orderBy: { index: "asc" } } },
+  });
+  return toPublic(updated);
+}
+
+async function finalizeJob(row: JobRow, ownerId: string): Promise<ReportJob> {
+  const chapters = row.steps
+    .filter((step) => isStepFinished(step.status) && step.output)
+    .sort((a, b) => a.index - b.index)
+    .map((step) => step.output as string);
+
+  if (!chapters.length) {
+    const failed = await prisma.reportJob.update({
+      where: { id: row.id, ownerId },
+      data: {
+        status: "failed",
+        progress: 100,
+        stage: "Generate laporan gagal",
+        error: "Tidak ada bagian yang berhasil ditulis. Periksa bahan proyek lalu coba lagi.",
+      },
+      include: { steps: { orderBy: { index: "asc" } } },
+    });
+    return toPublic(failed);
+  }
+
+  const fallbackCount = row.steps.filter((step) => step.status === "fallback").length;
+  const result = assembleReport(row.payload, chapters);
+  const done = await prisma.reportJob.update({
+    where: { id: row.id, ownerId },
+    data: {
+      status: "done",
+      progress: 100,
+      stage: fallbackCount
+        ? `Laporan selesai, ${fallbackCount} bagian perlu dilengkapi lewat revisi`
+        : "Laporan selesai disusun",
+      result,
+      source: fallbackCount ? "ai-partial" : "ai",
+    },
+    include: { steps: { orderBy: { index: "asc" } } },
+  });
+  return toPublic(done);
 }

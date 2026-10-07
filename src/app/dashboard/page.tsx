@@ -627,7 +627,7 @@ export default function ReportBuilderPage() {
       const startResponse = await authenticatedFetch("/api/report-jobs/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: reportProject }),
+        body: JSON.stringify({ project: reportProject, mode: "ringkas" }),
       });
 
       const startData = await readApiPayload<never>(startResponse, "Gagal memulai job laporan.");
@@ -640,8 +640,10 @@ export default function ReportBuilderPage() {
       setGenerationLabel(startData.job.stage || "Job laporan dimulai");
 
       let finalJob: ReportJob | null = null;
-      for (let attempt = 0; attempt < 1800; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 1200));
+      // Setiap poll mengerjakan 1 BAB di server (request blocking ±10-40s),
+      // jadi jeda antar poll cukup pendek.
+      for (let attempt = 0; attempt < 600; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
         const statusResponse = await authenticatedFetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
         const statusData = await readApiPayload<never>(statusResponse, "Gagal membaca progres generate laporan.");
 
