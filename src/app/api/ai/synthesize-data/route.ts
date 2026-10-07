@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 import { getErrorMessage } from "@/lib/errors";
 
 export const maxDuration = 60;
@@ -59,15 +59,19 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
 
     const inputData = previousResult ? `Draf Saat Ini:\n\n${previousResult}\n\nUbah draf di atas sesuai instruksi.` : `Data Mentah:\n\n${rawData}\n\nBuatkan draf laporannya sekarang.`;
 
+    // Gunakan AI_MODEL_FAST jika input data ringkas (< 4000 karakter) agar respons instan
+    const isShortData = rawData.length < 4000;
+    const modelToUse = isShortData ? AI_MODEL_FAST : AI_MODEL;
+
     const response = await aiClient.chat.completions.create({
-      model: AI_MODEL,
+      model: modelToUse,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: inputData }
       ],
       temperature: 0.3,
       max_tokens: 3500,
-    });
+    }, { timeout: 35000 });
 
     const aiResponse = response.choices[0].message.content || "";
 
@@ -77,6 +81,13 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
     });
   } catch (error: unknown) {
     console.error("API /api/ai/synthesize-data Error:", error);
+    const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+    if (isTimeout) {
+      return NextResponse.json(
+        { success: false, error: "Waktu tunggu AI habis saat mensintesis data. Coba kurangi panjang data mentah atau proses bertahap." },
+        { status: 504 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: getErrorMessage(error, "Gagal menghasilkan laporan, silakan coba lagi.") },
       { status: 500 }

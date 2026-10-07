@@ -63,7 +63,12 @@ function makeId(prefix: string) {
 
 async function readResponse<T>(response: Response): Promise<T & { success?: boolean; error?: string }> {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.success === false) throw new Error(data.error || "Permintaan belum berhasil.");
+  if (!response.ok || data.success === false) {
+    if (response.status === 504 || response.status === 502) {
+      throw new Error("Server AI sedang sibuk atau antrean panjang. Silakan coba kirim ulang dalam beberapa detik.");
+    }
+    throw new Error(data.error || "Permintaan belum berhasil diproses.");
+  }
   return data;
 }
 

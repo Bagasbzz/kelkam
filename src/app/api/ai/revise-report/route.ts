@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 
 export const maxDuration = 60;
 
@@ -177,15 +177,19 @@ Aturan ketat:
       draft,
     };
 
+    // Gunakan AI_MODEL_FAST untuk tugas revisi ringan/formatting agar instan
+    const isLightTask = task === "format" || task === "table" || task === "bibliography";
+    const modelToUse = isLightTask ? AI_MODEL_FAST : AI_MODEL;
+
     const response = await aiClient.chat.completions.create({
-      model: AI_MODEL,
+      model: modelToUse,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(userPayload) },
       ],
       temperature: 0.18,
       max_tokens: 3600,
-    });
+    }, { timeout: 35000 });
 
     const data = response.choices[0]?.message.content?.trim() || "";
     if (!data) {
@@ -195,6 +199,13 @@ Aturan ketat:
     return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("API /api/ai/revise-report Error:", error);
+    const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+    if (isTimeout) {
+      return NextResponse.json(
+        { success: false, error: "Waktu tunggu revisi habis. Coba persempit bagian yang ingin direvisi atau pilih jenis revisi yang lebih spesifik." },
+        { status: 504 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: getErrorMessage(error) },
       { status: error instanceof Error && error.message.includes("Payload") ? 400 : 500 }

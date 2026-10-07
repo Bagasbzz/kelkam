@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 import {
   autoLayoutDiagram,
   validateDiagramData,
@@ -696,8 +696,12 @@ export async function POST(req: Request) {
     });
 
     const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
+      // Untuk klarifikasi awal atau perbaikan spec, pakai AI_MODEL_FAST agar cepat dan responsif
+      const modelToUse = (askFirst || repairSpec) ? AI_MODEL_FAST : AI_MODEL;
+      const timeoutLimit = (askFirst || repairSpec) ? 20000 : 30000;
+
       const response = await aiClient.chat.completions.create({
-        model: AI_MODEL,
+        model: modelToUse,
         messages: [
           {
             role: "system",
@@ -714,7 +718,7 @@ export async function POST(req: Request) {
         ],
         temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
         max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
-      });
+      }, { timeout: timeoutLimit });
 
       return extractJson(response.choices[0].message.content || "{}");
     };
@@ -822,6 +826,13 @@ export async function POST(req: Request) {
     });
   } catch (error: unknown) {
     console.error("API /api/ai/generate-uml Error:", error);
+    const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+    if (isTimeout) {
+      return NextResponse.json(
+        { success: false, error: "Waktu tunggu AI pembuatan diagram habis. Coba persempit deskripsi alur atau coba beberapa saat lagi." },
+        { status: 504 }
+      );
+    }
     return NextResponse.json(
       { success: false, error: "Gagal menghasilkan diagram. Coba lagi atau gunakan mode tanya dulu." },
       { status: 500 }

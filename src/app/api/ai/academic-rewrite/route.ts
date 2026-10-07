@@ -24,7 +24,11 @@ Teks yang akan diperbaiki:
 
 Tuliskan hasilnya langsung dalam bahasa akademik yang formal.`;
     
-    const aiResponse = await sendToAI(prompt, "Anda adalah editor akademik keluhkampus. Jawab langsung dengan hasil revisi bahasa Indonesia yang formal, jelas, dan tetap mempertahankan makna asli.");
+    const aiResponse = await sendToAI(
+      prompt,
+      "Anda adalah editor akademik keluhkampus. Jawab langsung dengan hasil revisi bahasa Indonesia yang formal, jelas, dan tetap mempertahankan makna asli.",
+      "gpt-5-mini"
+    );
 
     return NextResponse.json({ 
       success: true, 

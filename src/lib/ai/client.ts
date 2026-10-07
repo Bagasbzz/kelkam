@@ -17,6 +17,15 @@ export const AI_MODEL_FAST = process.env.AI_MODEL_FAST || process.env.AI_MODEL_M
 export const AI_MODEL_REVIEW = process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE || AI_MODEL_DEFAULT;
 export const AI_MODEL = AI_MODEL_DEFAULT;
 
+/** Helper to determine fallback fast model name if provider returns model not found or slow */
+export function getFastModelName(): string {
+  return AI_MODEL_FAST;
+}
+
+/** Helper untuk timeout default AI (ms) */
+export const AI_TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 35000);
+export const AI_FAST_TIMEOUT_MS = Number(process.env.AI_FAST_TIMEOUT_MS || 20000);
+
 function getAiRuntimeConfig() {
   const apiKey = process.env.AI_API_KEY || "";
   const baseURL = process.env.AI_BASE_URL || "https://api.z0ne.ai/v1";
@@ -70,7 +79,7 @@ export function assertAiConfigured() {
 export async function sendToAI(prompt: string, system?: string, model?: string) {
   assertAiConfigured();
 
-  const chosenModel = model || AI_MODEL_DEFAULT;
+  const chosenModel = model || AI_MODEL_FAST;
 
   const response = await aiClient.chat.completions.create({
     model: chosenModel,
@@ -84,7 +93,7 @@ export async function sendToAI(prompt: string, system?: string, model?: string) 
       { role: "user", content: prompt },
     ],
     temperature: 0.25,
-  });
+  }, { timeout: AI_TIMEOUT_MS });
 
   return response.choices[0].message.content || "Tidak ada respons dari AI.";
 }

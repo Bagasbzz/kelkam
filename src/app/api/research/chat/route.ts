@@ -134,7 +134,7 @@ Aturan:
 
     let parsed: unknown = null;
     try {
-      parsed = extractJson(await sendToAI(userPrompt, systemPrompt));
+      parsed = extractJson(await sendToAI(userPrompt, systemPrompt, "gpt-5-mini"));
     } catch (error: unknown) {
       console.warn("AI research chat failed; using deterministic follow-ups:", getErrorMessage(error, "unknown"));
     }

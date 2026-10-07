@@ -40,7 +40,8 @@ Teks yang dianalisis:
 
     const aiResponse = await sendToAI(
       prompt,
-      "Anda adalah pemeriksa struktur akademik keluhkampus. Berikan audit singkat, tegas, actionable, dan berbahasa Indonesia."
+      "Anda adalah pemeriksa struktur akademik keluhkampus. Berikan audit singkat, tegas, actionable, dan berbahasa Indonesia.",
+      "gpt-5-mini"
     );
 
     return NextResponse.json({

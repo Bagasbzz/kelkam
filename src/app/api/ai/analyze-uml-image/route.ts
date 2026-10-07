@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
-import { aiClient, AI_MODEL, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 
 export const maxDuration = 60;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -68,7 +68,7 @@ export async function POST(req: Request) {
     };
 
     const analysis = await aiClient.chat.completions.create({
-      model: AI_MODEL,
+      model: AI_MODEL_FAST,
       messages: [
         {
           role: "system",
@@ -78,7 +78,7 @@ export async function POST(req: Request) {
       ],
       temperature: 0.1,
       max_tokens: 900,
-    });
+    }, { timeout: 25000 });
 
     const extracted = extractJson(analysis.choices[0].message.content || "{}");
     const reconstructionPrompt = extracted.reconstructionPrompt || prompt;
