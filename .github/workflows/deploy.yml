@@ -87,6 +87,23 @@ jobs:
             # Extract file bundle tanpa menimpa file .env atau folder uploads
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
+
+            # Apply migrasi Prisma (production-safe, hanya pending migration).
+            # DATABASE_URL/DIRECT_URL dibaca dari .env.local / .env di server.
+            set -a
+            [ -f .env.local ] && . ./.env.local
+            [ -f .env ] && . ./.env
+            set +a
+            export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
+            if [ -n "$DATABASE_URL" ]; then
+              if [ -x node_modules/.bin/prisma ]; then
+                node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma || echo "⚠ migrate gagal — cek log"
+              else
+                npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma || echo "⚠ migrate gagal — cek log"
+              fi
+            else
+              echo "⚠ DATABASE_URL tidak ditemukan, migrasi dilewati"
+            fi
             
             # Pastikan folder tmp ada dan sentuh restart.txt untuk reload Node.js
             mkdir -p tmp
