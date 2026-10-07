@@ -270,6 +270,84 @@ export function fallbackChapter(input: ChapterInput): ChapterOutput {
   return { content, summary: section.purpose || section.title, source: "fallback", finishReason: "fallback" };
 }
 
+// ---------------------------------------------------------------------------
+// Pemilihan bahan per BAB (chunk relevan, bukan potongan awal saja)
+// ---------------------------------------------------------------------------
+
+const CHUNK_CHARS = 650;
+
+function keywordsOf(text: string) {
+  return Array.from(new Set(
+    text.toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 3),
+  ));
+}
+
+/** Pecah teks per paragraf lalu gabung sampai ±CHUNK_CHARS. */
+function chunkText(text: string) {
+  const paragraphs = text.split(/\n{2,}|\r\n{2,}/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const chunks: string[] = [];
+  let buffer = "";
+  for (const paragraph of paragraphs) {
+    if ((buffer + " " + paragraph).length > CHUNK_CHARS && buffer) {
+      chunks.push(buffer);
+      buffer = paragraph;
+    } else {
+      buffer = buffer ? `${buffer} ${paragraph}` : paragraph;
+    }
+    // Paragraf tunggal yang sangat panjang dipotong keras.
+    while (buffer.length > CHUNK_CHARS * 2) {
+      chunks.push(buffer.slice(0, CHUNK_CHARS));
+      buffer = buffer.slice(CHUNK_CHARS);
+    }
+  }
+  if (buffer) chunks.push(buffer);
+  return chunks;
+}
+
+/**
+ * Pilih potongan sumber yang paling relevan untuk section ini dalam budget
+ * karakter. Setiap sumber selalu menyumbang ringkasan awal (head) supaya
+ * konteks umum tidak hilang, sisanya diisi chunk dengan skor tertinggi.
+ */
+function selectSourceMaterial(project: unknown, section: ChapterInput["section"], budgetChars: number) {
+  const raw = isRecord(project) ? records(project.sources).slice(0, 30) : [];
+  const keywords = keywordsOf(`${section.title} ${section.purpose}`);
+
+  const heads = raw.map((source) => ({
+    kind: truncate(source.kind, 40) || "note",
+    title: truncate(source.title, 180),
+    content: truncate(source.content, 320),
+  }));
+  let used = heads.reduce((acc, head) => acc + head.content.length, 0);
+
+  const scored: Array<{ sourceIndex: number; chunk: string; score: number }> = [];
+  raw.forEach((source, sourceIndex) => {
+    const text = String(source.content || "");
+    if (text.length <= 320) return; // head sudah cukup
+    for (const chunk of chunkText(text)) {
+      const haystack = chunk.toLowerCase();
+      const score = keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+      if (score > 0) scored.push({ sourceIndex, chunk, score });
+    }
+  });
+  scored.sort((a, b) => b.score - a.score);
+
+  const extras = new Map<number, string[]>();
+  for (const item of scored) {
+    if (used + item.chunk.length > budgetChars) break;
+    const list = extras.get(item.sourceIndex) || [];
+    if (list.length >= 4) continue; // maks 4 chunk per sumber supaya merata
+    list.push(item.chunk);
+    extras.set(item.sourceIndex, list);
+    used += item.chunk.length;
+  }
+
+  return heads.map((head, index) => ({
+    ...head,
+    kutipanRelevan: extras.get(index) || [],
+  }));
+}
+
 /**
  * Generate satu BAB. 1 panggilan AI, model dipilih dari mode:
  *   - ringkas → AI_MODEL_FAST, target ±300-500 kata
@@ -284,10 +362,8 @@ export async function generateChapter(project: unknown, input: ChapterInput): Pr
 
   const sectionDiagrams = compact.diagrams.filter((diagram) => section.requiredDiagrams.includes(diagram.id));
   const references = pickReferences(compact, section, isRingkas ? 5 : 10);
-  const sources = compact.sources.slice(0, isRingkas ? 6 : 12).map((source) => ({
-    ...source,
-    content: source.content.slice(0, isRingkas ? 700 : 1400),
-  }));
+  // Bahan: head tiap sumber + chunk paling relevan untuk BAB ini (budget char).
+  const sources = selectSourceMaterial(project, section, isRingkas ? 6_000 : 14_000);
 
   const systemPrompt = `Anda adalah penulis laporan akademik keluhkampus untuk mahasiswa Indonesia.
 Tugas: tulis SATU bagian laporan (BAB ${index + 1} dari ${total}) berjudul "${section.title}" dalam Bahasa Indonesia.
@@ -374,5 +450,38 @@ export function assembleReport(project: unknown, chapters: string[]) {
   const references = compact.references.length
     ? compact.references.map((reference) => reference.citation || `[Cari jurnal: ${reference.query || reference.purpose || "topik terkait"}]${reference.url ? ` - ${reference.url}` : ""}`).join("\n")
     : "[Tambahkan referensi/jurnal yang relevan]";
-  return `# ${title}\n\n${chapters.join("\n\n")}\n\n## Daftar Pustaka\n${references}\n`;
+  const body = `# ${title}\n\n${chapters.join("\n\n")}\n\n## Daftar Pustaka\n${references}\n`;
+  const audit = auditCitations(body, compact);
+  return audit.notes.length ? `${body}\n${audit.notes.join("\n")}\n` : body;
+}
+
+/**
+ * Audit sitasi lokal (0 token): sitasi in-text (Nama, Tahun) yang tidak cocok
+ * dengan entri daftar pustaka → ditandai sebagai catatan di akhir laporan.
+ */
+export function auditCitations(markdown: string, compact: CompactProject) {
+  const bibliography = compact.references.map((reference) => reference.citation.toLowerCase()).join("\n");
+  const inText = new Set<string>();
+  // Pola umum: (Surname, 2021), (Surname & Other, 2021), (Surname et al., 2021)
+  const pattern = /\(([A-Z][A-Za-z'’-]+)(?:\s*(?:&|dan|and)\s*[A-Z][A-Za-z'’-]+|\s+et al\.?)?,?\s*(\d{4}[a-z]?)\)/g;
+  for (const match of markdown.matchAll(pattern)) {
+    inText.add(`${match[1]}|${match[2]}`);
+  }
+
+  const unmatched: string[] = [];
+  for (const key of inText) {
+    const [surname, year] = key.split("|");
+    const found = bibliography.includes(surname.toLowerCase()) && bibliography.includes(year.slice(0, 4));
+    if (!found) unmatched.push(`${surname}, ${year}`);
+  }
+
+  const placeholders = (markdown.match(/\[butuh referensi:[^\]]*\]/gi) || []).length;
+  const notes: string[] = [];
+  if (unmatched.length) {
+    notes.push(`> **Catatan sitasi:** ${unmatched.length} sitasi belum ada di Daftar Pustaka — ${unmatched.slice(0, 8).join("; ")}${unmatched.length > 8 ? "; ..." : ""}. Tambahkan referensinya atau hapus sitasi.`);
+  }
+  if (placeholders) {
+    notes.push(`> **Catatan referensi:** ${placeholders} bagian masih bertanda [butuh referensi]. Cari jurnal di Research lalu jalankan revisi "Tambah sitasi".`);
+  }
+  return { unmatched, placeholders, notes };
 }

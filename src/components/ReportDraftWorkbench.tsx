@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
-import { exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
+import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
 
@@ -142,6 +142,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [revisionMode, setRevisionMode] = useState<RevisionMode>("format");
+  const [docxPreset, setDocxPreset] = useState<string>("kampus4433");
   const [revisionTarget, setRevisionTarget] = useState("");
   const [revisionInstruction, setRevisionInstruction] = useState("");
   const [revisionProgress, setRevisionProgress] = useState(0);
@@ -488,7 +489,11 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
     setError(null);
     setFeedback(null);
     try {
-      await exportMarkdownToDocx(draft, assembledProject.title || assembledProject.topic || "laporan-riset");
+      const title = assembledProject.title || assembledProject.topic || "laporan-riset";
+      const preset = DOCX_PRESETS[docxPreset] ?? DOCX_PRESETS.kampus4433;
+      await exportMarkdownToDocx(draft, title, {
+        profile: { ...preset.profile, cover: { title, year: String(new Date().getFullYear()) } },
+      });
       setFeedback("DOCX berhasil diexport.");
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : "Gagal export DOCX.");
@@ -727,7 +732,17 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
             <div className="text-sm font-bold">Hasil Draft</div>
             <div className="text-xs text-slate-500">Draft disimpan lokal per project, bisa disalin, direvisi, atau langsung diexport ke DOCX.</div>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={docxPreset}
+              onChange={(e) => setDocxPreset(e.target.value)}
+              className="rounded border border-slate-200 px-2 py-2 text-xs"
+              title="Profil format DOCX"
+            >
+              {Object.entries(DOCX_PRESETS).map(([key, preset]) => (
+                <option key={key} value={key}>{preset.label}</option>
+              ))}
+            </select>
             <button onClick={copyDraft} disabled={!draft} className="px-3 py-2 rounded border text-xs font-semibold disabled:opacity-50">Salin Draft</button>
             <button onClick={exportDocx} disabled={!draft || isExporting} className="px-3 py-2 rounded bg-violet-600 text-white text-xs font-semibold disabled:opacity-50">
               {isExporting ? "Exporting..." : "Export DOCX"}

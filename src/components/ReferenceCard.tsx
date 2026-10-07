@@ -101,7 +101,18 @@ export default function ReferenceCard({
 
       <div className="mb-3 flex flex-wrap gap-2 text-[11px] font-semibold">
         {paper.doi && <span className={`rounded-full px-2 py-1 ${paper.doiVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{paper.doiVerified ? "DOI tervalidasi" : "DOI belum tervalidasi"}</span>}
-        <span className={`rounded-full px-2 py-1 ${paper.pdfStatus === "verified" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-600"}`}>PDF {paper.pdfStatus || "unknown"}</span>
+        <span className={`rounded-full px-2 py-1 ${
+          paper.pdfStatus === "verified" ? "bg-blue-50 text-blue-700"
+            : paper.pdfStatus === "landing_page" ? "bg-amber-50 text-amber-700"
+            : paper.pdfStatus === "closed" || paper.pdfStatus === "broken" ? "bg-red-50 text-red-700"
+            : "bg-slate-100 text-slate-600"
+        }`}>
+          {paper.pdfStatus === "verified" ? "Full text PDF tersedia"
+            : paper.pdfStatus === "landing_page" ? "Hanya halaman artikel"
+            : paper.pdfStatus === "closed" ? "PDF berbayar/tertutup"
+            : paper.pdfStatus === "broken" ? "Link PDF rusak"
+            : "Hanya abstrak"}
+        </span>
         {paper.isOpenAccess ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Open access</span> : <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">Akses belum pasti</span>}
       </div>
 

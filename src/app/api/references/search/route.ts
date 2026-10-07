@@ -2,6 +2,7 @@
 import { searchSemanticScholar } from "@/lib/references/semantic-scholar";
 import { searchOpenAlex } from "@/lib/references/openalex";
 import { searchCrossref, verifyCrossrefDoi } from "@/lib/references/crossref";
+import { verifyPdfUrls } from "@/lib/references/verify-pdf";
 import type { ProviderPaper } from "@/lib/references/types";
 import { getErrorMessage } from "@/lib/errors";
 
@@ -160,7 +161,7 @@ export async function POST(req: Request) {
     const merged = mergeAndDeduplicate(results, ["semantic-scholar", "openalex", "crossref"]);
 
     const limited = (merged || []).slice(0, Number(limit || 5));
-    const verified = await Promise.all(
+    const doiChecked = await Promise.all(
       limited.map(async (paper) => {
         if (!paper.doi) return paper;
         const doiCheck = await verifyCrossrefDoi(paper.doi);
@@ -171,10 +172,17 @@ export async function POST(req: Request) {
           url: paper.url || doiCheck.publisherUrl || null,
           pdfUrl: paper.pdfUrl || doiCheck.pdfUrl || null,
           venue: paper.venue || doiCheck.venue || "",
-          pdfStatus: paper.pdfUrl || doiCheck.pdfUrl ? "verified" : paper.pdfStatus || "unknown",
         };
       })
     );
+
+    // Cek nyata link PDF (HEAD/GET ringan) — "verified" hanya kalau content-type PDF.
+    const pdfStatuses = await verifyPdfUrls(doiChecked.map((paper) => paper.pdfUrl));
+    const verified = doiChecked.map((paper, index) => ({
+      ...paper,
+      pdfStatus: pdfStatuses[index],
+      isOpenAccess: Boolean(paper.isOpenAccess) || pdfStatuses[index] === "verified",
+    }));
 
     const mapped = verified.map((p) => ({
       id: p.doi || p.id || p.title?.slice(0, 60) || Math.random().toString(36).slice(2, 9),
@@ -187,7 +195,7 @@ export async function POST(req: Request) {
       pdfUrl: p.pdfUrl || null,
       doi: p.doi || null,
       doiVerified: Boolean(p.doiVerified),
-      pdfStatus: p.pdfStatus || (p.pdfUrl ? "verified" : "unknown"),
+      pdfStatus: p.pdfStatus,
       citationCount: p.citationCount || 0,
       isOpenAccess: Boolean(p.isOpenAccess),
       source: p.source || null,

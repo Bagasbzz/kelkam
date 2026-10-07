@@ -110,7 +110,7 @@ export async function searchCrossref(query: string, options: SearchOptions = {})
           isOpenAccess: Boolean(pdfUrl),
           source: "crossref",
           sourceProviders: ["crossref"],
-          pdfStatus: pdfUrl ? "verified" : "unknown",
+          pdfStatus: "unknown",
           doiVerified: Boolean(doi),
           raw: item,
         } as ProviderPaper;
