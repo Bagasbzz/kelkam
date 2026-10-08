@@ -64,19 +64,6 @@ jobs:
           # 3. Kompresi ke tar.gz (sangat cepat, hemat bandwidth, & menjaga permission file Linux)
           cd deploy && tar -czf ../deploy.tar.gz . && cd ..
 
-      - name: �️ Prisma migrate deploy (dari runner, sebelum upload)
-        # Wajib set secret DATABASE_URL (dan DIRECT_URL jika pakai pooler) di
-        # Settings → Environments → SSH_SERVER. Gagal migrasi = deploy berhenti,
-        # kode baru tidak pernah jalan di atas skema lama.
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          DIRECT_URL: ${{ secrets.DIRECT_URL || secrets.DATABASE_URL }}
-        run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "ℹ secret DATABASE_URL belum di-set — migrasi dijalankan di server via SSH"
-            exit 0
-          fi
-          npx prisma migrate deploy --schema prisma/schema.prisma
 
       - name: �🚀 Transfer Bundle via SCP
         uses: appleboy/scp-action@v0.1.7
@@ -103,23 +90,56 @@ jobs:
             rm deploy.tar.gz
 
             # Apply migrasi Prisma (production-safe, hanya pending migration).
-            # DATABASE_URL/DIRECT_URL dibaca dari .env.local / .env di server.
-            # Dijalankan SEBELUM restart; kalau gagal, deploy dihentikan supaya
-            # kode baru tidak jalan di atas skema lama.
-            set -a
-            [ -f .env.local ] && . ./.env.local
-            [ -f .env ] && . ./.env
-            set +a
+            # DB Postgres cPanel hanya bisa diakses dari server ini, jadi migrasi
+            # WAJIB jalan di sini. DATABASE_URL dibaca dari .env.local / .env.
+            # Kalau gagal → deploy berhenti, app lama tetap jalan.
+            set -e
+            # 1) Override dari GitHub secret (opsional, paling pasti).
+            if [ -n "${{ secrets.DATABASE_URL }}" ]; then
+              export DATABASE_URL="${{ secrets.DATABASE_URL }}"
+            fi
+            # 2) cPanel "Setup Node.js App" menyimpan env var di script activate nodevenv.
+            if [ -z "$DATABASE_URL" ]; then
+              for act in "$HOME"/nodevenv/*/*/bin/activate; do
+                [ -f "$act" ] || continue
+                # shellcheck disable=SC1090
+                . "$act" >/dev/null 2>&1 || true
+                [ -n "$DATABASE_URL" ] && { echo "env dari $act"; break; }
+              done
+            fi
+            # 3) Fallback: .env.local / .env di folder deploy.
+            for f in .env.local .env; do
+              if [ -f "$f" ]; then
+                while IFS= read -r line; do
+                  case "$line" in
+                    DATABASE_URL=*|DIRECT_URL=*|"export DATABASE_URL="*|"export DIRECT_URL="*)
+                      line="${line#export }"; key="${line%%=*}"; val="${line#*=}"
+                      val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
+                      [ -z "$(eval echo \$$key)" ] && export "$key=$val"
+                      ;;
+                  esac
+                done < "$f"
+              fi
+            done
             export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
             if [ -z "$DATABASE_URL" ]; then
               echo "✗ DATABASE_URL tidak ditemukan di .env.local/.env server"; exit 1
             fi
-            if [ -x node_modules/.bin/prisma ]; then
-              node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma
-            else
-              npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma
+            echo "DB target: $(echo "$DATABASE_URL" | sed -E 's#://([^:]+):[^@]+@#://\1:****@#')"
+
+            # Pakai node dari Passenger/cPanel kalau ada (nvm / cloudlinux).
+            [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
+            command -v node && node -v
+
+            # Install prisma CLI lokal ke folder deploy (sekali; dicache antar deploy).
+            if [ ! -x node_modules/.bin/prisma ]; then
+              echo "Install prisma CLI 6.19.3 (sekali) ..."
+              npm install --no-save --no-audit --no-fund prisma@6.19.3 @prisma/client@6.19.3
             fi
+            node_modules/.bin/prisma migrate status --schema prisma/schema.prisma || true
+            node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma
             echo "✓ Migrasi Prisma selesai"
+            set +e
             
             # Pastikan folder tmp ada dan sentuh restart.txt untuk reload Node.js
             mkdir -p tmp

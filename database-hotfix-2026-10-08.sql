@@ -1,6 +1,9 @@
 -- HOTFIX manual (idempotent, HANYA menambah kolom/tabel; tidak menghapus data).
--- Jalankan di Supabase SQL Editor kalau `prisma migrate deploy` di CI gagal.
--- Setelah jalan, tandai migrasi sebagai applied di tabel _prisma_migrations (bagian bawah).
+-- Jalankan di cPanel → phpPgAdmin → database keluhkam_kamp → tab SQL (paste semua, Execute).
+-- Satu transaksi: kalau ada error, tidak ada yang berubah.
+-- Bagian bawah menandai migrasi sebagai applied di _prisma_migrations supaya
+-- `prisma migrate deploy` berikutnya tidak mengulang.
+BEGIN;
 
 -- 20261007000000_add_admin_ai_tugas
 ALTER TABLE "tugases" ADD COLUMN IF NOT EXISTS "pertemuan" INTEGER;
@@ -139,3 +142,5 @@ FROM (VALUES
   ('20261007120000_report_job_log_heartbeat', '41cb1baf19a04bee2da1323c6f257dfa64218d6e00f78a29b9dc2057e6996334')
 ) AS v(m, c)
 WHERE NOT EXISTS (SELECT 1 FROM "_prisma_migrations" p WHERE p.migration_name = v.m);
+
+COMMIT;
