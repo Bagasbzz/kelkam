@@ -47,12 +47,16 @@ export async function searchOpenAlex(query: string, options: SearchOptions = {})
       const hostVenue = isRecord(r.host_venue) ? r.host_venue : {};
       const ids = isRecord(r.ids) ? r.ids : {};
       const primaryLocation = isRecord(r.primary_location) ? r.primary_location : {};
+      const primarySource = isRecord(primaryLocation.source) ? primaryLocation.source : {};
       const bestOaLocation = isRecord(r.best_oa_location) ? r.best_oa_location : {};
       const openAccess = isRecord(r.open_access) ? r.open_access : {};
       const id = r.id || r.openalex_id || "";
       const title = r.title || "";
       const year = r.publication_year || null;
-      const venue = hostVenue.display_name || hostVenue.publisher || null;
+      const venue = primarySource.display_name || hostVenue.display_name || hostVenue.publisher || null;
+      const issn = Array.isArray(primarySource.issn)
+        ? primarySource.issn.filter((v): v is string => typeof v === "string")
+        : typeof primarySource.issn_l === "string" ? [primarySource.issn_l] : [];
       const abstract = isRecord(r.abstract_inverted_index)
         ? reconstructAbstract(r.abstract_inverted_index)
         : r.abstract || null;
@@ -81,6 +85,11 @@ export async function searchOpenAlex(query: string, options: SearchOptions = {})
         doi: doi ? String(doi) : null,
         citationCount: Number(citationCount) || 0,
         isOpenAccess,
+        issn,
+        inDoaj: Boolean(primarySource.is_in_doaj),
+        venueType: typeof primarySource.type === "string" ? primarySource.type : null,
+        publicationType: typeof r.type === "string" ? r.type : null,
+        language: typeof r.language === "string" ? r.language : null,
         source: "openalex",
         raw: r,
       } as ProviderPaper;

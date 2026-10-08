@@ -54,6 +54,7 @@ import { enforceRateLimit } from "@/lib/server/request-guards";
  */
 const PROTECTED_API_PREFIXES = [
   "/api/report-jobs/",
+  "/api/laporan/",
   "/api/context/extract",
   "/api/references/",
   "/api/research/",

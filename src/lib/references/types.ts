@@ -14,6 +14,13 @@
   sourceProviders?: string[];
   pdfStatus?: "verified" | "landing_page" | "closed" | "broken" | "unknown";
   doiVerified?: boolean;
+  /** Metadata jurnal/penerbit untuk penilaian kualitas sumber. */
+  issn?: string[];
+  inDoaj?: boolean;
+  /** journal | conference | repository | book | other */
+  venueType?: string | null;
+  publicationType?: string | null;
+  language?: string | null;
   raw?: unknown;
 }
 

@@ -1,1352 +1,448 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { authenticatedFetch } from "@/components/AuthProvider";
-import ReportJobProgress from "@/components/ReportJobProgress";
-import { getErrorMessage } from "@/lib/errors";
+/**
+ * /dashboard — "Laporan": asisten chat untuk menyusun laporan/skripsi.
+ * Alur: ngobrol (AI bertanya) → rencana + sumber terverifikasi → setujui →
+ * eksekusi (job tahan lama) → revisi per bagian via chat → unduh DOCX.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  findActiveJob,
-  jobAction,
-  peekJob,
-  rememberJob,
-  rememberedJobId,
-  runJobUntilDone,
-  startJob,
-  type ReportJob as LiveReportJob,
-} from "@/lib/client/report-job";
-import {
-  ArrowLeft,
-  BookOpen,
-  CheckCircle2,
-  ClipboardList,
-  FileArchive,
-  FileCheck2,
-  FileText,
-  GitBranch,
-  Lightbulb,
-  Loader2,
-  ExternalLink,
-  Search,
-  PenLine,
-  Plus,
-  Save,
-  Bot,
-  Table2,
-  Trash2,
-  Upload,
-  Workflow,
+  Bot, CheckCircle2, Download, ExternalLink, FileText, Loader2, MessageSquarePlus,
+  Paperclip, Play, Send, ShieldCheck, Trash2, User as UserIcon, Upload, ListChecks, BookOpen, Table2, Workflow,
 } from "lucide-react";
+import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
+import ReportJobProgress from "@/components/ReportJobProgress";
+import Button from "@/components/ui/Button";
+import { getErrorMessage as baseErrorMessage } from "@/lib/errors";
+import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/client/report-job";
+import type { VerifiedSource } from "@/lib/references/find-sources";
+import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
+import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
 
-type ProjectType = "capstone" | "course" | "practicum" | "paper" | "formal" | "thesis";
-type Formality = "ringkas" | "formal" | "akademik";
-type StartMode = "need_title" | "has_title" | "has_material";
-type SectionStatus = "draft" | "review" | "approved";
-type DiagramStatus = "planned" | "draft" | "approved";
-type SourceKind = "brief" | "guide" | "example" | "reference" | "code" | "note";
-type WorkflowStage = "intake" | "planned" | "drafted";
-type BuilderStep = "setup" | "context" | "plan" | "execute" | "draft";
+const getErrorMessage = (e: unknown) => baseErrorMessage(e, "Terjadi kesalahan.");
 
-interface ReportSection {
-  id: string;
-  title: string;
-  purpose: string;
-  requiredDiagrams: string[];
-  status: SectionStatus;
+interface SessionSummary { id: string; title: string | null; stage: string; jobId: string | null; updatedAt: string }
+interface ChatMessage { id: string; role: "user" | "assistant"; content: string; toolCalls?: { tools?: string[]; events?: string[] } | null }
+interface MaterialSummary { id: string; kind: string; title: string; fileName?: string; chars: number }
+interface SessionDetail {
+  id: string; title: string | null; stage: string; brief: ReportBrief; plan: ReportPlan | null;
+  sources: VerifiedSource[]; materials: MaterialSummary[]; jobId: string | null; draft: string | null;
+}
+type Tab = "rencana" | "sumber" | "bahan" | "draft";
+
+const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
+const PDF_LABEL: Record<string, string> = { verified: "PDF ✓", landing_page: "Halaman", closed: "Berbayar", broken: "Rusak", unknown: "?" };
+
+async function api<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
+  const data = (await res.json().catch(() => null)) as (T & { success?: boolean; error?: string }) | null;
+  if (!res.ok || !data?.success) throw new Error(data?.error || `Permintaan gagal (${res.status}).`);
+  return data;
 }
 
-interface DiagramPlan {
-  id: string;
-  title: string;
-  type: "flowchart" | "activity" | "usecase" | "sequence" | "communication";
-  purpose: string;
-  prompt: string;
-  status: DiagramStatus;
-  approvedAt?: string;
-  caption?: string;
-  diagramData?: {
-    nodes: unknown[];
-    edges: unknown[];
-    meta?: Record<string, unknown>;
-  };
-}
+export default function LaporanPage() {
+  const { user, loading: authLoading, openLoginModal } = useAuth();
 
-interface SourceNote {
-  id: string;
-  kind?: SourceKind;
-  title: string;
-  content: string;
-  fileName?: string;
-}
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [job, setJob] = useState<ReportJob | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [deep, setDeep] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("rencana");
+  const [preset, setPreset] = useState<keyof typeof DOCX_PRESETS>("kampus4433");
+  const [exporting, setExporting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [executing, setExecuting] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
-interface TablePlan {
-  id: string;
-  title: string;
-  purpose: string;
-  columns: string[];
-  status: "planned" | "draft" | "done";
-}
+  // ---------------------------------------------------------------- loaders
+  const loadSessions = useCallback(async () => {
+    const data = await api<{ sessions: SessionSummary[] }>("/api/laporan/sessions", { cache: "no-store" });
+    setSessions(data.sessions);
+    return data.sessions;
+  }, []);
 
-interface ReferenceItem {
-  id: string;
-  query: string;
-  purpose: string;
-  status: "planned" | "saved";
-  citation?: string;
-  url?: string;
-  abstract?: string;
-  pdfUrl?: string | null;
-  results?: ReferenceResult[];
-}
-
-interface ReferenceResult {
-  id: string;
-  title: string;
-  authors: string[];
-  year?: number;
-  venue?: string;
-  abstract: string;
-  url?: string;
-  pdfUrl?: string | null;
-  doi?: string | null;
-  citationCount: number;
-  isOpenAccess: boolean;
-  citationApa: string;
-}
-
-interface ReportDraft {
-  content: string;
-  generatedAt: string;
-  revisedAt?: string;
-}
-
-interface ApiPayload<T = unknown> {
-  success?: boolean;
-  error?: string;
-  data?: T;
-}
-
-interface ExtractedSource {
-  kind?: SourceKind;
-  title?: string;
-  content?: string;
-  fileName?: string;
-}
-
-interface ReportProject {
-  startMode: StartMode;
-  projectType: ProjectType;
-  title: string;
-  topic: string;
-  course: string;
-  institution: string;
-  formality: Formality;
-  citationStyle: "APA" | "IEEE" | "Bebas";
-  sources: SourceNote[];
-  outline: ReportSection[];
-  diagrams: DiagramPlan[];
-  tables: TablePlan[];
-  references: ReferenceItem[];
-  titleIdeas: string[];
-  workflowStage: WorkflowStage;
-  reportDraft?: ReportDraft;
-}
-
-type RevisionMode = "format" | "expand" | "citation" | "table" | "bibliography" | "diagram" | "custom";
-
-const STORAGE_KEY = "report_builder_project_v1";
-
-async function readApiPayload<T>(response: Response, fallbackError: string): Promise<ApiPayload<T>> {
-  const raw = await response.text();
-  try {
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as ApiPayload<T>;
-    }
-  } catch {
-    // The normalized text below is more useful than a JSON syntax error.
-  }
-  const cleanText = raw.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  throw new Error(cleanText || fallbackError);
-}
-
-const projectTypeLabel: Record<ProjectType, string> = {
-  capstone: "Capstone / Projek Akhir",
-  course: "Tugas Mata Kuliah",
-  practicum: "Laporan Praktikum",
-  paper: "Makalah Biasa",
-  formal: "Laporan Projek Formal",
-  thesis: "Skripsi / Proposal",
-};
-
-const startModeLabel: Record<StartMode, { title: string; helper: string }> = {
-  need_title: { title: "Saya belum punya judul", helper: "AI bantu cari judul dari topik, file, dan kebutuhan tugas." },
-  has_title: { title: "Saya sudah punya judul", helper: "Judul dipakai sebagai jangkar outline, tabel, UML, dan referensi." },
-  has_material: { title: "Saya punya bahan/file contoh", helper: "Mulai dari pedoman, laporan lama, atau ZIP project codingan." },
-};
-
-const revisionModeLabel: Record<RevisionMode, string> = {
-  format: "Rapikan format",
-  expand: "Tambah isi",
-  citation: "Tambah sitasi",
-  table: "Tambah tabel",
-  bibliography: "Rapikan daftar pustaka",
-  diagram: "Masukkan diagram",
-  custom: "Instruksi bebas",
-};
-
-const sourceKindLabel: Record<SourceKind, string> = {
-  brief: "Brief / aturan tugas",
-  guide: "Pedoman dosen / kampus",
-  example: "Contoh laporan benar",
-  reference: "Referensi / sitasi",
-  code: "Konteks codingan / repo",
-  note: "Catatan bebas",
-};
-
-const sourceKindHint: Record<SourceKind, string> = {
-  brief: "Tempel brief tugas, rubrik penilaian, batasan, atau instruksi dosen.",
-  guide: "Tempel poin penting dari PDF pedoman, format kampus, atau aturan penulisan.",
-  example: "Tempel struktur/contoh laporan yang dianggap benar supaya sistem meniru pola, bukan isinya mentah-mentah.",
-  reference: "Tempel daftar jurnal, link, DOI, kutipan, atau catatan teori yang ingin dipakai.",
-  code: "Tempel README, struktur folder, daftar fitur, route/API, schema DB, atau ringkasan ZIP project codingan.",
-  note: "Tempel catatan kasar, hasil diskusi, kebutuhan user, atau ide yang belum rapi.",
-};
-
-const defaultProject: ReportProject = {
-  startMode: "need_title",
-  projectType: "formal",
-  title: "",
-  topic: "",
-  course: "",
-  institution: "",
-  formality: "formal",
-  citationStyle: "APA",
-  sources: [],
-  outline: [],
-  diagrams: [],
-  tables: [],
-  references: [],
-  titleIdeas: [],
-  workflowStage: "intake",
-};
-
-const makeId = (prefix: string) => `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
-const createDefaultProject = (): ReportProject => ({ ...defaultProject, sources: [], outline: [], diagrams: [], tables: [], references: [], titleIdeas: [] });
-
-const workAreas: { id: BuilderStep; label: string }[] = [
-  { id: "setup", label: "Bahan" },
-  { id: "plan", label: "Kerangka" },
-  { id: "draft", label: "Draf" },
-];
-
-const revisionSteps = [
-  "Membaca draft dan konteks",
-  "Mengecek instruksi revisi",
-  "Memperbaiki bagian terkait",
-  "Menjaga sitasi, tabel, dan placeholder gambar",
-  "Merapikan hasil revisi",
-];
-
-const sectionStatusLabel: Record<SectionStatus, string> = {
-  draft: "Perlu dicek",
-  review: "Sedang dicek",
-  approved: "Sudah oke",
-};
-
-const diagramStatusLabel: Record<DiagramStatus, string> = {
-  planned: "Belum dibuat",
-  draft: "Sedang dibuat",
-  approved: "Sudah oke",
-};
-
-const tableStatusLabel: Record<TablePlan["status"], string> = {
-  planned: "Belum dibuat",
-  draft: "Sedang dibuat",
-  done: "Sudah oke",
-};
-
-const getProjectContext = (project: ReportProject) => `${project.title} ${project.topic} ${project.course} ${project.sources.map((source) => `${source.kind || "note"} ${source.title} ${source.content}`).join(" ")}`;
-
-const isSystemProject = (project: ReportProject) => /sistem|aplikasi|website|web|mobile|absensi|kasir|penjualan|rekomendasi|database|login|admin|user|dashboard|api|route|controller|model|schema|mysql|postgres/i.test(getProjectContext(project));
-
-function plannerMessage(project: ReportProject, activeStep: BuilderStep) {
-  if (activeStep === "setup") {
-    if (project.startMode === "need_title") return "Belum ada judul? Tulis topiknya saja. Judul bisa dipilih setelah bahan terkumpul.";
-    if (project.startMode === "has_material") return "Masukkan file atau catatan yang sudah kamu punya di bagian Bahan.";
-    return project.sources.length > 0 ? "Bahan sudah siap. Buat draf langsung, atau periksa kerangkanya dulu." : "Tulis topik singkat dan masukkan bahan. Judul bisa menyusul.";
-  }
-
-  if (activeStep === "context") {
-    return project.sources.length > 0
-      ? `Sudah ada ${project.sources.length} bahan. Setelah cukup, klik Buat kerangka.`
-      : "Masukkan setidaknya satu bahan: instruksi tugas, file pedoman, contoh, atau catatanmu.";
-  }
-
-  if (activeStep === "plan") {
-    return project.outline.length > 0
-      ? "Baca susunan laporan. Ubah bagian yang belum sesuai sebelum membuat draf."
-      : "Kerangka belum dibuat. Buka Bahan, lalu klik Buat kerangka.";
-  }
-
-  if (activeStep === "execute") {
-    return project.diagrams.length > 0
-      ? `Ada ${project.diagrams.length} diagram yang direncanakan. Buat yang diperlukan, atau lanjut jika belum membutuhkannya.`
-      : "Tidak semua laporan perlu diagram. Kamu bisa langsung lanjut membuat draf.";
-  }
-
-  return project.reportDraft?.content
-    ? "Draf sudah ada. Baca dulu, lalu perbaiki bagian yang belum sesuai."
-            : "Buat draf dari bahanmu. Kerangka akan disusun otomatis bila belum ada.";
-}
-
-function buildTitleIdeas(project: ReportProject): string[] {
-  const base = (project.title || project.topic || "Sistem Informasi").replace(/\s+/g, " ").trim();
-  const object = base.length > 90 ? `${base.slice(0, 90)}...` : base;
-  const context = project.course || projectTypeLabel[project.projectType];
-
-  if (isSystemProject(project)) {
-    return [
-      `Rancang Bangun ${object}`,
-      `Analisis dan Perancangan ${object} Berbasis Web`,
-      `Implementasi ${object} untuk Mendukung Proses ${context}`,
-    ];
-  }
-
-  return [
-    `Analisis ${object}`,
-    `Kajian ${object} pada Konteks ${context}`,
-    `Penyusunan Laporan ${object} Berdasarkan Data dan Referensi Terkait`,
-  ];
-}
-
-function buildTablePlan(project: ReportProject): TablePlan[] {
-  if (isSystemProject(project)) {
-    return [
-      { id: "tbl-actor", title: "Tabel Aktor dan Hak Akses", purpose: "Menjelaskan siapa saja pengguna sistem dan batas aksesnya.", columns: ["Aktor", "Hak Akses", "Keterangan"], status: "planned" },
-      { id: "tbl-functional", title: "Tabel Kebutuhan Fungsional", purpose: "Merinci fitur utama yang harus tersedia di aplikasi.", columns: ["Kode", "Kebutuhan", "Aktor", "Prioritas"], status: "planned" },
-      { id: "tbl-nonfunctional", title: "Tabel Kebutuhan Non-Fungsional", purpose: "Menjelaskan kebutuhan performa, keamanan, usability, dan kompatibilitas.", columns: ["Aspek", "Kebutuhan", "Ukuran Keberhasilan"], status: "planned" },
-      { id: "tbl-test", title: "Tabel Pengujian Black Box", purpose: "Menguji fitur berdasarkan input, proses, dan output yang diharapkan.", columns: ["Fitur", "Skenario", "Hasil Diharapkan", "Status"], status: "planned" },
-    ];
-  }
-
-  return [
-    { id: "tbl-source", title: "Tabel Ringkasan Sumber", purpose: "Merangkum referensi, pedoman, dan bahan utama yang dipakai.", columns: ["Sumber", "Isi Penting", "Pemakaian di Laporan"], status: "planned" },
-    { id: "tbl-analysis", title: "Tabel Hasil Analisis", purpose: "Menyusun temuan atau pembahasan utama secara ringkas.", columns: ["Aspek", "Temuan", "Interpretasi"], status: "planned" },
-  ];
-}
-
-function buildReferencePlan(project: ReportProject): ReferenceItem[] {
-  const topic = project.title || project.topic || "laporan akademik";
-  const systemExtra = isSystemProject(project) ? [
-    { query: `${topic} system design UML web application journal`, purpose: "Rujukan perancangan sistem dan UML." },
-    { query: `${topic} black box testing web application journal`, purpose: "Rujukan metode pengujian aplikasi." },
-  ] : [];
-
-  return [
-    { id: "ref-main", query: `${topic} jurnal penelitian terbaru`, purpose: "Referensi utama sesuai topik.", status: "planned" },
-    { id: "ref-method", query: `${topic} metode penelitian laporan akademik`, purpose: "Dasar metode dan penyusunan laporan.", status: "planned" },
-    ...systemExtra.map((item, index) => ({ id: `ref-system-${index + 1}`, ...item, status: "planned" as const })),
-  ];
-}
-
-function buildOutline(project: ReportProject): ReportSection[] {
-  const hasSystemTopic = isSystemProject(project);
-
-  if (project.projectType === "practicum") {
-    return [
-      { id: "sec-cover", title: "Identitas Praktikum", purpose: "Memuat judul, nama, kelas, mata kuliah, dan identitas praktikum.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-purpose", title: "Tujuan Praktikum", purpose: "Menjelaskan kompetensi dan target percobaan.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-theory", title: "Dasar Teori", purpose: "Merangkum teori yang relevan dengan percobaan dan menyertakan sitasi.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-tools", title: "Alat dan Bahan", purpose: "Mendaftar perangkat, software, dataset, atau bahan percobaan.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-steps", title: "Langkah Kerja", purpose: "Menjelaskan prosedur kerja secara runtut.", requiredDiagrams: hasSystemTopic ? ["flow-main"] : [], status: "draft" },
-      { id: "sec-result", title: "Hasil dan Pembahasan", purpose: "Menyajikan hasil, analisis, screenshot, tabel, dan interpretasi.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-close", title: "Kesimpulan", purpose: "Merangkum hasil praktikum dan pembelajaran utama.", requiredDiagrams: [], status: "draft" },
-    ];
-  }
-
-  if (project.projectType === "paper") {
-    return [
-      { id: "sec-intro", title: "Pendahuluan", purpose: "Menjelaskan latar belakang, masalah, tujuan, dan batasan pembahasan.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-theory", title: "Kajian Teori", purpose: "Menyusun konsep utama dan sitasi pendukung.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-discussion", title: "Pembahasan", purpose: "Mengembangkan analisis utama berdasarkan topik dan bahan mentah.", requiredDiagrams: hasSystemTopic ? ["usecase-main"] : [], status: "draft" },
-      { id: "sec-close", title: "Penutup", purpose: "Berisi kesimpulan dan saran singkat.", requiredDiagrams: [], status: "draft" },
-      { id: "sec-ref", title: "Daftar Pustaka", purpose: `Daftar sumber dengan gaya ${project.citationStyle}.`, requiredDiagrams: [], status: "draft" },
-    ];
-  }
-
-  return [
-    { id: "bab1", title: "BAB 1 Pendahuluan", purpose: "Latar belakang, rumusan masalah, tujuan, manfaat, batasan, dan metode singkat.", requiredDiagrams: [], status: "draft" },
-    { id: "bab2", title: "BAB 2 Landasan Teori", purpose: "Teori, konsep sistem, teknologi, dan penelitian/rujukan terkait.", requiredDiagrams: [], status: "draft" },
-    { id: "bab3", title: "BAB 3 Analisis dan Perancangan", purpose: "Analisis kebutuhan, aktor, proses bisnis, rancangan UML, database, dan UI.", requiredDiagrams: hasSystemTopic ? ["usecase-main", "activity-login", "sequence-login", "activity-manage", "flow-main"] : ["flow-main"], status: "draft" },
-    { id: "bab4", title: "BAB 4 Implementasi dan Pengujian", purpose: "Implementasi fitur, hasil tampilan, pengujian, dan evaluasi.", requiredDiagrams: [], status: "draft" },
-    { id: "bab5", title: "BAB 5 Penutup", purpose: "Kesimpulan, saran pengembangan, dan keterbatasan.", requiredDiagrams: [], status: "draft" },
-    { id: "ref", title: "Daftar Pustaka", purpose: `Semua referensi dirapikan dengan gaya ${project.citationStyle}.`, requiredDiagrams: [], status: "draft" },
-  ];
-}
-
-function buildDiagramPlan(project: ReportProject): DiagramPlan[] {
-  const topic = project.title || project.topic || "Sistem";
-  const hasSystemTopic = isSystemProject(project);
-  if (!hasSystemTopic) return [];
-
-  return [
-    {
-      id: "usecase-main",
-      title: "Use Case Diagram Sistem",
-      type: "usecase",
-      purpose: "Menggambarkan aktor dan fitur utama sistem.",
-      prompt: `Buat use case diagram untuk ${topic}. Tentukan aktor utama, fitur login, kelola data utama, transaksi/proses inti, dan laporan jika relevan.`,
-      status: "planned",
-    },
-    {
-      id: "activity-login",
-      title: "Activity Diagram Login",
-      type: "activity",
-      purpose: "Menjelaskan alur login, validasi kredensial, role, sukses, dan gagal.",
-      prompt: `Buat activity diagram login untuk ${topic} dengan swimlane Pengguna/Admin dan Sistem. Sertakan validasi kredensial, role admin/user, pesan gagal, dan dashboard sesuai role.`,
-      status: "planned",
-    },
-    {
-      id: "sequence-login",
-      title: "Sequence Diagram Login",
-      type: "sequence",
-      purpose: "Menjelaskan interaksi pengguna, halaman login, service autentikasi, dan database secara berurutan.",
-      prompt: `Buat sequence diagram login untuk ${topic}. Sertakan partisipan Pengguna, Halaman Login, Auth Service/Controller, dan Database. Alurnya: input kredensial, validasi, cek database, hasil validasi, buat sesi atau pesan gagal, lalu tampilkan dashboard sesuai role.`,
-      status: "planned",
-    },
-    {
-      id: "activity-manage",
-      title: "Activity Diagram Kelola Data",
-      type: "activity",
-      purpose: "Menjelaskan proses tambah, ubah, hapus, validasi, simpan, dan error.",
-      prompt: `Buat activity diagram kelola data untuk ${topic}. Sertakan aksi tambah, ubah, hapus, validasi data, pesan error, simpan data, hapus data, dan perbarui daftar.`,
-      status: "planned",
-    },
-    {
-      id: "flow-main",
-      title: "Flowchart Proses Utama",
-      type: "flowchart",
-      purpose: "Menggambarkan alur besar pengguna dari mulai sampai selesai.",
-      prompt: `Buat flowchart proses utama untuk ${topic}. Susun alur dari mulai, login, dashboard, pilih fitur utama, validasi, proses data, tampilkan hasil, dan selesai.`,
-      status: "planned",
-    },
-  ];
-}
-
-function qualityChecks(project: ReportProject) {
-  return [
-    { label: "Judul/topik sudah jelas", ok: Boolean(project.title.trim() || project.topic.trim()) },
-    { label: "Jenis laporan sudah dipilih", ok: Boolean(project.projectType) },
-    { label: "Brainstorm judul sudah dibuat", ok: project.titleIdeas.length > 0 },
-    { label: "Outline sudah dibuat", ok: project.outline.length > 0 },
-    { label: "Sumber/konteks proyek sudah masuk", ok: project.sources.length > 0 },
-    { label: "Daftar gambar & UML sudah direncanakan", ok: project.diagrams.length > 0 || project.projectType === "paper" || project.projectType === "practicum" },
-    { label: "Tabel laporan sudah direncanakan", ok: project.tables.length > 0 },
-    { label: "Query jurnal/referensi sudah disiapkan", ok: project.references.length > 0 },
-    { label: "Semua diagram penting sudah oke", ok: project.diagrams.length === 0 || project.diagrams.every((d) => d.status === "approved" && Boolean(d.diagramData)) },
-    { label: "Draft laporan lengkap sudah dibuat", ok: Boolean(project.reportDraft?.content) },
-    { label: "Gaya sitasi dipilih", ok: Boolean(project.citationStyle) },
-  ];
-}
-
-export default function ReportBuilderPage() {
-  const router = useRouter();
-  const [project, setProject] = useState<ReportProject>(defaultProject);
-  const [sourceDraft, setSourceDraft] = useState<{ kind: SourceKind; title: string; content: string; fileName?: string }>({ kind: "brief", title: "", content: "" });
-  const [activeStep, setActiveStep] = useState<BuilderStep>("setup");
-  const [isExtractingSource, setIsExtractingSource] = useState(false);
-  const [sourceError, setSourceError] = useState("");
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [liveJob, setLiveJob] = useState<LiveReportJob | null>(null);
-  const [reportError, setReportError] = useState("");
-  const [searchingReferenceId, setSearchingReferenceId] = useState<string | null>(null);
-  const [revisionMode, setRevisionMode] = useState<RevisionMode>("format");
-  const [revisionInstruction, setRevisionInstruction] = useState("");
-  const [revisionTarget, setRevisionTarget] = useState("");
-  const [isRevisingReport, setIsRevisingReport] = useState(false);
-  const [revisionProgress, setRevisionProgress] = useState(0);
-  const [revisionLabel, setRevisionLabel] = useState("Menunggu instruksi revisi");
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        try {
-          setProject({ ...createDefaultProject(), ...JSON.parse(saved) });
-        } catch {
-          setProject(createDefaultProject());
-        }
-      }
-    }, 0);
-
-    return () => window.clearTimeout(timer);
+  const loadDetail = useCallback(async (id: string) => {
+    const data = await api<{ session: SessionDetail; job: ReportJob | null; messages: ChatMessage[] }>(`/api/laporan/sessions/${id}`, { cache: "no-store" });
+    setDetail(data.session);
+    setMessages(data.messages);
+    setJob(data.job);
+    return data;
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
-  }, [project]);
-
-  // Setelah refresh/tab tertutup: cari job ringkas yang belum selesai → tawarkan lanjut.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const remembered = rememberedJobId("ringkas");
-      try {
-        const job = remembered ? await peekJob(remembered) : await findActiveJob("ringkas");
-        if (!cancelled && job && (job.status === "queued" || job.status === "running")) {
-          rememberJob("ringkas", job.id);
-          setLiveJob(job);
-          setActiveStep("draft");
-        } else if (remembered && !job) {
-          rememberJob("ringkas", null);
-        }
-      } catch {
-        if (remembered) rememberJob("ringkas", null);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    if (authLoading || !user) return;
+    loadSessions().then((list) => {
+      if (list.length && !activeId) setActiveId(list[0].id);
+    }).catch((e) => setError(getErrorMessage(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, user]);
 
   useEffect(() => {
-    if (!isRevisingReport) return;
+    if (!activeId) { setDetail(null); setMessages([]); setJob(null); return; }
+    abortRef.current?.abort();
+    setError(null);
+    loadDetail(activeId).catch((e) => setError(getErrorMessage(e)));
+  }, [activeId, loadDetail]);
 
-    const initTimer = window.setTimeout(() => {
-      setRevisionProgress(10);
-      setRevisionLabel(revisionSteps[0]);
-    }, 0);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, sending]);
 
-    const timer = window.setInterval(() => {
-      setRevisionProgress((prev) => {
-        const next = Math.min(prev + Math.max(3, Math.round((94 - prev) / 7)), 94);
-        const labelIndex = Math.min(Math.floor(next / 20), revisionSteps.length - 1);
-        setRevisionLabel(revisionSteps[labelIndex]);
-        return next;
-      });
-    }, 800);
-
-    return () => {
-      window.clearTimeout(initTimer);
-      window.clearInterval(timer);
-    };
-  }, [isRevisingReport]);
-
-  const checks = useMemo(() => qualityChecks(project), [project]);
-  const assistantMessage = useMemo(() => plannerMessage(project, activeStep), [project, activeStep]);
-  const approvedCount = project.diagrams.filter((d) => d.status === "approved" && d.diagramData).length;
-  const doneTableCount = project.tables.filter((table) => table.status === "done").length;
-  const savedReferenceCount = project.references.filter((reference) => reference.status === "saved").length;
-
-  const updateProject = <K extends keyof ReportProject>(key: K, value: ReportProject[K]) => {
-    setProject((prev) => ({ ...prev, [key]: value }));
-  };
-
-  const resetProject = () => {
-    if (isGeneratingReport || isRevisingReport) return;
-    const ok = window.confirm("Reset proyek dan mulai dari awal? Judul, konteks, rencana, UML, tabel, referensi, dan draft lokal akan dibersihkan.");
-    if (!ok) return;
-
-    const freshProject = createDefaultProject();
-    setProject(freshProject);
-    setSourceDraft({ kind: "brief", title: "", content: "" });
-    setActiveStep("setup");
-    setReportError("");
-    setSourceError("");
-    setRevisionInstruction("");
-    setRevisionTarget("");
-    setLiveJob(null);
-    rememberJob("ringkas", null);
-    setRevisionProgress(0);
-    setRevisionLabel("Menunggu instruksi revisi");
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(freshProject));
-  };
-
-  const generatePlan = () => {
-    setReportError("");
-    setProject((prev) => {
-      const next = { ...prev };
-      next.titleIdeas = buildTitleIdeas(prev);
-      next.title = prev.title || next.titleIdeas[0] || prev.title;
-      next.outline = buildOutline(prev);
-      next.diagrams = buildDiagramPlan(prev);
-      next.tables = buildTablePlan(prev);
-      next.references = buildReferencePlan(prev);
-      next.workflowStage = "planned";
-      return next;
-    });
-    setActiveStep("plan");
-  };
-
-  const selectTitleIdea = (title: string) => {
-    setProject((prev) => ({ ...prev, title }));
-  };
-
-  const generateFullReport = async () => {
-    if (!project.title.trim() && !project.topic.trim()) {
-      setReportError("Isi judul atau topik dulu sebelum generate laporan.");
-      setActiveStep("setup");
-      return;
-    }
-
-    if (project.sources.length === 0) {
-      setReportError("Tambahkan minimal 1 sumber/konteks dulu, misalnya brief tugas, pedoman dosen, contoh laporan, atau ringkasan project codingan.");
-      setActiveStep("context");
-      return;
-    }
-
-    const reportProject = project.outline.length > 0 ? project : {
-      ...project,
-      titleIdeas: buildTitleIdeas(project),
-      title: project.title || buildTitleIdeas(project)[0] || project.title,
-      outline: buildOutline(project),
-      diagrams: buildDiagramPlan(project),
-      tables: buildTablePlan(project),
-      references: buildReferencePlan(project),
-      workflowStage: "planned" as const,
-    };
-    setProject(reportProject);
-    setActiveStep("draft");
-    setReportError("");
-
+  // --------------------------------------------------------- job polling
+  const pollJob = useCallback(async (jobId: string) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPolling(true);
     try {
-      const job = await startJob(reportProject, "ringkas");
-      setLiveJob(job);
-      await pollJob(job.id);
-    } catch (error: unknown) {
-      setReportError(getErrorMessage(error, "Gagal generate laporan lengkap."));
-    }
-  };
-
-  /** Poll sampai selesai; tiap poll = server menulis 1 bagian. */
-  const pollJob = async (jobId: string) => {
-    setIsGeneratingReport(true);
-    setReportError("");
-    try {
-      const finalJob = await runJobUntilDone(jobId, { onUpdate: setLiveJob });
-      setLiveJob(finalJob);
-      if (finalJob.status === "done") {
-        rememberJob("ringkas", null);
-        setProject((prev) => ({
-          ...prev,
-          workflowStage: "drafted",
-          reportDraft: { content: finalJob.result ?? "", generatedAt: new Date().toISOString() },
-        }));
-        setActiveStep("draft");
-      } else if (finalJob.status === "failed") {
-        setReportError(finalJob.error || "Generate laporan gagal. Bagian yang sudah jadi tersimpan — klik Coba lagi.");
-      }
-    } catch (error: unknown) {
-      // Koneksi putus / polling berhenti: job tetap ada di server, bisa dilanjutkan.
-      setReportError(getErrorMessage(error, "Koneksi terputus. Klik Lanjutkan untuk meneruskan."));
-      try { setLiveJob(await peekJob(jobId)); } catch { /* biarkan state terakhir */ }
+      const final = await runJobUntilDone(jobId, { onUpdate: setJob, signal: controller.signal, intervalMs: 700 });
+      setJob(final);
+      if (activeId) await loadDetail(activeId);
+      if (final.status === "done") setTab("draft");
+    } catch (e) {
+      if (!controller.signal.aborted) setError(getErrorMessage(e));
     } finally {
-      setIsGeneratingReport(false);
+      if (abortRef.current === controller) setPolling(false);
     }
-  };
+  }, [activeId, loadDetail]);
 
-  const resumeJob = () => {
-    if (!liveJob || isGeneratingReport) return;
-    void pollJob(liveJob.id);
-  };
+  useEffect(() => {
+    if (!detail?.jobId || !job) return;
+    if ((job.status === "queued" || job.status === "running") && !polling) pollJob(detail.jobId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail?.jobId, job?.id]);
 
-  const retryJob = async (redoFallback: boolean) => {
-    if (!liveJob || isGeneratingReport) return;
+  useEffect(() => () => abortRef.current?.abort(), []);
+
+  // --------------------------------------------------------------- actions
+  const createSession = async () => {
     try {
-      const job = await jobAction(liveJob.id, "retry", redoFallback);
-      setLiveJob(job);
-      rememberJob("ringkas", job.id);
-      await pollJob(job.id);
-    } catch (error: unknown) {
-      setReportError(getErrorMessage(error, "Gagal mengulang job."));
-    }
+      const data = await api<{ session: SessionSummary }>("/api/laporan/sessions", { method: "POST", body: "{}" });
+      await loadSessions();
+      setActiveId(data.session.id);
+      setMessages([{ id: "hello", role: "assistant", content: "Halo! Ceritakan tugas atau laporan yang mau kamu kerjakan: jenis dokumennya apa (skripsi, laporan praktikum, makalah…), topiknya, dan untuk mata kuliah/kampus mana. Nanti saya tanya hal-hal lain yang perlu." }]);
+    } catch (e) { setError(getErrorMessage(e)); }
   };
 
-  const cancelJob = async () => {
-    if (!liveJob) return;
+  const deleteSession = async (id: string) => {
+    if (!window.confirm("Hapus sesi ini beserta percakapan, rencana, dan draftnya?")) return;
     try {
-      const job = await jobAction(liveJob.id, "cancel");
-      setLiveJob(job);
-      rememberJob("ringkas", null);
-    } catch (error: unknown) {
-      setReportError(getErrorMessage(error, "Gagal membatalkan job."));
-    }
+      await api(`/api/laporan/sessions/${id}`, { method: "DELETE" });
+      const list = await loadSessions();
+      if (activeId === id) setActiveId(list[0]?.id ?? null);
+    } catch (e) { setError(getErrorMessage(e)); }
   };
 
-  const discardJob = () => {
-    setLiveJob(null);
-    rememberJob("ringkas", null);
-  };
-
-  const reviseReport = async () => {
-    if (!project.reportDraft?.content) {
-      setReportError("Belum ada draft yang bisa direvisi. Generate laporan dulu atau tempel laporan lama sebagai konteks, lalu generate draft awal.");
-      return;
-    }
-
-    setIsRevisingReport(true);
-    setRevisionProgress(10);
-    setRevisionLabel(revisionSteps[0]);
-    setReportError("");
-
+  const send = async (text?: string) => {
+    const message = (text ?? input).trim();
+    if (!message || !activeId || sending) return;
+    setInput("");
+    setSending(true);
+    setError(null);
+    setMessages((prev) => [...prev, { id: `u${Date.now()}`, role: "user", content: message }]);
     try {
-      const response = await authenticatedFetch("/api/ai/revise-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project,
-          draft: project.reportDraft.content,
-          revisionMode,
-          targetSection: revisionTarget,
-          instruction: revisionInstruction,
-        }),
+      const data = await api<{ reply: string; toolsUsed: string[]; jobId: string | null; stage: string }>(`/api/laporan/sessions/${activeId}/message`, {
+        method: "POST", body: JSON.stringify({ message, deep }),
       });
-
-      const data = await readApiPayload<string>(response, "Server mengembalikan respons revisi tidak valid.");
-
-      if (!response.ok || !data.success || typeof data.data !== "string") throw new Error(data.error || "Gagal merevisi laporan.");
-
-      setProject((prev) => ({
-        ...prev,
-        reportDraft: {
-          content: data.data ?? "",
-          generatedAt: prev.reportDraft?.generatedAt || new Date().toISOString(),
-          revisedAt: new Date().toISOString(),
-        },
-      }));
-      setRevisionProgress(100);
-      setRevisionLabel("Revisi selesai dirapikan");
-    } catch (error: unknown) {
-      setReportError(getErrorMessage(error, "Gagal merevisi laporan."));
-    } finally {
-      window.setTimeout(() => setIsRevisingReport(false), 500);
-    }
+      setMessages((prev) => [...prev, { id: `a${Date.now()}`, role: "assistant", content: data.reply, toolCalls: { tools: data.toolsUsed } }]);
+      const fresh = await loadDetail(activeId);
+      await loadSessions();
+      if (data.toolsUsed.includes("proposePlan") || data.toolsUsed.includes("findSources")) setTab(data.toolsUsed.includes("findSources") ? "sumber" : "rencana");
+      if (data.toolsUsed.includes("reviseSection")) setTab("draft");
+      if (data.jobId && fresh.job && (fresh.job.status === "queued" || fresh.job.status === "running")) pollJob(data.jobId);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally { setSending(false); }
   };
 
-  const addSource = () => {
-    if (!sourceDraft.title.trim() && !sourceDraft.content.trim()) return;
-    setReportError("");
-    setProject((prev) => ({
-      ...prev,
-      sources: [{ id: makeId("src"), kind: sourceDraft.kind, title: sourceDraft.title || sourceKindLabel[sourceDraft.kind], content: sourceDraft.content, fileName: sourceDraft.fileName }, ...prev.sources],
-    }));
-    setSourceDraft((prev) => ({ kind: prev.kind, title: "", content: "" }));
-  };
-
-  const removeSource = (id: string) => {
-    setProject((prev) => ({ ...prev, sources: prev.sources.filter((source) => source.id !== id) }));
-  };
-
-  const handleSourceFile = async (file?: File) => {
-    if (!file) return;
-    setIsExtractingSource(true);
-    setSourceError("");
-
+  const execute = async (ignoreMinSources = false) => {
+    if (!activeId || executing) return;
+    setExecuting(true); setError(null);
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const response = await authenticatedFetch("/api/context/extract", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await readApiPayload<ExtractedSource>(response, "Gagal membaca file.");
-
-      const extracted = data.data;
-      if (!response.ok || !data.success || !extracted) throw new Error(data.error || "Gagal membaca file.");
-
-      setSourceDraft((prev) => ({
-        ...prev,
-        kind: (extracted.kind || prev.kind) as SourceKind,
-        title: prev.title || extracted.title || file.name,
-        content: `${prev.content ? `${prev.content}\n\n` : ""}${extracted.content || ""}`,
-        fileName: extracted.fileName || file.name,
-      }));
-      setReportError("");
-    } catch (error: unknown) {
-      setSourceError(getErrorMessage(error, "Gagal membaca file konteks."));
-    } finally {
-      setIsExtractingSource(false);
-    }
+      const data = await api<{ jobId: string }>(`/api/laporan/sessions/${activeId}/execute`, { method: "POST", body: JSON.stringify({ ignoreMinSources }) });
+      await loadDetail(activeId);
+      setJob(await peekJob(data.jobId));
+      pollJob(data.jobId);
+    } catch (e) { setError(getErrorMessage(e)); }
+    finally { setExecuting(false); }
   };
 
-  const searchReferences = async (reference: ReferenceItem) => {
-    setSearchingReferenceId(reference.id);
-    setReportError("");
-
+  const uploadMaterial = async (file: File) => {
+    if (!activeId) return;
+    setUploading(true); setError(null);
     try {
-      const response = await authenticatedFetch("/api/references/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: reference.query, limit: 5 }),
+      const form = new FormData();
+      form.append("file", file);
+      const res = await authenticatedFetch("/api/context/extract", { method: "POST", body: form });
+      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string; data?: { title: string; fileName: string; kind: string; content: string } } | null;
+      if (!res.ok || !data?.success || !data.data) throw new Error(data?.error || "Gagal membaca file.");
+      await api(`/api/laporan/sessions/${activeId}/materials`, {
+        method: "POST", body: JSON.stringify({ kind: data.data.kind, title: data.data.title || file.name, content: data.data.content, fileName: data.data.fileName || file.name }),
       });
-      const data = await readApiPayload<ReferenceResult[]>(response, "Gagal mencari referensi.");
-
-      if (!response.ok || !data.success || !Array.isArray(data.data)) throw new Error(data.error || "Gagal mencari referensi.");
-
-      setProject((prev) => ({
-        ...prev,
-        references: prev.references.map((item) => item.id === reference.id ? { ...item, results: data.data } : item),
-      }));
-    } catch (error: unknown) {
-      setReportError(getErrorMessage(error, "Gagal mencari referensi."));
-    } finally {
-      setSearchingReferenceId(null);
-    }
+      await loadDetail(activeId);
+      setTab("bahan");
+    } catch (e) { setError(getErrorMessage(e)); }
+    finally { setUploading(false); }
   };
 
-  const saveReferenceResult = (referenceId: string, result: ReferenceResult) => {
-    setProject((prev) => ({
-      ...prev,
-      references: prev.references.map((item) => item.id === referenceId ? {
-        ...item,
-        status: "saved",
-        citation: result.citationApa,
-        url: result.url,
-        pdfUrl: result.pdfUrl,
-        abstract: result.abstract,
-      } : item),
-      sources: [{
-        id: makeId("ref"),
-        kind: "reference",
-        title: result.title,
-        fileName: result.pdfUrl || result.url,
-        content: `[Referensi tersimpan]\nSitasi: ${result.citationApa}\nLink: ${result.url || "-"}\nPDF: ${result.pdfUrl || "-"}\nDOI: ${result.doi || "-"}\nAbstrak:\n${result.abstract}`,
-      }, ...prev.sources],
-    }));
-    setReportError("");
+  const removeMaterial = async (id: string) => {
+    if (!activeId) return;
+    try {
+      await api(`/api/laporan/sessions/${activeId}/materials`, { method: "DELETE", body: JSON.stringify({ id }) });
+      await loadDetail(activeId);
+    } catch (e) { setError(getErrorMessage(e)); }
   };
 
-  const sendToUmlBuilder = (diagram: DiagramPlan) => {
-    const sourceSummary = project.sources.slice(0, 3).map((source) => ({
-      kind: source.kind || "note",
-      title: source.title,
-      preview: source.content.slice(0, 500),
-    }));
-
-    localStorage.setItem("uml-ai-prefill", JSON.stringify({
-      prompt: diagram.prompt,
-      diagramType: ["flowchart", "activity", "usecase", "sequence"].includes(diagram.type) ? diagram.type : "flowchart",
-      reportDiagramId: diagram.id,
-      title: diagram.title,
-      reportContext: {
-        reportTitle: project.title,
-        topic: project.topic.slice(0, 700),
-        projectType: project.projectType,
-        course: project.course,
-        citationStyle: project.citationStyle,
-        sources: sourceSummary,
-      },
-      diagramData: diagram.diagramData,
-    }));
-    router.push("/uml-builder");
+  const exportDocx = async () => {
+    if (!detail?.draft) return;
+    setExporting(true);
+    try {
+      await exportMarkdownToDocx(detail.draft, detail.title || detail.brief.title || "Laporan", { profile: DOCX_PRESETS[preset].profile });
+    } catch (e) { setError(getErrorMessage(e)); }
+    finally { setExporting(false); }
   };
 
-  const setDiagramStatus = (id: string, status: DiagramStatus) => {
-    setProject((prev) => ({
-      ...prev,
-      diagrams: prev.diagrams.map((diagram) => {
-        if (diagram.id !== id) return diagram;
-        if (status === "approved" && !diagram.diagramData) return { ...diagram, status: "draft" };
-        return { ...diagram, status };
-      }),
-    }));
-  };
+  const draftSections = useMemo(() => (detail?.draft ? detail.draft.split("\n").filter((l) => /^#{1,3}\s/.test(l)).map((l) => l.replace(/^#+\s*/, "")) : []), [detail?.draft]);
+
+  // ---------------------------------------------------------------- gates
+  if (authLoading) return <div className="flex min-h-screen items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div>;
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-24">
+        <div className="mx-auto max-w-xl space-y-4 text-center">
+          <h1 className="text-2xl font-black text-slate-900">Masuk dulu</h1>
+          <p className="text-sm text-slate-500">Asisten Laporan menyimpan percakapan, rencana, sumber, dan draft di akunmu.</p>
+          <Button onClick={openLoginModal} variant="primary" size="md">Masuk</Button>
+        </div>
+      </div>
+    );
+  }
+
+  const canExecute = detail && (detail.stage === "planned" || (detail.stage === "drafted")) && (detail.plan?.outline.length ?? 0) > 0;
+  const jobActive = job && (job.status === "queued" || job.status === "running");
 
   return (
-    <div className="min-h-screen bg-white text-slate-900 font-sans">
-      <main className="max-w-7xl mx-auto px-6 py-10 md:py-16">
-        <Link href="/" className="inline-flex items-center text-sm font-semibold text-slate-500 hover:text-blue-600 mb-6 transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-2" /> Kembali ke Beranda
-        </Link>
-
-        <section className="mb-8 md:mb-10">
-          <h1 className="text-3xl md:text-4xl font-bold mb-4">Buat laporan</h1>
-          <p className="text-slate-500 max-w-3xl text-base md:text-lg leading-relaxed">
-            Tulis topik dan masukkan bahan, lalu buat draf. Kerangka bisa diperiksa kapan saja.
-          </p>
-        </section>
-
-        <section className="mb-6 rounded-2xl border border-blue-100 bg-blue-50/40 p-5 md:p-6">
-          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">{workAreas.find((area) => area.id === (activeStep === "context" ? "setup" : activeStep === "execute" ? "plan" : activeStep))?.label}</h2>
-              <p className="text-sm text-slate-600 mt-1">Isi yang kamu tahu dulu. Bagian lain bisa dibuka kapan saja.</p>
-            </div>
-            <details className="text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Opsi proyek</summary><button type="button" onClick={resetProject} disabled={isGeneratingReport || isRevisingReport} className="mt-2 inline-flex items-center gap-2 rounded-lg border border-red-100 bg-white px-3 py-2 text-sm font-semibold text-red-600 disabled:opacity-40"><Trash2 className="h-4 w-4" /> Mulai ulang laporan</button></details>
-          </div>
-
-          <div className="mt-5 flex flex-wrap gap-2" role="tablist" aria-label="Area laporan">
-            {workAreas.map((area) => {
-              const active = area.id === (activeStep === "context" ? "setup" : activeStep === "execute" ? "plan" : activeStep);
-              return (
-                <button
-                  key={area.id}
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveStep(area.id)}
-                  className={`rounded-lg border px-4 py-2 text-sm font-semibold transition-colors ${active ? "border-blue-600 bg-blue-600 text-white" : "border-blue-100 bg-white text-slate-700 hover:border-blue-300"}`}
-                >
-                  {area.label}
+    <div className="min-h-screen bg-slate-50 px-3 pb-6 pt-20 md:px-6 md:pt-24">
+      <div className="mx-auto grid max-w-[1500px] gap-4 lg:grid-cols-[240px_minmax(0,1fr)_400px]">
+        {/* ------------------------------------------------ sidebar sesi */}
+        <aside className="rounded-2xl border border-slate-200 bg-white p-3">
+          <Button onClick={createSession} variant="primary" size="sm" className="w-full"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
+          <div className="mt-3 space-y-1">
+            {sessions.map((s) => (
+              <div key={s.id} className={`group flex items-center gap-2 rounded-xl px-2 py-2 text-sm ${s.id === activeId ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
+                <button type="button" onClick={() => setActiveId(s.id)} className="min-w-0 flex-1 text-left">
+                  <div className="truncate font-semibold">{s.title || "Tanpa judul"}</div>
+                  <div className={`text-[11px] ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
                 </button>
-              );
-            })}
+                <button type="button" onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100" title="Hapus"><Trash2 className="h-3.5 w-3.5" /></button>
+              </div>
+            ))}
+            {!sessions.length && <p className="px-2 py-4 text-xs text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
+          </div>
+        </aside>
+
+        {/* ------------------------------------------------------ chat */}
+        <section className="flex min-h-[70vh] flex-col rounded-2xl border border-slate-200 bg-white">
+          <header className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Bot className="h-4 w-4 text-blue-600" /> Asisten Laporan</div>
+            {detail && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>}
+          </header>
+
+          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+            {!activeId && <p className="text-sm text-slate-500">Pilih sesi atau buat “Laporan baru”. Asisten akan bertanya tentang jenis dokumen, topik, syarat jurnal (SINTA/Scopus), format kampus, lalu menyusun rencana dan sumber yang bisa kamu cek sendiri (DOI/PDF).</p>}
+            {messages.map((m) => (
+              <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
+                {m.role === "assistant" && <Bot className="mt-1 h-4 w-4 shrink-0 text-blue-600" />}
+                <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+                  {m.content}
+                  {m.toolCalls?.tools?.length ? <div className="mt-1 text-[10px] text-slate-500">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
+                </div>
+                {m.role === "user" && <UserIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
+              </div>
+            ))}
+            {sending && <div className="flex items-center gap-2 text-xs text-slate-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Asisten sedang berpikir / mencari sumber…</div>}
+            <div ref={bottomRef} />
           </div>
 
-          <div className="mt-5 rounded-xl border border-blue-100 bg-white p-4">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div>
-                <p className="text-sm text-slate-600">{assistantMessage}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {(activeStep === "setup" || activeStep === "context") && <><button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Bot className="w-4 h-4" /> Buat draf laporan</button><button onClick={generatePlan} className="rounded-lg border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-blue-700">{project.outline.length ? "Buat ulang kerangka" : "Lihat kerangka dulu"}</button></>}
-              </div>
+          {error && <div className="mx-4 mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+
+          {detail && (
+            <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-2">
+              {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
+              {detail.stage === "planned" && <Chip onClick={() => send("Cari sumber tambahan yang lebih relevan dengan topik ini.")}>Cari sumber lagi</Chip>}
+              {canExecute && !jobActive && <Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip>}
+              {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
+              <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />} Unggah bahan
+                <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
+              </label>
+              <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti (lebih lambat)</label>
             </div>
-            {liveJob && (
-              <div className="mt-4">
-                <ReportJobProgress
-                  job={liveJob}
-                  polling={isGeneratingReport}
-                  onResume={resumeJob}
-                  onRetry={retryJob}
-                  onCancel={cancelJob}
-                  onDiscard={discardJob}
-                />
-              </div>
-            )}
-            <details className="mt-4 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Lihat ringkasan bahan</summary><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">
-              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Sumber</p><p className="text-lg font-black">{project.sources.length}</p></div>
-              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">UML</p><p className="text-lg font-black">{approvedCount}/{project.diagrams.length}</p></div>
-              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Tabel</p><p className="text-lg font-black">{doneTableCount}/{project.tables.length}</p></div>
-              <div className="rounded-lg bg-slate-50 p-3"><p className="text-[10px] font-black uppercase text-slate-400">Referensi</p><p className="text-lg font-black">{savedReferenceCount}/{project.references.length}</p></div>
-            </div></details>
-          </div>
-          {reportError && <p className="mt-3 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-600">{reportError}</p>}
+          )}
+
+          <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2 border-t border-slate-100 px-4 py-3">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder={activeId ? "Tulis pesan… (Enter kirim, Shift+Enter baris baru)" : "Buat sesi dulu"}
+              disabled={!activeId || sending}
+              rows={2}
+              className="flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
+            />
+            <Button type="submit" variant="primary" size="sm" disabled={!activeId || sending || !input.trim()}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+          </form>
         </section>
 
-        <div className="grid gap-6 items-start">
-          <div className="space-y-6">
-            <section className={`${activeStep === "setup" || activeStep === "context" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><ClipboardList className="w-5 h-5" /></div>
-                <div>
-                  <h2 className="text-xl font-bold">Tentang laporanmu</h2>
-                  <p className="text-sm text-slate-500">Pilih jenis laporan dan tulis topiknya. Judul boleh menyusul.</p>
-                </div>
-              </div>
+        {/* ------------------------------------------------- panel kanan */}
+        <aside className="space-y-3">
+          {detail?.jobId && job && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <ReportJobProgress
+                job={job}
+                polling={polling}
+                compact
+                onResume={() => detail.jobId && pollJob(detail.jobId)}
+                onRetry={(redo) => detail.jobId && jobAction(detail.jobId, "retry", redo).then((j) => { setJob(j); pollJob(j.id); }).catch((e) => setError(getErrorMessage(e)))}
+                onCancel={() => detail.jobId && jobAction(detail.jobId, "cancel").then(setJob).catch((e) => setError(getErrorMessage(e)))}
+              />
+            </div>
+          )}
 
-              <details className="mb-5"><summary className="cursor-pointer text-sm font-semibold text-slate-600">Cara mulai (opsional)</summary><div className="mt-3 grid gap-3 md:grid-cols-3">
-                {(Object.entries(startModeLabel) as [StartMode, { title: string; helper: string }][]).map(([value, item]) => {
-                  const active = project.startMode === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => updateProject("startMode", value)}
-                      className={`rounded-xl border px-4 py-3 text-left transition-colors ${active ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
-                    >
-                      <p className="text-sm font-black">{item.title}</p>
-                      <p className="mt-1 text-xs font-semibold leading-relaxed opacity-80">{item.helper}</p>
-                    </button>
-                  );
-                })}
-              </div></details>
+          <div className="rounded-2xl border border-slate-200 bg-white">
+            <div className="flex border-b border-slate-100 text-xs font-bold">
+              {([["rencana", "Rencana", ListChecks], ["sumber", `Sumber (${detail?.sources.length ?? 0})`, BookOpen], ["bahan", `Bahan (${detail?.materials.length ?? 0})`, Upload], ["draft", "Draft", FileText]] as const).map(([key, label, Icon]) => (
+                <button key={key} type="button" onClick={() => setTab(key)} className={`flex flex-1 items-center justify-center gap-1 px-2 py-2 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}><Icon className="h-3.5 w-3.5" />{label}</button>
+              ))}
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto p-3 text-sm">
+              {!detail && <p className="text-xs text-slate-500">Belum ada sesi aktif.</p>}
 
-              <div className="grid md:grid-cols-2 gap-4">
-                <label className="space-y-2">
-                  <span className="text-sm font-medium text-slate-600">Jenis laporan</span>
-                  <select value={project.projectType} onChange={(e) => updateProject("projectType", e.target.value as ProjectType)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500">
-                    {Object.entries(projectTypeLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                  </select>
-                </label>
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-600">Judul (boleh dikosongkan dulu)</span>
-                  <input value={project.title} onChange={(e) => updateProject("title", e.target.value)} placeholder="Contoh: Laporan hasil pengamatan lingkungan" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
-                </label>
-
-                <label className="space-y-2 md:col-span-2">
-                  <span className="text-sm font-medium text-slate-600">Apa yang ingin kamu bahas?</span>
-                  <textarea value={project.topic} onChange={(e) => updateProject("topic", e.target.value)} placeholder="Ceritakan topik atau instruksi tugas dengan bahasamu sendiri..." className="min-h-28 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-blue-500" />
-                </label>
-              </div>
-              <details className="mt-5 text-sm text-slate-700"><summary className="cursor-pointer font-semibold">Pengaturan tambahan (opsional)</summary><div className="mt-4 grid gap-4 md:grid-cols-2">
-                <label className="space-y-2"><span className="block text-sm">Gaya bahasa</span><select value={project.formality} onChange={(e) => updateProject("formality", e.target.value as Formality)} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"><option value="ringkas">Ringkas</option><option value="formal">Formal</option><option value="akademik">Akademik penuh</option></select></label>
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-600">Mata kuliah</span>
-                  <input value={project.course} onChange={(e) => updateProject("course", e.target.value)} placeholder="Nama mata kuliah" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-blue-500" />
-                </label>
-
-                <label className="space-y-2">
-                  <span className="text-sm text-slate-600">Gaya daftar pustaka</span>
-                  <select value={project.citationStyle} onChange={(e) => updateProject("citationStyle", e.target.value as ReportProject["citationStyle"])} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold outline-none focus:border-blue-500">
-                    <option value="APA">APA</option>
-                    <option value="IEEE">IEEE</option>
-                    <option value="Bebas">Bebas</option>
-                  </select>
-                </label>
-              </div></details>
-
-              {project.titleIdeas.length > 0 && (
-                <div className="mt-5 rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
-                  <p className="mb-3 text-xs font-black uppercase tracking-widest text-blue-700">Ide judul hasil brainstorming</p>
-                  <div className="space-y-2">
-                    {project.titleIdeas.map((title) => (
-                      <button key={title} onClick={() => selectTitleIdea(title)} className={`w-full rounded-xl border px-3 py-2 text-left text-sm font-bold transition-colors ${project.title === title ? "border-blue-500 bg-white text-blue-700" : "border-blue-100 bg-white/70 text-slate-600 hover:border-blue-300"}`}>
-                        {title}
-                      </button>
-                    ))}
-                  </div>
+              {detail && tab === "rencana" && (
+                <div className="space-y-3">
+                  <BriefView brief={detail.brief} />
+                  {detail.plan ? (
+                    <>
+                      <div>
+                        <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><ListChecks className="h-3.5 w-3.5" /> Outline ({detail.plan.outline.length})</div>
+                        <ol className="space-y-1">
+                          {detail.plan.outline.map((s, i) => (
+                            <li key={s.id} className="rounded-lg bg-slate-50 px-2 py-1.5">
+                              <div className="font-semibold text-slate-900">{i + 1}. {s.title}</div>
+                              {s.purpose && <div className="text-[11px] text-slate-600">{s.purpose}</div>}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                      {detail.plan.diagrams.length > 0 && (
+                        <div>
+                          <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan.diagrams.length})</div>
+                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type})</span> — {d.purpose}</li>)}</ul>
+                        </div>
+                      )}
+                      {detail.plan.tables.length > 0 && (
+                        <div>
+                          <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Table2 className="h-3.5 w-3.5" /> Tabel ({detail.plan.tables.length})</div>
+                          <ul className="space-y-1 text-xs">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{t.title}</b> — {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
+                        </div>
+                      )}
+                      <p className="text-[11px] text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
+                    </>
+                  ) : <p className="text-xs text-slate-500">Rencana muncul setelah asisten cukup paham kebutuhanmu.</p>}
                 </div>
               )}
 
-              {project.sources.length > 0 && <details className="mt-5 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Buat ulang kerangka</summary><button onClick={generatePlan} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-blue-200 px-4 py-2 text-sm font-semibold text-blue-700"><Lightbulb className="h-4 w-4" /> Susun ulang dari bahan</button></details>}
-            </section>
-
-            <section className={`${activeStep === "setup" || activeStep === "context" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><FileCheck2 className="w-5 h-5" /></div>
-                <div>
-                  <h2 className="text-xl font-bold">Bahan untuk laporan</h2>
-                  <p className="text-sm text-slate-500">Tempel catatan atau unggah file berisi instruksi, contoh, maupun data yang akan dibahas.</p>
-                </div>
-              </div>
-
-              <div className="grid md:grid-cols-3 gap-3 mb-4">
-                {Object.entries(sourceKindLabel).map(([value, label]) => {
-                  const active = sourceDraft.kind === value;
-                  return (
-                    <button
-                      key={value}
-                      type="button"
-                      onClick={() => setSourceDraft((prev) => ({ ...prev, kind: value as SourceKind }))}
-                      className={`rounded-xl border px-3 py-2.5 text-left text-xs font-black transition-colors ${active ? "border-amber-400 bg-amber-50 text-amber-700" : "border-slate-200 bg-white text-slate-500 hover:border-amber-200"}`}
-                    >
-                      {label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="rounded-2xl border border-amber-100 bg-amber-50/40 p-4 mb-4">
-                <p className="text-sm font-bold text-amber-900">{sourceKindHint[sourceDraft.kind]}</p>
-              </div>
-
-              <div className="grid md:grid-cols-[0.8fr_1.2fr] gap-3 items-start">
-                <div className="space-y-3">
-                  <input value={sourceDraft.title} onChange={(e) => setSourceDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Judul sumber, contoh: Pedoman Dosen RPL" className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-amber-500" />
-                  <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-black text-slate-500 hover:border-amber-300 hover:text-amber-700 transition-colors">
-                    {isExtractingSource ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} {isExtractingSource ? "Membaca file..." : "Pilih file"}
-                    <input type="file" className="hidden" disabled={isExtractingSource} accept=".txt,.md,.csv,.json,.js,.jsx,.ts,.tsx,.php,.py,.java,.sql,.html,.css,.xml,.yml,.yaml,.pdf,.docx,.zip" onChange={(e) => handleSourceFile(e.target.files?.[0])} />
-                  </label>
-                  {sourceDraft.fileName && <p className="text-xs font-bold text-slate-400">File dipilih: {sourceDraft.fileName}</p>}
-                  {sourceError && <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-bold text-red-600">{sourceError}</p>}
-                </div>
-                <textarea value={sourceDraft.content} onChange={(e) => setSourceDraft((prev) => ({ ...prev, content: e.target.value }))} placeholder="Tempel isi penting/ringkasan di sini. Contoh: struktur laporan contoh, aturan format PDF pedoman, daftar fitur aplikasi, struktur folder codingan, route API, schema database, atau catatan revisi dosen..." className="min-h-40 rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-amber-500" />
-              </div>
-
-              <div className="mt-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
-                <p className="text-xs text-slate-500 leading-relaxed">Cukup masukkan bagian penting yang berkaitan dengan laporan.</p>
-                <button onClick={addSource} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-amber-600 transition-colors">
-                  <Plus className="w-4 h-4" /> Simpan bahan
-                </button>
-              </div>
-
-              <div className="mt-4 grid md:grid-cols-2 gap-3">
-                {project.sources.length === 0 ? (
-                  <div className="md:col-span-2 rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada bahan. Tempel instruksi tugas atau catatan yang kamu punya.</div>
-                ) : project.sources.map((source) => (
-                  <div key={source.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="mb-2 flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-slate-800">{source.title}</p>
-                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">{sourceKindLabel[source.kind || "note"]}</p>
+              {detail && tab === "sumber" && (
+                <div className="space-y-2">
+                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis — cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
+                  {!detail.sources.length && <p className="text-xs text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
+                  {detail.sources.map((s) => (
+                    <div key={s.id} className="rounded-xl border border-slate-100 p-2">
+                      <div className="text-xs leading-snug text-slate-900">{s.citationApa}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {s.qualitySignals.map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{q}</span>)}
+                        {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-[10px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
                       </div>
-                      <button onClick={() => removeSource(source.id)} className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500 transition-colors" title="Hapus sumber">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                    {source.fileName && <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-white px-2 py-1 text-[10px] font-bold text-slate-500 border border-slate-200"><FileArchive className="w-3 h-3" /> {source.fileName}</p>}
-                    <p className="text-xs text-slate-500 line-clamp-3">{source.content}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </div>
-
-          <aside className="space-y-6">
-            <section className={`${activeStep === "plan" || activeStep === "execute" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-green-50 text-green-600 flex items-center justify-center"><CheckCircle2 className="w-5 h-5" /></div>
-                  <h2 className="text-xl font-black">Pemeriksaan bahan</h2>
-                </div>
-                <span className="text-xs font-black text-slate-400">{checks.filter((c) => c.ok).length}/{checks.length}</span>
-              </div>
-              <div className="space-y-2">
-                {checks.map((check) => (
-                  <div key={check.label} className="flex items-center gap-3 rounded-xl bg-slate-50 px-3 py-2">
-                    <span className={`w-2.5 h-2.5 rounded-full ${check.ok ? "bg-green-500" : "bg-slate-300"}`} />
-                    <span className={`text-sm font-bold ${check.ok ? "text-slate-700" : "text-slate-400"}`}>{check.label}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className={`${activeStep === "plan" || activeStep === "execute" ? "" : "hidden"} border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-              <div className="flex items-center gap-3 mb-5">
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><GitBranch className="w-5 h-5" /></div>
-                <div>
-                  <h2 className="text-xl font-black">Daftar Gambar & UML</h2>
-                  <p className="text-sm text-slate-500">{approvedCount}/{project.diagrams.length} diagram sudah dibuat dan disetujui.</p>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                {project.diagrams.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada diagram yang direncanakan. Diagram tidak wajib untuk semua laporan.</div>
-                ) : project.diagrams.map((diagram) => (
-                  <div key={diagram.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-slate-900">{diagram.title}</p>
-                        <p className="text-xs font-bold text-indigo-600 uppercase tracking-widest mt-1">{diagram.type}</p>
-                        <p className="text-xs text-slate-500 mt-2 leading-relaxed">{diagram.purpose}</p>
+                      <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-semibold">
+                        {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"><ExternalLink className="h-3 w-3" />DOI</a>}
+                        {s.pdfUrl && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><Download className="h-3 w-3" />PDF</a>}
+                        {s.checkLinks.map((c) => <a key={c.url} href={c.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>)}
                       </div>
-                      <select value={diagram.status} onChange={(e) => setDiagramStatus(diagram.id, e.target.value as DiagramStatus)} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
-                        <option value="planned">Belum dibuat</option>
-                        <option value="draft">Sedang dibuat</option>
-                        <option value="approved" disabled={!diagram.diagramData}>Sudah oke</option>
-                      </select>
                     </div>
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <span className={`rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-widest ${diagram.diagramData ? "bg-green-100 text-green-700" : "bg-white text-slate-400 border border-slate-200"}`}>
-                        {diagram.diagramData ? "hasil sudah tersimpan" : "belum dieksekusi"}
-                      </span>
-                      {diagram.approvedAt && <span className="text-[10px] font-bold text-slate-400">Approved {new Date(diagram.approvedAt).toLocaleDateString("id-ID")}</span>}
-                      <span className="text-[10px] font-bold text-slate-400">{diagramStatusLabel[diagram.status]}</span>
-                    </div>
-                    <button onClick={() => sendToUmlBuilder(diagram)} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-black text-white hover:bg-indigo-700 transition-colors">
-                      <Workflow className="w-4 h-4" /> {diagram.diagramData ? "Edit di UML Builder" : "Buat di UML Builder"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </aside>
-        </div>
+                  ))}
+                </div>
+              )}
 
-        <section className={`${activeStep === "plan" ? "" : "hidden"} mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-          <div className="flex items-center justify-between gap-4 mb-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><FileText className="w-5 h-5" /></div>
-              <div>
-                <h2 className="text-xl font-black">Outline Laporan</h2>
-                <p className="text-sm text-slate-500">Struktur awal yang nanti bisa dipakai untuk generate isi per bagian.</p>
-              </div>
-            </div>
-            <div className="hidden md:flex items-center gap-2 text-xs font-black text-slate-400 uppercase tracking-widest"><Save className="w-4 h-4" /> Auto-save lokal</div>
-          </div>
-
-          {project.outline.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Kerangka belum dibuat. Isi topik dan bahan, lalu klik Buat kerangka.</div>
-          ) : (
-            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {project.outline.map((section) => (
-                <div key={section.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <h3 className="font-black text-slate-900 leading-snug">{section.title}</h3>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{sectionStatusLabel[section.status]}</span>
-                  </div>
-                  <p className="text-sm text-slate-500 leading-relaxed">{section.purpose}</p>
-                  {section.requiredDiagrams.length > 0 && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {section.requiredDiagrams.map((diagramId) => (
-                        <span key={diagramId} className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-indigo-600 border border-indigo-100">{diagramId}</span>
-                      ))}
+              {detail && tab === "bahan" && (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-500">Unggah ZIP kode, PDF panduan, DOCX contoh, atau data mentah lewat tombol “Unggah bahan”. Isinya dipakai sebagai konteks penulisan.</p>
+                  {!detail.materials.length && <p className="text-xs text-slate-500">Belum ada bahan.</p>}
+                  {detail.materials.map((m) => (
+                    <div key={m.id} className="flex items-center gap-2 rounded-xl border border-slate-100 px-2 py-1.5 text-xs">
+                      <FileText className="h-3.5 w-3.5 text-slate-400" />
+                      <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-[10px] text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
+                      <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
                     </div>
+                  ))}
+                </div>
+              )}
+
+              {detail && tab === "draft" && (
+                <div className="space-y-2">
+                  {!detail.draft && <p className="text-xs text-slate-500">{jobActive ? "Sedang ditulis… pantau progres di atas." : "Draft muncul setelah eksekusi selesai."}</p>}
+                  {detail.draft && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <select value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof DOCX_PRESETS)} className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                          {Object.entries(DOCX_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                        </select>
+                        <Button onClick={exportDocx} variant="primary" size="sm" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
+                      </div>
+                      <div className="flex items-center gap-1 text-[11px] text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
+                      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-800">{detail.draft}</pre>
+                      <p className="text-[11px] text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>
+                    </>
                   )}
                 </div>
-              ))}
+              )}
             </div>
-          )}
-        </section>
-
-        <section className={`${activeStep === "plan" ? "" : "hidden"} mt-6 grid xl:grid-cols-2 gap-6`}>
-          <div className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 rounded-xl bg-cyan-50 text-cyan-600 flex items-center justify-center"><Table2 className="w-5 h-5" /></div>
-              <div>
-                <h2 className="text-xl font-black">Rencana Tabel</h2>
-                <p className="text-sm text-slate-500">Tabel yang perlu dibuat otomatis masuk konteks draft laporan.</p>
-              </div>
-            </div>
-            {project.tables.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada rencana tabel. Buat kerangka dari bahanmu dulu.</div>
-            ) : (
-              <div className="space-y-3">
-                {project.tables.map((table) => (
-                  <div key={table.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-slate-900">{table.title}</p>
-                        <p className="text-xs text-slate-500 mt-1">{table.purpose}</p>
-                        <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-cyan-600">{tableStatusLabel[table.status]}</p>
-                      </div>
-                      <select value={table.status} onChange={(e) => setProject((prev) => ({ ...prev, tables: prev.tables.map((item) => item.id === table.id ? { ...item, status: e.target.value as TablePlan["status"] } : item) }))} className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold">
-                        <option value="planned">Belum dibuat</option>
-                        <option value="draft">Sedang dibuat</option>
-                        <option value="done">Sudah oke</option>
-                      </select>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {table.columns.map((column) => <span key={column} className="rounded-full bg-white px-2 py-1 text-[10px] font-black text-cyan-700 border border-cyan-100">{column}</span>)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
-
-          <div className="border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center"><Search className="w-5 h-5" /></div>
-              <div>
-                <h2 className="text-xl font-black">Pencarian Jurnal & Referensi</h2>
-                <p className="text-sm text-slate-500">Query disiapkan dulu, lalu hasil yang cocok bisa disimpan sebagai konteks.</p>
-              </div>
-            </div>
-            {project.references.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 p-5 text-sm text-slate-400 font-semibold">Belum ada referensi yang direncanakan. Buat kerangka dari bahanmu dulu.</div>
-            ) : (
-              <div className="space-y-3">
-                {project.references.map((reference) => (
-                  <div key={reference.id} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <p className="font-black text-slate-900">{reference.query}</p>
-                    <p className="mt-1 text-xs text-slate-500">{reference.purpose}</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button onClick={() => searchReferences(reference)} disabled={searchingReferenceId === reference.id} className="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-black text-white hover:bg-purple-700 disabled:opacity-50">
-                        {searchingReferenceId === reference.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />} Cari & baca abstrak
-                      </button>
-                      <a href={`https://scholar.google.com/scholar?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-purple-600 px-3 py-2 text-xs font-black text-white hover:bg-purple-700"><Search className="w-3.5 h-3.5" /> Google Scholar</a>
-                      <a href={`https://www.semanticscholar.org/search?q=${encodeURIComponent(reference.query)}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-2 text-xs font-black text-purple-700 border border-purple-100 hover:border-purple-300"><Search className="w-3.5 h-3.5" /> Semantic Scholar</a>
-                      <button onClick={() => setProject((prev) => ({ ...prev, references: prev.references.map((item) => item.id === reference.id ? { ...item, status: item.status === "saved" ? "planned" : "saved" } : item) }))} className={`rounded-lg px-3 py-2 text-xs font-black border ${reference.status === "saved" ? "bg-green-50 text-green-700 border-green-100" : "bg-white text-slate-500 border-slate-200"}`}>{reference.status === "saved" ? "Tersimpan" : "Tandai cocok"}</button>
-                    </div>
-                    {reference.results && reference.results.length > 0 && (
-                      <div className="mt-4 space-y-3">
-                        {reference.results.map((result) => (
-                          <div key={result.id} className="rounded-xl border border-purple-100 bg-white p-4">
-                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                              <div>
-                                <p className="font-black text-slate-900 leading-snug">{result.title}</p>
-                                <p className="mt-1 text-xs font-bold text-slate-500">{result.authors.slice(0, 4).join(", ") || "Penulis tidak tersedia"} {result.year ? `(${result.year})` : ""} {result.venue ? `- ${result.venue}` : ""}</p>
-                                <p className="mt-2 line-clamp-4 text-xs leading-relaxed text-slate-500">{result.abstract}</p>
-                                <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-purple-600">{result.citationCount} sitasi {result.isOpenAccess ? "- open access" : ""}</p>
-                              </div>
-                              <button onClick={() => saveReferenceResult(reference.id, result)} className="shrink-0 rounded-lg bg-green-600 px-3 py-2 text-xs font-black text-white hover:bg-green-700">Simpan ke konteks</button>
-                            </div>
-                            <div className="mt-3 flex flex-wrap gap-2">
-                              {result.url && <a href={result.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 hover:border-purple-300"><ExternalLink className="w-3.5 h-3.5" /> Halaman paper</a>}
-                              {result.pdfUrl && <a href={result.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-xs font-black text-green-700 hover:border-green-300"><ExternalLink className="w-3.5 h-3.5" /> PDF / download</a>}
-                              {result.doi && <a href={`https://doi.org/${result.doi}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-600 hover:border-purple-300"><ExternalLink className="w-3.5 h-3.5" /> DOI</a>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className={`${activeStep === "draft" ? "" : "hidden"} mt-6 border border-slate-200 rounded-2xl bg-white p-5 md:p-6 shadow-sm`}>
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center"><FileText className="w-5 h-5" /></div>
-              <div>
-                <h2 className="text-xl font-black">Draft Laporan Lengkap</h2>
-                <p className="text-sm text-slate-500">Hasil akhir disusun dari konteks, outline, tabel, daftar UML, dan referensi yang sudah disimpan.</p>
-              </div>
-            </div>
-            <button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-40">
-              <Bot className="w-4 h-4" /> {project.sources.length === 0 ? "Isi konteks dulu" : project.reportDraft ? "Generate Ulang" : "Generate Laporan"}
-            </button>
-          </div>
-          {!project.reportDraft ? (
-            <div className="rounded-xl border border-dashed border-slate-200 p-8 text-center text-slate-400 font-semibold">Belum ada draf. Masukkan bahan, lalu pilih Buat draf laporan.</div>
-          ) : (
-            <div className="grid gap-4 xl:grid-cols-[0.85fr_1.15fr]">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <p className="mb-3 text-xs font-black uppercase tracking-widest text-slate-400">Revisi cepat</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {(Object.entries(revisionModeLabel) as [RevisionMode, string][]).map(([value, label]) => {
-                    const active = revisionMode === value;
-                    return (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() => setRevisionMode(value)}
-                        className={`rounded-lg border px-3 py-2 text-left text-xs font-black transition-colors ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
-                      >
-                        {label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <input value={revisionTarget} onChange={(e) => setRevisionTarget(e.target.value)} placeholder="Target bagian, contoh: BAB 1 / Landasan Teori / Daftar Pustaka" className="mt-3 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold outline-none focus:border-slate-500" />
-                <textarea value={revisionInstruction} onChange={(e) => setRevisionInstruction(e.target.value)} placeholder="Instruksi tambahan. Contoh: tambahkan 2 paragraf latar belakang, pakai sitasi dari referensi tersimpan, buat tabel kebutuhan fungsional, atau masukkan Activity Diagram Login ke BAB 3." className="mt-3 min-h-28 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium outline-none focus:border-slate-500" />
-                <button onClick={reviseReport} disabled={isRevisingReport} className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:opacity-50">
-                  {isRevisingReport ? <Loader2 className="w-4 h-4 animate-spin" /> : <PenLine className="w-4 h-4" />} Terapkan Revisi
-                </button>
-                {isRevisingReport && (
-                  <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-                    <div className="mb-2 flex items-center justify-between text-xs font-black text-slate-700">
-                      <span>{revisionLabel}</span>
-                      <span>{revisionProgress}%</span>
-                    </div>
-                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
-                      <div className="h-full rounded-full bg-gradient-to-r from-slate-900 via-blue-500 to-emerald-500 transition-all duration-700" style={{ width: `${revisionProgress}%` }} />
-                    </div>
-                  </div>
-                )}
-                <p className="mt-3 text-xs leading-relaxed text-slate-500">Revisi memakai draft sekarang, outline, daftar tabel, referensi tersimpan, dan konteks proyek. Jadi user bisa rapihin laporan lama tanpa generate ulang total.</p>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-black uppercase tracking-widest text-slate-400">Generated {new Date(project.reportDraft.generatedAt).toLocaleString("id-ID")}</p>
-                    {project.reportDraft.revisedAt && <p className="mt-1 text-xs font-bold text-green-600">Revisi terakhir {new Date(project.reportDraft.revisedAt).toLocaleString("id-ID")}</p>}
-                  </div>
-                  <button onClick={() => navigator.clipboard.writeText(project.reportDraft?.content || "")} className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 border border-slate-200 hover:border-blue-300">Copy Draft</button>
-                </div>
-                <pre className="max-h-[560px] overflow-auto whitespace-pre-wrap rounded-lg bg-white p-4 text-sm leading-relaxed text-slate-700 border border-slate-100">{project.reportDraft.content}</pre>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="hidden mt-6 grid md:grid-cols-3 gap-4">
-          <Link href="/ai-tools" className="rounded-2xl border border-slate-200 p-5 hover:border-blue-300 hover:shadow-sm transition-all">
-            <PenLine className="w-6 h-6 text-blue-600 mb-3" />
-            <p className="font-black text-slate-900">Benerin Bahasa & Sitasi</p>
-            <p className="text-sm text-slate-500 mt-1">Pakai AI Academic Tools untuk rewrite dan cek struktur.</p>
-          </Link>
-          <Link href="/data-synthesizer" className="rounded-2xl border border-slate-200 p-5 hover:border-indigo-300 hover:shadow-sm transition-all">
-            <BookOpen className="w-6 h-6 text-indigo-600 mb-3" />
-            <p className="font-black text-slate-900">Olah Data Mentah</p>
-            <p className="text-sm text-slate-500 mt-1">Ubah kuesioner, wawancara, atau observasi jadi narasi.</p>
-          </Link>
-          <Link href="/template-generator" className="rounded-2xl border border-slate-200 p-5 hover:border-amber-300 hover:shadow-sm transition-all">
-            <FileText className="w-6 h-6 text-amber-600 mb-3" />
-            <p className="font-black text-slate-900">Buka Editor Dokumen</p>
-            <p className="text-sm text-slate-500 mt-1">Lanjut ke editor untuk menulis dan export DOCX.</p>
-          </Link>
-        </section>
-      </main>
+        </aside>
+      </div>
     </div>
   );
+}
+
+function Chip({ children, onClick, tone, disabled }: { children: React.ReactNode; onClick: () => void; tone?: "primary"; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${tone === "primary" ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
+      {children}
+    </button>
+  );
+}
+
+function BriefView({ brief }: { brief: ReportBrief }) {
+  const rows: Array<[string, string | undefined]> = [
+    ["Jenis", brief.documentType], ["Judul", brief.title], ["Topik", brief.topic], ["Mata kuliah", brief.course], ["Kampus", brief.institution],
+    ["Sitasi", brief.citationStyle], ["Syarat jurnal", brief.journalRequirement ? `${brief.journalRequirement}${brief.minSources ? ` · min ${brief.minSources}` : ""}${brief.yearFrom ? ` · ≥${brief.yearFrom}` : ""}` : undefined],
+    ["Format", brief.formatRules], ["Target", brief.targetLength],
+  ];
+  const filled = rows.filter(([, v]) => v);
+  if (!filled.length) return <p className="text-xs text-slate-500">Brief masih kosong — ceritakan tugasmu di chat.</p>;
+  return (
+    <dl className="grid grid-cols-[90px_1fr] gap-x-2 gap-y-1 text-xs">
+      {filled.map(([k, v]) => <FragmentRow key={k} k={k} v={v!} />)}
+      {brief.notes?.length ? <FragmentRow k="Catatan" v={brief.notes.join("; ")} /> : null}
+    </dl>
+  );
+}
+
+function FragmentRow({ k, v }: { k: string; v: string }) {
+  return (<><dt className="font-bold text-slate-500">{k}</dt><dd className="text-slate-900">{v}</dd></>);
 }
