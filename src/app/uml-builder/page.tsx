@@ -90,7 +90,11 @@ async function readUmlApiPayload(response: Response): Promise<UmlApiPayload> {
     const parsed: unknown = JSON.parse(raw);
     return isRecord(parsed) ? parsed as UmlApiPayload : { success: false, error: 'Format respons server tidak valid.' };
   } catch {
-    return { success: false, error: `Respons server tidak dapat dibaca (${response.status}).` };
+    // Body non-JSON (biasanya halaman error LiteSpeed/Passenger saat request diputus hosting).
+    const hint = response.status >= 500
+      ? 'Server memutus permintaan sebelum AI selesai. Coba lagi, persempit deskripsi, atau pakai mode "Tanya Dulu".'
+      : `Respons server tidak dapat dibaca (${response.status}).`;
+    return { success: false, error: hint };
   }
 }
 

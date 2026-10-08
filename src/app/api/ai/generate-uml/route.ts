@@ -10,6 +10,10 @@ import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
 
 export const maxDuration = 120;
 
+// LiteSpeed/Passenger di hosting memutus request di ~120 s → total budget route harus di bawah itu.
+const ROUTE_BUDGET_MS = 95_000;
+const MIN_STEP_MS = 15_000;
+
 type DiagramType = "flowchart" | "usecase" | "activity" | "sequence";
 type GenerationMode = "direct" | "clarify";
 type StepType = "start" | "end" | "process" | "activity" | "decision";
@@ -695,33 +699,47 @@ export async function POST(req: Request) {
       clarificationContext: mergedClarificationContext,
     });
 
+    const startedAt = Date.now();
+    const remainingMs = () => ROUTE_BUDGET_MS - (Date.now() - startedAt);
+
     const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
-      // Untuk klarifikasi awal atau perbaikan spec, pakai AI_MODEL_FAST agar cepat dan responsif
-      const modelToUse = (askFirst || repairSpec) ? AI_MODEL_FAST : AI_MODEL;
-      // GPT-5 class models often need >30 s for 1.800 token JSON; route budget total ~100 s.
-      const timeoutLimit = (askFirst || repairSpec) ? 35000 : 60000;
+      const quick = Boolean(askFirst || repairSpec);
+      const callModel = async (model: string, timeout: number) => {
+        const response = await aiClient.chat.completions.create({
+          model,
+          messages: [
+            {
+              role: "system",
+              content: repairSpec
+                ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
+                : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
+            },
+            {
+              role: "user",
+              content: repairSpec
+                ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
+                : baseUserPayload,
+            },
+          ],
+          temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
+          max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
+        }, { timeout, maxRetries: 0 });
+        return extractJson(response.choices[0].message.content || "{}");
+      };
 
-      const response = await aiClient.chat.completions.create({
-        model: modelToUse,
-        messages: [
-          {
-            role: "system",
-            content: repairSpec
-              ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
-              : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
-          },
-          {
-            role: "user",
-            content: repairSpec
-              ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
-              : baseUserPayload,
-          },
-        ],
-        temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
-        max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
-      }, { timeout: timeoutLimit });
+      const budget = remainingMs();
+      if (budget < MIN_STEP_MS) throw new Error("timeout: budget route habis");
+      if (quick) return callModel(AI_MODEL_FAST, Math.min(35_000, budget));
 
-      return extractJson(response.choices[0].message.content || "{}");
+      // Model utama dapat ≤55 s; kalau timeout dan masih ada sisa budget, coba sekali dengan model cepat.
+      try {
+        return await callModel(AI_MODEL, Math.min(55_000, budget));
+      } catch (error) {
+        const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+        const left = remainingMs();
+        if (!isTimeout || left < MIN_STEP_MS) throw error;
+        return callModel(AI_MODEL_FAST, Math.min(35_000, left));
+      }
     };
 
     if (askFirst) {
@@ -739,7 +757,7 @@ export async function POST(req: Request) {
     let spec = await runGeneration();
 
     if (spec.needsClarification) {
-      if (mode === "direct" && hasEnoughPromptDetail(prompt, reportContext)) {
+      if (mode === "direct" && hasEnoughPromptDetail(prompt, reportContext) && remainingMs() >= MIN_STEP_MS) {
         spec = await runGeneration(spec, ["Prompt sudah cukup detail. Bentuk spec final tanpa meminta klarifikasi tambahan."]);
       } else {
         const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
@@ -766,6 +784,16 @@ export async function POST(req: Request) {
 
     const normalizedSpec = normalizeSpec(spec, normalizedType, prompt, reportContext);
     const initialAssessment = prepareDiagram(normalizedSpec, normalizedType, validationPromptContext);
+    if ((!initialAssessment.validation.ok || !initialAssessment.data) && remainingMs() < MIN_STEP_MS) {
+      return NextResponse.json({
+        success: false,
+        needsClarification: true,
+        clarification: "Struktur diagram belum lolos pemeriksaan kualitas dan waktu perbaikan otomatis habis. Jawab pertanyaan berikut lalu coba lagi.",
+        clarificationQuestions: validationErrorsToQuestions(initialAssessment.validation.errors, normalizedType),
+        validation: initialAssessment.validation,
+        source: "quality-gate-timeout",
+      });
+    }
     if (!initialAssessment.validation.ok || !initialAssessment.data) {
       const repairedSpec = await runGeneration(normalizedSpec, initialAssessment.validation.errors);
       if (!repairedSpec.needsClarification) {
