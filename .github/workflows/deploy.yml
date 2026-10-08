@@ -127,19 +127,42 @@ jobs:
             fi
             echo "DB target: $(echo "$DATABASE_URL" | sed -E 's#://([^:]+):[^@]+@#://\1:****@#')"
 
-            # Pakai node dari Passenger/cPanel kalau ada (nvm / cloudlinux).
+            # Pakai node dari Passenger/cPanel kalau ada (nvm / cloudlinux nodevenv).
             [ -s "$HOME/.nvm/nvm.sh" ] && . "$HOME/.nvm/nvm.sh" >/dev/null 2>&1 || true
-            command -v node && node -v
-
-            # Install prisma CLI lokal ke folder deploy (sekali; dicache antar deploy).
-            if [ ! -x node_modules/.bin/prisma ]; then
-              echo "Install prisma CLI 6.19.3 (sekali) ..."
-              npm install --no-save --no-audit --no-fund prisma@6.19.3 @prisma/client@6.19.3
+            if ! command -v npm >/dev/null 2>&1; then
+              for act in "$HOME"/nodevenv/*/*/bin/activate; do
+                [ -f "$act" ] || continue
+                # shellcheck disable=SC1090
+                . "$act" >/dev/null 2>&1 || true
+                command -v npm >/dev/null 2>&1 && { echo "node dari $act"; break; }
+              done
             fi
-            node_modules/.bin/prisma migrate status --schema prisma/schema.prisma || true
-            node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma
-            echo "✓ Migrasi Prisma selesai"
+            if ! command -v npm >/dev/null 2>&1; then
+              for d in /opt/alt/alt-nodejs20/root/usr/bin /opt/alt/alt-nodejs18/root/usr/bin /opt/alt/alt-nodejs22/root/usr/bin; do
+                [ -x "$d/npm" ] && { export PATH="$d:$PATH"; echo "node dari $d"; break; }
+              done
+            fi
             set +e
+            if ! command -v npm >/dev/null 2>&1; then
+              echo "::warning::npm tidak ditemukan di server — migrasi dilewati. Jalankan SQL migrasi manual via phpPgAdmin."
+            else
+              node -v
+              # Install prisma CLI lokal ke folder deploy (sekali; dicache antar deploy).
+              if [ ! -x node_modules/.bin/prisma ]; then
+                echo "Install prisma CLI 6.19.3 (sekali) ..."
+                npm install --no-save --no-audit --no-fund prisma@6.19.3 @prisma/client@6.19.3
+              fi
+              node_modules/.bin/prisma migrate status --schema prisma/schema.prisma || true
+              # Migrasi gagal → tetap restart app (kode baru + skema lama lebih baik
+              # daripada kode lama), tapi tandai jelas agar dijalankan manual via phpPgAdmin.
+              node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma
+              MIGRATE_RC=$?
+              if [ "$MIGRATE_RC" -ne 0 ]; then
+                echo "::warning::prisma migrate deploy GAGAL (rc=$MIGRATE_RC). Jalankan SQL migrasi manual via phpPgAdmin, lalu cek /api/admin/db-health."
+              else
+                echo "✓ Migrasi Prisma selesai"
+              fi
+            fi
             
             # Pastikan folder tmp ada dan sentuh restart.txt untuk reload Node.js
             mkdir -p tmp
