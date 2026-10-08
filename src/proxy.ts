@@ -53,6 +53,7 @@ import { enforceRateLimit } from "@/lib/server/request-guards";
  * Endpoint publik di-explicit-skip di bawah (lihat PUBLIC_API_EXACT_PATHS).
  */
 const PROTECTED_API_PREFIXES = [
+  "/api/admin/",
   "/api/report-jobs/",
   "/api/laporan/",
   "/api/context/extract",

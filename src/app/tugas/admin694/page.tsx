@@ -9,6 +9,7 @@ import {
   Loader2,
   Plus,
   ShieldCheck,
+  Users,
 } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
@@ -148,13 +149,20 @@ export default function TugasAdminIndex() {
           <p className="mt-2 text-sm text-slate-300">
             Buat mata kuliah baru atau buka yang sudah ada.
           </p>
-          <div className="mt-5">
+          <div className="mt-5 flex flex-wrap gap-2">
             <Link
               href="/tugas/admin694/insights"
               className="inline-flex items-center gap-2 rounded-full bg-violet-500/20 px-3 py-1.5 text-xs font-bold text-violet-100 transition hover:bg-violet-500/40"
             >
               <BarChart3 className="h-3 w-3" />
               Global Insights (AI)
+            </Link>
+            <Link
+              href="/tugas/admin694/users"
+              className="inline-flex items-center gap-2 rounded-full bg-blue-500/20 px-3 py-1.5 text-xs font-bold text-blue-100 transition hover:bg-blue-500/40"
+            >
+              <Users className="h-3 w-3" />
+              Daftar akun &amp; reset sandi
             </Link>
           </div>
         </div>
