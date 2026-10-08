@@ -705,25 +705,42 @@ export async function POST(req: Request) {
     const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
       const quick = Boolean(askFirst || repairSpec);
       const callModel = async (model: string, timeout: number) => {
-        const response = await aiClient.chat.completions.create({
+        const messages = [
+          {
+            role: "system" as const,
+            content: repairSpec
+              ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
+              : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
+          },
+          {
+            role: "user" as const,
+            content: repairSpec
+              ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
+              : baseUserPayload,
+          },
+        ];
+        const baseParams = {
           model,
-          messages: [
-            {
-              role: "system",
-              content: repairSpec
-                ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
-                : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
-            },
-            {
-              role: "user",
-              content: repairSpec
-                ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
-                : baseUserPayload,
-            },
-          ],
+          messages,
           temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
           max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
-        }, { timeout, maxRetries: 0 });
+        };
+        const t0 = Date.now();
+        let response;
+        try {
+          // Spec UML sudah dikunci schema+aturan; reasoning tersembunyi model GPT-5 yang bikin lambat, bukan outputnya.
+          response = await aiClient.chat.completions.create({
+            ...baseParams,
+            reasoning_effort: "low",
+            response_format: { type: "json_object" },
+          }, { timeout, maxRetries: 0 });
+        } catch (error) {
+          const status = (error as { status?: unknown })?.status;
+          if (status !== 400 || remainingMs() < MIN_STEP_MS) throw error;
+          // Provider tidak kenal parameter tambahan → ulang polos.
+          response = await aiClient.chat.completions.create(baseParams, { timeout: Math.min(timeout, remainingMs()), maxRetries: 0 });
+        }
+        console.info(`[generate-uml] ${model} ${quick ? "quick" : "full"} ${Date.now() - t0}ms tokens=${response.usage?.total_tokens ?? "?"}`);
         return extractJson(response.choices[0].message.content || "{}");
       };
 
