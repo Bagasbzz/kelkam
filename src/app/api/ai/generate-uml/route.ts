@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type OpenAI from "openai";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
 import {
   autoLayoutDiagram,
@@ -653,239 +654,402 @@ function prepareDiagram(
   return { data, validation };
 }
 
-export async function POST(req: Request) {
+// ---------------------------------------------------------------------------
+// Streaming: parse JSON parsial dari AI → diagram sementara yang bisa langsung digambar.
+// ---------------------------------------------------------------------------
+
+type UmlStreamEvent =
+  | { type: "status"; text: string; phase: string; model?: string }
+  | { type: "partial"; data: RenderedDiagram; count: number }
+  | { type: "result"; status: number; payload: Record<string, unknown> };
+
+type Emit = (event: UmlStreamEvent) => void;
+
+const PARTIAL_ARRAY_KEYS = ["steps", "actors", "usecases", "participants", "messages"] as const;
+
+/** Ambil objek-objek yang sudah lengkap `{...}` di dalam array `"key": [` dari teks JSON yang belum selesai. */
+function extractCompletedObjects(text: string, key: string): unknown[] {
+  const match = new RegExp(`"${key}"\\s*:\\s*\\[`).exec(text);
+  if (!match) return [];
+  const out: unknown[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = match.index + match[0].length; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === "\"") inString = false;
+      continue;
+    }
+    if (ch === "\"") { inString = true; continue; }
+    if (ch === "{") { if (depth === 0) start = i; depth += 1; }
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0 && start >= 0) {
+        try { out.push(JSON.parse(text.slice(start, i + 1))); } catch { /* objek belum valid, lewati */ }
+        start = -1;
+      }
+    } else if (ch === "]" && depth === 0) break;
+  }
+  return out;
+}
+
+function parsePartialSpec(text: string, diagramType: DiagramType): { spec: CompactSpec; count: number } | null {
+  const raw: Record<string, unknown> = {};
+  const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1];
+  if (title) raw.title = title;
+  const lanesMatch = /"lanes"\s*:\s*\[([^\]]*)\]/.exec(text);
+  if (lanesMatch) { try { raw.lanes = JSON.parse(`[${lanesMatch[1]}]`); } catch { /* lanes belum lengkap */ } }
+  let count = 0;
+  for (const key of PARTIAL_ARRAY_KEYS) {
+    const items = extractCompletedObjects(text, key);
+    if (items.length) { raw[key] = items; count += items.length; }
+  }
+  if (!count) return null;
+  const spec = parseCompactSpec(raw);
+  const ready = diagramType === "usecase" ? spec.actors?.length : diagramType === "sequence" ? spec.participants?.length : spec.steps?.length;
+  return ready ? { spec, count } : null;
+}
+
+function partialToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDiagram | null {
   try {
-    const rawBody: unknown = await req.json().catch(() => null);
-    if (!isRecord(rawBody)) {
-      return NextResponse.json({ success: false, error: "Payload JSON tidak valid." }, { status: 400 });
+    const raw = specToDiagram(spec, diagramType);
+    return { ...raw, nodes: autoLayoutDiagram(raw.nodes, raw.edges, diagramType, raw.lanes) };
+  } catch {
+    return null;
+  }
+}
+
+type ChatParams = Omit<OpenAI.Chat.ChatCompletionCreateParamsStreaming, "stream">;
+
+/** Panggil provider dengan stream; batal otomatis saat deadline. Mengembalikan teks penuh. */
+async function streamChat(params: ChatParams, timeoutMs: number, onDelta: (fullText: string) => void) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const stream = await aiClient.chat.completions.create(
+      { ...params, stream: true, stream_options: { include_usage: true } },
+      { signal: controller.signal, maxRetries: 0 },
+    );
+    let text = "";
+    let usage: number | undefined;
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (delta) { text += delta; onDelta(text); }
+      if (chunk.usage?.total_tokens) usage = chunk.usage.total_tokens;
     }
+    return { text, usage };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("timeout: AI stream dibatalkan karena melewati batas waktu");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    const body = rawBody as GenerateUmlRequest;
-    if (typeof body.prompt === "string" && body.prompt.length > 6000) {
-      return NextResponse.json({ success: false, error: "Prompt terlalu panjang. Maksimal 6.000 karakter." }, { status: 413 });
-    }
+interface PipelineResult { status: number; payload: Record<string, unknown> }
 
-    const prompt = optionalString(body.prompt, 6000);
-    if (!prompt) {
-      return NextResponse.json({ success: false, error: "Prompt tidak boleh kosong" }, { status: 400 });
-    }
+async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budgetMs: number): Promise<PipelineResult> {
+  const done = (payload: Record<string, unknown>, status = 200): PipelineResult => ({ status, payload });
 
-    const requestedType = optionalString(body.diagramType, 20);
-    const normalizedType = allowedTypes.has(requestedType) ? requestedType as DiagramType : "flowchart";
-    const mode: GenerationMode = body.generationMode === "clarify" ? "clarify" : "direct";
-    const existingSummary = limitStructuredContext(body.existingSummary, 4000);
-    const reportContext = limitStructuredContext(body.reportContext, 8000);
-    const normalizedQuestions = normalizeClarificationQuestions(body.clarificationQuestions);
-    const normalizedAnswers = Array.isArray(body.clarificationAnswers)
-      ? body.clarificationAnswers.map((answer) => optionalString(answer, 400)).slice(0, 3)
-      : [];
-    const mergedClarificationContext = [
-      optionalString(body.clarificationContext, 2500),
-      normalizedQuestions.map((question, index) => `${index + 1}. Q: ${question}${normalizedAnswers[index] ? `\nA: ${normalizedAnswers[index]}` : ""}`).join("\n"),
-    ].filter(Boolean).join("\n");
-    const hasClarificationAnswers = normalizedAnswers.some(Boolean);
-    const askFirst = mode === "clarify" && !hasClarificationAnswers;
-    const validationPromptContext = inferDomainPrompt(prompt, reportContext);
+  if (typeof body.prompt === "string" && body.prompt.length > 6000) {
+    return done({ success: false, error: "Prompt terlalu panjang. Maksimal 6.000 karakter." }, 413);
+  }
+  const prompt = optionalString(body.prompt, 6000);
+  if (!prompt) return done({ success: false, error: "Prompt tidak boleh kosong" }, 400);
 
-    assertAiConfigured();
+  const requestedType = optionalString(body.diagramType, 20);
+  const normalizedType = allowedTypes.has(requestedType) ? requestedType as DiagramType : "flowchart";
+  const mode: GenerationMode = body.generationMode === "clarify" ? "clarify" : "direct";
+  const existingSummary = limitStructuredContext(body.existingSummary, 4000);
+  const reportContext = limitStructuredContext(body.reportContext, 8000);
+  const normalizedQuestions = normalizeClarificationQuestions(body.clarificationQuestions);
+  const normalizedAnswers = Array.isArray(body.clarificationAnswers)
+    ? body.clarificationAnswers.map((answer) => optionalString(answer, 400)).slice(0, 3)
+    : [];
+  const mergedClarificationContext = [
+    optionalString(body.clarificationContext, 2500),
+    normalizedQuestions.map((question, index) => `${index + 1}. Q: ${question}${normalizedAnswers[index] ? `\nA: ${normalizedAnswers[index]}` : ""}`).join("\n"),
+  ].filter(Boolean).join("\n");
+  const hasClarificationAnswers = normalizedAnswers.some(Boolean);
+  const askFirst = mode === "clarify" && !hasClarificationAnswers;
+  const validationPromptContext = inferDomainPrompt(prompt, reportContext);
 
-    const baseUserPayload = JSON.stringify({
-      prompt,
-      existingSummary,
-      reportContext,
-      generationMode: mode,
-      clarificationQuestions: normalizedQuestions,
-      clarificationAnswers: normalizedAnswers,
-      clarificationContext: mergedClarificationContext,
-    });
+  assertAiConfigured();
 
-    const startedAt = Date.now();
-    const remainingMs = () => ROUTE_BUDGET_MS - (Date.now() - startedAt);
+  const baseUserPayload = JSON.stringify({
+    prompt,
+    existingSummary,
+    reportContext,
+    generationMode: mode,
+    clarificationQuestions: normalizedQuestions,
+    clarificationAnswers: normalizedAnswers,
+    clarificationContext: mergedClarificationContext,
+  });
 
-    const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
-      const quick = Boolean(askFirst || repairSpec);
-      const callModel = async (model: string, timeout: number) => {
-        const messages = [
-          {
-            role: "system" as const,
-            content: repairSpec
-              ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
-              : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
-          },
-          {
-            role: "user" as const,
-            content: repairSpec
-              ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
-              : baseUserPayload,
-          },
-        ];
-        const baseParams = {
-          model,
-          messages,
-          temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
-          max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
-        };
-        const t0 = Date.now();
-        let response;
-        try {
-          // Spec UML sudah dikunci schema+aturan; reasoning tersembunyi model GPT-5 yang bikin lambat, bukan outputnya.
-          response = await aiClient.chat.completions.create({
-            ...baseParams,
-            reasoning_effort: "low",
-            response_format: { type: "json_object" },
-          }, { timeout, maxRetries: 0 });
-        } catch (error) {
-          const status = (error as { status?: unknown })?.status;
-          if (status !== 400 || remainingMs() < MIN_STEP_MS) throw error;
-          // Provider tidak kenal parameter tambahan → ulang polos.
-          response = await aiClient.chat.completions.create(baseParams, { timeout: Math.min(timeout, remainingMs()), maxRetries: 0 });
+  const startedAt = Date.now();
+  const remainingMs = () => budgetMs - (Date.now() - startedAt);
+
+  const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
+    const quick = Boolean(askFirst || repairSpec);
+    const phase = repairSpec ? "repair" : askFirst ? "clarify" : "generate";
+    const callModel = async (model: string, timeout: number) => {
+      const messages = [
+        {
+          role: "system" as const,
+          content: repairSpec
+            ? buildRepairPrompt(normalizedType, prompt, reportContext, existingSummary, mergedClarificationContext, repairSpec, repairErrors)
+            : buildStrictSystemPrompt(normalizedType, mode, askFirst, prompt, reportContext, existingSummary, mergedClarificationContext),
+        },
+        {
+          role: "user" as const,
+          content: repairSpec
+            ? JSON.stringify({ prompt, existingSummary, reportContext, brokenSpec: repairSpec, validationErrors: repairErrors, generationMode: mode })
+            : baseUserPayload,
+        },
+      ];
+      const baseParams: ChatParams = {
+        model,
+        messages,
+        temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
+        max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
+      };
+      emit({
+        type: "status",
+        phase,
+        model,
+        text: repairSpec
+          ? `Memperbaiki ${repairErrors.length} masalah struktur dengan ${model}…`
+          : askFirst
+            ? `Menyusun pertanyaan klarifikasi dengan ${model}…`
+            : `Menunggu ${model} mulai menulis spec (model berpikir dulu, belum ada token keluar)…`,
+      });
+
+      const t0 = Date.now();
+      let lastPartialCount = 0;
+      let firstTokenAt = 0;
+      const onDelta = (text: string) => {
+        if (!firstTokenAt) {
+          firstTokenAt = Date.now();
+          emit({ type: "status", phase, model, text: `${model} mulai menulis spec (${((firstTokenAt - t0) / 1000).toFixed(1)}s berpikir)…` });
         }
-        console.info(`[generate-uml] ${model} ${quick ? "quick" : "full"} ${Date.now() - t0}ms tokens=${response.usage?.total_tokens ?? "?"}`);
-        return extractJson(response.choices[0].message.content || "{}");
+        if (quick) return;
+        // Parse hanya saat ada objek baru yang mungkin selesai (ada "}" baru), bukan tiap token.
+        if (!text.endsWith("}") && !text.endsWith("},") && !/\}\s*$/.test(text.slice(-4))) return;
+        const partial = parsePartialSpec(text, normalizedType);
+        if (!partial || partial.count === lastPartialCount) return;
+        lastPartialCount = partial.count;
+        const diagram = partialToDiagram(normalizeSpec(partial.spec, normalizedType, prompt, reportContext), normalizedType);
+        if (diagram) emit({ type: "partial", data: diagram, count: partial.count });
       };
 
-      const budget = remainingMs();
-      if (budget < MIN_STEP_MS) throw new Error("timeout: budget route habis");
-      if (quick) return callModel(AI_MODEL_FAST, Math.min(35_000, budget));
-
-      // Model utama dapat ≤55 s; kalau timeout dan masih ada sisa budget, coba sekali dengan model cepat.
+      let result: { text: string; usage?: number };
       try {
-        return await callModel(AI_MODEL, Math.min(55_000, budget));
+        // Spec UML sudah dikunci schema+aturan; reasoning tersembunyi model GPT-5 yang bikin lambat, bukan outputnya.
+        result = await streamChat({ ...baseParams, reasoning_effort: "low", response_format: { type: "json_object" } }, timeout, onDelta);
       } catch (error) {
-        const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
-        const left = remainingMs();
-        if (!isTimeout || left < MIN_STEP_MS) throw error;
-        return callModel(AI_MODEL_FAST, Math.min(35_000, left));
+        const status = (error as { status?: unknown })?.status;
+        if (status !== 400 || remainingMs() < MIN_STEP_MS) throw error;
+        // Provider tidak kenal parameter tambahan → ulang polos.
+        result = await streamChat(baseParams, Math.min(timeout, remainingMs()), onDelta);
       }
+      console.info(`[generate-uml] ${model} ${phase} ${Date.now() - t0}ms ttft=${firstTokenAt ? firstTokenAt - t0 : "-"}ms tokens=${result.usage ?? "?"}`);
+      emit({ type: "status", phase: "validate", model, text: "Spec selesai ditulis. Memeriksa struktur dan menyusun tata letak…" });
+      return extractJson(result.text || "{}");
     };
 
-    if (askFirst) {
-      const spec = await runGeneration();
+    const budget = remainingMs();
+    if (budget < MIN_STEP_MS) throw new Error("timeout: budget route habis");
+    if (quick) return callModel(AI_MODEL_FAST, Math.min(35_000, budget));
+
+    // Model utama dapat ≤55 s; kalau timeout dan masih ada sisa budget, coba sekali dengan model cepat.
+    try {
+      return await callModel(AI_MODEL, Math.min(55_000, budget));
+    } catch (error) {
+      const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+      const left = remainingMs();
+      if (!isTimeout || left < MIN_STEP_MS) throw error;
+      emit({ type: "status", phase: "fallback", text: `${AI_MODEL} terlalu lama. Beralih ke ${AI_MODEL_FAST}…` });
+      return callModel(AI_MODEL_FAST, Math.min(35_000, left));
+    }
+  };
+
+  if (askFirst) {
+    const spec = await runGeneration();
+    const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
+    return done({
+      success: false,
+      needsClarification: true,
+      clarification: cleanText(spec.clarification || questions[0] || "Boleh jelaskan detail alur utamanya?", "Boleh jelaskan detail alur utamanya?", 180),
+      clarificationQuestions: questions.length ? questions : validationErrorsToQuestions([], normalizedType),
+      source: "clarify-first",
+    });
+  }
+
+  let spec = await runGeneration();
+
+  if (spec.needsClarification) {
+    if (mode === "direct" && hasEnoughPromptDetail(prompt, reportContext) && remainingMs() >= MIN_STEP_MS) {
+      spec = await runGeneration(spec, ["Prompt sudah cukup detail. Bentuk spec final tanpa meminta klarifikasi tambahan."]);
+    } else {
       const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
-      return NextResponse.json({
+      return done({
         success: false,
         needsClarification: true,
-        clarification: cleanText(spec.clarification || questions[0] || "Boleh jelaskan detail alur utamanya?", "Boleh jelaskan detail alur utamanya?", 180),
+        clarification: cleanText(spec.clarification || questions[0] || "Bisa jelaskan aktor dan alur utamanya dulu?", "Bisa jelaskan aktor dan alur utamanya dulu?", 180),
         clarificationQuestions: questions.length ? questions : validationErrorsToQuestions([], normalizedType),
-        source: "clarify-first",
+        source: "ai-clarify",
       });
     }
+  }
 
-    let spec = await runGeneration();
+  if (spec.needsClarification) {
+    const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
+    return done({
+      success: false,
+      needsClarification: true,
+      clarification: cleanText(spec.clarification || questions[0] || "Detail kebutuhan belum cukup untuk membentuk diagram yang akurat.", "Detail kebutuhan belum cukup untuk membentuk diagram yang akurat.", 180),
+      clarificationQuestions: questions.length ? questions : validationErrorsToQuestions([], normalizedType),
+      source: "ai-clarify-after-retry",
+    });
+  }
 
-    if (spec.needsClarification) {
-      if (mode === "direct" && hasEnoughPromptDetail(prompt, reportContext) && remainingMs() >= MIN_STEP_MS) {
-        spec = await runGeneration(spec, ["Prompt sudah cukup detail. Bentuk spec final tanpa meminta klarifikasi tambahan."]);
-      } else {
-        const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
-        return NextResponse.json({
-          success: false,
-          needsClarification: true,
-          clarification: cleanText(spec.clarification || questions[0] || "Bisa jelaskan aktor dan alur utamanya dulu?", "Bisa jelaskan aktor dan alur utamanya dulu?", 180),
-          clarificationQuestions: questions.length ? questions : validationErrorsToQuestions([], normalizedType),
-          source: "ai-clarify",
-        });
-      }
-    }
-
-    if (spec.needsClarification) {
-      const questions = normalizeClarificationQuestions(spec.clarificationQuestions || (spec.clarification ? [spec.clarification] : []));
-      return NextResponse.json({
-        success: false,
-        needsClarification: true,
-        clarification: cleanText(spec.clarification || questions[0] || "Detail kebutuhan belum cukup untuk membentuk diagram yang akurat.", "Detail kebutuhan belum cukup untuk membentuk diagram yang akurat.", 180),
-        clarificationQuestions: questions.length ? questions : validationErrorsToQuestions([], normalizedType),
-        source: "ai-clarify-after-retry",
-      });
-    }
-
-    const normalizedSpec = normalizeSpec(spec, normalizedType, prompt, reportContext);
-    const initialAssessment = prepareDiagram(normalizedSpec, normalizedType, validationPromptContext);
-    if ((!initialAssessment.validation.ok || !initialAssessment.data) && remainingMs() < MIN_STEP_MS) {
-      return NextResponse.json({
-        success: false,
-        needsClarification: true,
-        clarification: "Struktur diagram belum lolos pemeriksaan kualitas dan waktu perbaikan otomatis habis. Jawab pertanyaan berikut lalu coba lagi.",
-        clarificationQuestions: validationErrorsToQuestions(initialAssessment.validation.errors, normalizedType),
-        validation: initialAssessment.validation,
-        source: "quality-gate-timeout",
-      });
-    }
-    if (!initialAssessment.validation.ok || !initialAssessment.data) {
-      const repairedSpec = await runGeneration(normalizedSpec, initialAssessment.validation.errors);
-      if (!repairedSpec.needsClarification) {
-        const repairedNormalized = normalizeSpec(repairedSpec, normalizedType, prompt, reportContext);
-        const repairedAssessment = prepareDiagram(repairedNormalized, normalizedType, validationPromptContext);
-        if (repairedAssessment.validation.ok && repairedAssessment.data) {
-          repairedAssessment.validation.warnings = Array.from(new Set([
-            ...repairedAssessment.validation.warnings,
-            ...(repairedSpec.qualityNotes || []),
-          ]));
-          return NextResponse.json({
-            success: true,
-            source: "ai-repair",
-            data: repairedAssessment.data,
-            spec: repairedNormalized,
-            validation: repairedAssessment.validation,
-          });
-        }
-
-        return NextResponse.json({
-          success: false,
-          needsClarification: true,
-          clarification: "Struktur diagram belum lolos pemeriksaan kualitas setelah perbaikan otomatis.",
-          clarificationQuestions: validationErrorsToQuestions(repairedAssessment.validation.errors, normalizedType),
+  const normalizedSpec = normalizeSpec(spec, normalizedType, prompt, reportContext);
+  const initialAssessment = prepareDiagram(normalizedSpec, normalizedType, validationPromptContext);
+  if ((!initialAssessment.validation.ok || !initialAssessment.data) && remainingMs() < MIN_STEP_MS) {
+    return done({
+      success: false,
+      needsClarification: true,
+      clarification: "Struktur diagram belum lolos pemeriksaan kualitas dan waktu perbaikan otomatis habis. Jawab pertanyaan berikut lalu coba lagi.",
+      clarificationQuestions: validationErrorsToQuestions(initialAssessment.validation.errors, normalizedType),
+      validation: initialAssessment.validation,
+      source: "quality-gate-timeout",
+    });
+  }
+  if (!initialAssessment.validation.ok || !initialAssessment.data) {
+    const repairedSpec = await runGeneration(normalizedSpec, initialAssessment.validation.errors);
+    if (!repairedSpec.needsClarification) {
+      const repairedNormalized = normalizeSpec(repairedSpec, normalizedType, prompt, reportContext);
+      const repairedAssessment = prepareDiagram(repairedNormalized, normalizedType, validationPromptContext);
+      if (repairedAssessment.validation.ok && repairedAssessment.data) {
+        repairedAssessment.validation.warnings = Array.from(new Set([
+          ...repairedAssessment.validation.warnings,
+          ...(repairedSpec.qualityNotes || []),
+        ]));
+        return done({
+          success: true,
+          source: "ai-repair",
+          data: repairedAssessment.data,
+          spec: repairedNormalized,
           validation: repairedAssessment.validation,
-          source: "quality-gate",
         });
       }
 
-      const repairQuestions = normalizeClarificationQuestions(
-        repairedSpec.clarificationQuestions || (repairedSpec.clarification ? [repairedSpec.clarification] : []),
-      );
-      return NextResponse.json({
+      return done({
         success: false,
         needsClarification: true,
-        clarification: cleanText(
-          repairedSpec.clarification || "AI membutuhkan detail tambahan agar diagram lolos pemeriksaan kualitas.",
-          "AI membutuhkan detail tambahan agar diagram lolos pemeriksaan kualitas.",
-          180,
-        ),
-        clarificationQuestions: repairQuestions.length
-          ? repairQuestions
-          : validationErrorsToQuestions(initialAssessment.validation.errors, normalizedType),
-        validation: initialAssessment.validation,
+        clarification: "Struktur diagram belum lolos pemeriksaan kualitas setelah perbaikan otomatis.",
+        clarificationQuestions: validationErrorsToQuestions(repairedAssessment.validation.errors, normalizedType),
+        validation: repairedAssessment.validation,
         source: "quality-gate",
       });
     }
 
-    initialAssessment.validation.warnings = Array.from(new Set([
-      ...initialAssessment.validation.warnings,
-      ...(spec.qualityNotes || []),
-    ]));
-    return NextResponse.json({
-      success: true,
-      source: "ai-spec",
-      data: initialAssessment.data,
-      spec: normalizedSpec,
-      validation: initialAssessment.validation,
-    });
-  } catch (error: unknown) {
-    console.error("API /api/ai/generate-uml Error:", error);
-    const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
-    if (isTimeout) {
-      return NextResponse.json(
-        { success: false, error: "Waktu tunggu AI pembuatan diagram habis. Coba persempit deskripsi alur atau coba beberapa saat lagi." },
-        { status: 504 }
-      );
-    }
-    const providerStatus = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
-    const detail = error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 200) : "";
-    return NextResponse.json(
-      { success: false, error: `Gagal menghasilkan diagram${providerStatus ? ` (AI ${providerStatus})` : ""}${detail ? `: ${detail}` : "."} Coba lagi atau gunakan mode tanya dulu.` },
-      { status: 500 }
+    const repairQuestions = normalizeClarificationQuestions(
+      repairedSpec.clarificationQuestions || (repairedSpec.clarification ? [repairedSpec.clarification] : []),
     );
+    return done({
+      success: false,
+      needsClarification: true,
+      clarification: cleanText(
+        repairedSpec.clarification || "AI membutuhkan detail tambahan agar diagram lolos pemeriksaan kualitas.",
+        "AI membutuhkan detail tambahan agar diagram lolos pemeriksaan kualitas.",
+        180,
+      ),
+      clarificationQuestions: repairQuestions.length
+        ? repairQuestions
+        : validationErrorsToQuestions(initialAssessment.validation.errors, normalizedType),
+      validation: initialAssessment.validation,
+      source: "quality-gate",
+    });
   }
+
+  initialAssessment.validation.warnings = Array.from(new Set([
+    ...initialAssessment.validation.warnings,
+    ...(spec.qualityNotes || []),
+  ]));
+  return done({
+    success: true,
+    source: "ai-spec",
+    data: initialAssessment.data,
+    spec: normalizedSpec,
+    validation: initialAssessment.validation,
+  });
+}
+
+function errorToResult(error: unknown): PipelineResult {
+  console.error("API /api/ai/generate-uml Error:", error);
+  const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
+  if (isTimeout) {
+    return {
+      status: 504,
+      payload: { success: false, error: "Waktu tunggu AI pembuatan diagram habis. Coba persempit deskripsi alur atau coba beberapa saat lagi." },
+    };
+  }
+  const providerStatus = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
+  const detail = error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 200) : "";
+  return {
+    status: 500,
+    payload: { success: false, error: `Gagal menghasilkan diagram${providerStatus ? ` (AI ${providerStatus})` : ""}${detail ? `: ${detail}` : "."} Coba lagi atau gunakan mode tanya dulu.` },
+  };
+}
+
+export async function POST(req: Request) {
+  const rawBody: unknown = await req.json().catch(() => null);
+  if (!isRecord(rawBody)) {
+    return NextResponse.json({ success: false, error: "Payload JSON tidak valid." }, { status: 400 });
+  }
+  const body = rawBody as GenerateUmlRequest;
+  const wantsStream = new URL(req.url).searchParams.get("stream") === "1";
+
+  if (!wantsStream) {
+    const result = await runUmlPipeline(body, () => {}, ROUTE_BUDGET_MS).catch(errorToResult);
+    return NextResponse.json(result.payload, { status: result.status });
+  }
+
+  // NDJSON stream: tiap baris satu event. Koneksi tetap hidup (ada data mengalir) jadi proxy tidak memutus di tengah.
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const write = (event: UmlStreamEvent) => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)); } catch { closed = true; }
+      };
+      // Heartbeat agar LiteSpeed/Passenger tidak menganggap koneksi idle selama model masih "berpikir".
+      const heartbeat = setInterval(() => write({ type: "status", phase: "heartbeat", text: "" }), 5000);
+      try {
+        const result = await runUmlPipeline(body, write, ROUTE_BUDGET_MS).catch(errorToResult);
+        write({ type: "result", status: result.status, payload: result.payload });
+      } finally {
+        clearInterval(heartbeat);
+        closed = true;
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
 
 

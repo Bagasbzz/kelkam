@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
-import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload } from 'lucide-react';
+import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload, Loader2 } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData } from '@/lib/uml/diagram-guard';
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
@@ -96,6 +96,53 @@ async function readUmlApiPayload(response: Response): Promise<UmlApiPayload> {
       : `Respons server tidak dapat dibaca (${response.status}).`;
     return { success: false, error: hint };
   }
+}
+
+type UmlStreamEvent =
+  | { type: 'status'; text: string; phase: string; model?: string }
+  | { type: 'partial'; data: UmlApiPayload['data']; count: number }
+  | { type: 'result'; status: number; payload: UmlApiPayload };
+
+/**
+ * Baca respons NDJSON dari `/api/ai/generate-uml?stream=1`.
+ * Kalau server tidak streaming (content-type JSON biasa), fallback ke payload tunggal.
+ */
+async function readUmlStream(
+  response: Response,
+  onEvent: (event: UmlStreamEvent) => void,
+): Promise<{ status: number; payload: UmlApiPayload }> {
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.body || !contentType.includes('ndjson')) {
+    return { status: response.status, payload: await readUmlApiPayload(response) };
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let final: { status: number; payload: UmlApiPayload } | null = null;
+  const handleLine = (line: string) => {
+    if (!line.trim()) return;
+    let event: unknown;
+    try { event = JSON.parse(line); } catch { return; }
+    if (!isRecord(event) || typeof event.type !== 'string') return;
+    if (event.type === 'result' && isRecord(event.payload)) {
+      final = { status: typeof event.status === 'number' ? event.status : 200, payload: event.payload as UmlApiPayload };
+      return;
+    }
+    onEvent(event as UmlStreamEvent);
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let newline = buffer.indexOf('\n');
+    while (newline >= 0) {
+      handleLine(buffer.slice(0, newline));
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf('\n');
+    }
+  }
+  if (buffer.trim()) handleLine(buffer);
+  return final ?? { status: 502, payload: { success: false, error: 'Koneksi ke server terputus sebelum AI selesai. Coba lagi.' } };
 }
 
 function normalizeApiEdges(value: unknown): DiagramEdge[] {
@@ -217,6 +264,8 @@ export default function UMLBuilder() {
   const [aiClarificationAnswers, setAiClarificationAnswers] = useState<string[]>([]);
   const [aiMode, setAiMode] = useState<'direct' | 'clarify'>('direct');
   const [aiStatusText, setAiStatusText] = useState('');
+  const [aiElapsed, setAiElapsed] = useState(0);
+  const [aiPartialCount, setAiPartialCount] = useState(0);
   const [aiError, setAiError] = useState('');
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
@@ -227,6 +276,15 @@ export default function UMLBuilder() {
   const [isStorageHydrated, setIsStorageHydrated] = useState(false);
   const loadedPrefillRef = useRef(false);
   const aiNeedsAnswers = aiClarificationQuestions.some((_, index) => !(aiClarificationAnswers[index] || '').trim());
+
+  // Stopwatch selama AI jalan, supaya user tahu waktu berjalan dan bukan hang.
+  useEffect(() => {
+    if (!isGeneratingAI) return;
+    const startedAt = Date.now();
+    setAiElapsed(0);
+    const timer = setInterval(() => setAiElapsed(Math.floor((Date.now() - startedAt) / 1000)), 500);
+    return () => clearInterval(timer);
+  }, [isGeneratingAI]);
 
   const wrapText = useCallback((text: string, maxCharsPerLine: number) => {
     const words = text.split(' ');
@@ -288,8 +346,12 @@ export default function UMLBuilder() {
     setIsGeneratingAI(true);
     setAiWarnings([]);
     setAiError('');
-    setAiStatusText(aiMode === 'clarify' && aiClarificationQuestions.length === 0 ? 'AI sedang mencari pertanyaan paling penting...' : 'AI sedang menyusun diagram final...');
+    setAiPartialCount(0);
+    setAiStatusText(aiMode === 'clarify' && aiClarificationQuestions.length === 0 ? 'Menghubungi AI untuk menyusun pertanyaan…' : 'Menghubungi AI…');
     showToast('AI sedang menyusun diagram...');
+    const dt = diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence';
+    const snapshotBeforeAi = { nodes, edges, meta: diagramMeta };
+    let partialShown = false;
     try {
       const existingSummary = nodes.length > 0 ? {
         nodeCount: nodes.length,
@@ -297,7 +359,7 @@ export default function UMLBuilder() {
         nodes: nodes.slice(0, 12).map((n) => ({ id: n.id, type: n.type, text: n.text })),
       } : null;
 
-      const res = await authenticatedFetch('/api/ai/generate-uml', {
+      const res = await authenticatedFetch('/api/ai/generate-uml?stream=1', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -311,13 +373,40 @@ export default function UMLBuilder() {
           clarificationContext: aiClarificationQuestions.map((question, index) => `${question}\nJawaban: ${aiClarificationAnswers[index] || ''}`).join('\n\n'),
         })
       });
-      const data = await readUmlApiPayload(res);
-      if (!res.ok && !data.needsClarification) {
-        setAiError(data.error || `Gagal menghubungi AI (HTTP ${res.status}).`);
-        showToast(data.error || `Gagal menghubungi AI (${res.status}).`);
+      const { status: resStatus, payload: data } = await readUmlStream(res, (event) => {
+        if (event.type === 'status') {
+          if (event.text) setAiStatusText(event.text);
+          return;
+        }
+        if (event.type === 'partial' && event.data) {
+          // Gambar langsung apa yang sudah ditulis AI, sebelum spec selesai.
+          const partialNodes = normalizeApiNodes(event.data.nodes, diagramType, wrapText);
+          const partialEdges = normalizeApiEdges(event.data.edges);
+          if (!partialNodes.length) return;
+          if (!partialShown) { saveToHistory(); partialShown = true; setIsAiModalOpen(false); }
+          setAiPartialCount(event.count);
+          setAiStatusText(`AI menulis elemen ke-${event.count}: "${partialNodes[partialNodes.length - 1]?.text ?? ''}"`);
+          setNodes(autoLayoutDiagram(partialNodes, partialEdges, dt, stringList(event.data.lanes)));
+          setEdges(partialEdges);
+          setDiagramMeta((prev) => ({ ...prev, title: event.data?.title || prev.title, lanes: stringList(event.data?.lanes) }));
+        }
+      });
+      const resOk = resStatus >= 200 && resStatus < 300;
+      const restoreSnapshot = () => {
+        if (!partialShown) return;
+        setNodes(snapshotBeforeAi.nodes);
+        setEdges(snapshotBeforeAi.edges);
+        setDiagramMeta(snapshotBeforeAi.meta);
+        setIsAiModalOpen(true);
+      };
+      if (!resOk && !data.needsClarification) {
+        restoreSnapshot();
+        setAiError(data.error || `Gagal menghubungi AI (HTTP ${resStatus}).`);
+        showToast(data.error || `Gagal menghubungi AI (${resStatus}).`);
         return;
       }
       if (data.needsClarification) {
+        restoreSnapshot();
         const nextQuestions = Array.isArray(data.clarificationQuestions) && data.clarificationQuestions.length
           ? data.clarificationQuestions
           : [data.clarification || 'Tambahkan detail alur, aktor, dan kondisi penting yang harus masuk diagram.'];
@@ -331,7 +420,7 @@ export default function UMLBuilder() {
 
       const generatedData = data.data;
       if (data.success && generatedData) {
-        saveToHistory();
+        if (!partialShown) saveToHistory();
         setAiClarification('');
         setAiClarificationQuestions([]);
         setAiClarificationAnswers([]);
@@ -343,6 +432,7 @@ export default function UMLBuilder() {
         const nextEdges = normalizeApiEdges(generatedData.edges);
         const renderValidation = validateDiagramData(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
         if (!renderValidation.ok) {
+          restoreSnapshot();
           setAiWarnings(renderValidation.errors);
           setAiClarification('Hasil AI belum lolos pemeriksaan relasi. Lengkapi kebutuhan lalu coba lagi.');
           showToast('Diagram ditahan karena relasinya belum valid.');
@@ -359,17 +449,25 @@ export default function UMLBuilder() {
         setIsAiModalOpen(false);
         showToast('Diagram AI berhasil dibuat dan lolos pemeriksaan.');
       } else {
+        restoreSnapshot();
         setAiError(data.error || 'AI tidak mengembalikan diagram. Coba perjelas kebutuhan atau ulangi.');
         showToast(data.error || 'Gagal membuat diagram.');
       }
     } catch (error) {
+      if (partialShown) {
+        setNodes(snapshotBeforeAi.nodes);
+        setEdges(snapshotBeforeAi.edges);
+        setDiagramMeta(snapshotBeforeAi.meta);
+        setIsAiModalOpen(true);
+      }
       setAiError(error instanceof Error && error.message ? `Gangguan koneksi: ${error.message}` : 'Terjadi gangguan saat menghubungi AI.');
       showToast('Terjadi gangguan saat menghubungi AI.');
     } finally {
       setAiStatusText('');
+      setAiPartialCount(0);
       setIsGeneratingAI(false);
     }
-  }, [aiClarificationAnswers, aiClarificationQuestions, aiMode, aiPrompt, diagramMeta.reportContext, diagramType, edges.length, nodes, saveToHistory, showToast, wrapText]);
+  }, [aiClarificationAnswers, aiClarificationQuestions, aiMode, aiPrompt, diagramMeta, diagramType, edges, nodes, saveToHistory, showToast, wrapText]);
 
   const handleAnalyzeReferenceImage = useCallback(async () => {
     if (!umlReferenceImage) return;
@@ -1548,6 +1646,38 @@ export default function UMLBuilder() {
         </button>
       </div>
 
+      {/* Progres AI saat modal sudah ditutup (diagram parsial sedang digambar live) */}
+      {isGeneratingAI && !isAiModalOpen && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 1100,
+            background: 'rgba(15, 23, 42, 0.92)',
+            color: '#e2e8f0',
+            padding: '10px 16px',
+            borderRadius: 12,
+            boxShadow: '0 10px 30px rgba(15, 23, 42, 0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            maxWidth: 'min(640px, calc(100vw - 32px))',
+            fontSize: '0.8rem',
+            fontWeight: 600,
+          }}
+        >
+          <Loader2 size={16} className="animate-spin" style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{aiStatusText || 'AI sedang menyusun diagram…'}</span>
+          <span style={{ whiteSpace: 'nowrap', color: '#a5b4fc', fontVariantNumeric: 'tabular-nums' }}>
+            {aiPartialCount ? `${aiPartialCount} elemen · ` : ''}{aiElapsed}s
+          </span>
+        </div>
+      )}
+
       {/* AI Modal */}
       {isAiModalOpen && (
         <div
@@ -1663,9 +1793,9 @@ export default function UMLBuilder() {
 
               {(isGeneratingAI || isAnalyzingImage || aiStatusText) && (
                 <div role="status" aria-live="polite" style={{ marginBottom: '1rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.76rem', color: '#475569', marginBottom: '6px', fontWeight: 700 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: '0.76rem', color: '#475569', marginBottom: '6px', fontWeight: 700 }}>
                     <span>{aiStatusText || (isAnalyzingImage ? 'AI sedang membaca gambar referensi...' : 'AI sedang menyusun diagram...')}</span>
-                    <span>{isGeneratingAI || isAnalyzingImage ? 'Memproses' : 'Siap'}</span>
+                    <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{isGeneratingAI ? `${aiPartialCount ? `${aiPartialCount} elemen · ` : ''}${aiElapsed}s` : isAnalyzingImage ? 'Memproses' : 'Siap'}</span>
                   </div>
                   <div style={{ height: '6px', background: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: '68%', background: 'linear-gradient(90deg, #4f46e5, #7c3aed)', animation: 'pulse 1.4s ease-in-out infinite' }} />
