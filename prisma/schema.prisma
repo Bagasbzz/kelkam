@@ -224,10 +224,14 @@ model ReportJob {
   stage      String   @default("")
   mode       String   @default("lengkap") // "ringkas" | "lengkap"
   totalSteps Int      @default(0) @map("total_steps")
+  title      String   @default("")
   result     String?
   source     String?
   error      String?
   payload    Json? // SanitizedForPersistence project
+  /** Log event detail (array {t, level, msg}), dipangkas ke N entri terakhir. */
+  log         Json?
+  heartbeatAt DateTime? @map("heartbeat_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @updatedAt @map("updated_at")
 
@@ -256,6 +260,9 @@ model ReportJobStep {
   summary   String?
   error     String?
   attempts  Int       @default(0)
+  startedAt DateTime? @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  tokensUsed Int      @default(0) @map("tokens_used")
   createdAt DateTime  @default(now()) @map("created_at")
   updatedAt DateTime  @updatedAt @map("updated_at")
 

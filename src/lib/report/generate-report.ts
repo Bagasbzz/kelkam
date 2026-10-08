@@ -210,6 +210,8 @@ export interface ChapterInput {
   /** Ringkasan singkat BAB-BAB sebelumnya (hasil `summarizeChapter`). */
   previousSummaries: string[];
   mode: ReportMode;
+  /** Callback event detail untuk log job (opsional). */
+  onEvent?: (message: string) => void;
 }
 
 export interface ChapterOutput {
@@ -217,6 +219,8 @@ export interface ChapterOutput {
   summary: string;
   source: "ai" | "fallback";
   finishReason: string;
+  tokensUsed?: number;
+  model?: string;
 }
 
 const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 40000);
@@ -398,6 +402,11 @@ Aturan wajib:
 
   const model = isRingkas ? AI_MODEL_FAST : AI_MODEL;
   const maxTokens = isRingkas ? 1600 : 3200;
+  const emit = input.onEvent ?? (() => {});
+
+  const chunkCount = sources.reduce((acc, source) => acc + source.kutipanRelevan.length, 0);
+  emit(`Bahan dipilih: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi, ${sectionDiagrams.length} diagram`);
+  emit(`Memanggil model ${model} (maks ${maxTokens} token)`);
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
@@ -405,6 +414,7 @@ Aturan wajib:
   ];
 
   try {
+    const startedAt = Date.now();
     const response = await aiClient.chat.completions.create({
       model,
       messages,
@@ -415,9 +425,12 @@ Aturan wajib:
     const choice = response.choices[0];
     let content = cleanChapterOutput(choice?.message.content || "");
     let finishReason = choice?.finish_reason || "unknown";
+    let tokensUsed = response.usage?.total_tokens ?? 0;
+    emit(`Respons diterima ${Math.round((Date.now() - startedAt) / 1000)}s, ${content.split(/\s+/).length} kata, finish=${finishReason}`);
 
     // Satu kali continuation kalau terpotong.
     if (finishReason === "length" && content) {
+      emit("Output terpotong, melanjutkan penulisan...");
       const cont = await aiClient.chat.completions.create({
         model,
         messages: [
@@ -431,14 +444,21 @@ Aturan wajib:
       const extra = cleanChapterOutput(cont.choices[0]?.message.content || "");
       if (extra) content = `${content}\n${extra}`;
       finishReason = cont.choices[0]?.finish_reason || finishReason;
+      tokensUsed += cont.usage?.total_tokens ?? 0;
     }
 
-    if (content.length < 200) return fallbackChapter(input);
+    if (content.length < 200) {
+      emit("Output terlalu pendek, memakai placeholder");
+      return { ...fallbackChapter(input), tokensUsed, model };
+    }
     if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
 
-    return { content, summary: summarizeChapter(content), source: "ai", finishReason };
+    return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
   } catch (error: unknown) {
-    if (isAbortLikeError(error)) return fallbackChapter(input);
+    if (isAbortLikeError(error)) {
+      emit(`Model timeout (${Math.round(CHAPTER_TIMEOUT_MS / 1000)}s)`);
+      throw new Error(`Timeout ${Math.round(CHAPTER_TIMEOUT_MS / 1000)}s saat menulis "${section.title}"`);
+    }
     throw error;
   }
 }

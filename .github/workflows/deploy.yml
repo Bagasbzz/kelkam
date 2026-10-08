@@ -64,7 +64,21 @@ jobs:
           # 3. Kompresi ke tar.gz (sangat cepat, hemat bandwidth, & menjaga permission file Linux)
           cd deploy && tar -czf ../deploy.tar.gz . && cd ..
 
-      - name: 🚀 Transfer Bundle via SCP
+      - name: �️ Prisma migrate deploy (dari runner, sebelum upload)
+        # Wajib set secret DATABASE_URL (dan DIRECT_URL jika pakai pooler) di
+        # Settings → Environments → SSH_SERVER. Gagal migrasi = deploy berhenti,
+        # kode baru tidak pernah jalan di atas skema lama.
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL || secrets.DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "ℹ secret DATABASE_URL belum di-set — migrasi dijalankan di server via SSH"
+            exit 0
+          fi
+          npx prisma migrate deploy --schema prisma/schema.prisma
+
+      - name: �🚀 Transfer Bundle via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -90,20 +104,22 @@ jobs:
 
             # Apply migrasi Prisma (production-safe, hanya pending migration).
             # DATABASE_URL/DIRECT_URL dibaca dari .env.local / .env di server.
+            # Dijalankan SEBELUM restart; kalau gagal, deploy dihentikan supaya
+            # kode baru tidak jalan di atas skema lama.
             set -a
             [ -f .env.local ] && . ./.env.local
             [ -f .env ] && . ./.env
             set +a
             export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
-            if [ -n "$DATABASE_URL" ]; then
-              if [ -x node_modules/.bin/prisma ]; then
-                node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma || echo "⚠ migrate gagal — cek log"
-              else
-                npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma || echo "⚠ migrate gagal — cek log"
-              fi
-            else
-              echo "⚠ DATABASE_URL tidak ditemukan, migrasi dilewati"
+            if [ -z "$DATABASE_URL" ]; then
+              echo "✗ DATABASE_URL tidak ditemukan di .env.local/.env server"; exit 1
             fi
+            if [ -x node_modules/.bin/prisma ]; then
+              node_modules/.bin/prisma migrate deploy --schema prisma/schema.prisma
+            else
+              npx --yes prisma@6.19.3 migrate deploy --schema prisma/schema.prisma
+            fi
+            echo "✓ Migrasi Prisma selesai"
             
             # Pastikan folder tmp ada dan sentuh restart.txt untuk reload Node.js
             mkdir -p tmp

@@ -4,7 +4,18 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { authenticatedFetch } from "@/components/AuthProvider";
+import ReportJobProgress from "@/components/ReportJobProgress";
 import { getErrorMessage } from "@/lib/errors";
+import {
+  findActiveJob,
+  jobAction,
+  peekJob,
+  rememberJob,
+  rememberedJobId,
+  runJobUntilDone,
+  startJob,
+  type ReportJob as LiveReportJob,
+} from "@/lib/client/report-job";
 import {
   ArrowLeft,
   BookOpen,
@@ -110,20 +121,10 @@ interface ReportDraft {
   revisedAt?: string;
 }
 
-interface ReportJob {
-  id: string;
-  status: "queued" | "running" | "done" | "failed";
-  progress?: number;
-  stage?: string;
-  result?: string;
-  error?: string;
-}
-
 interface ApiPayload<T = unknown> {
   success?: boolean;
   error?: string;
   data?: T;
-  job?: ReportJob;
 }
 
 interface ExtractedSource {
@@ -238,14 +239,6 @@ const workAreas: { id: BuilderStep; label: string }[] = [
   { id: "setup", label: "Bahan" },
   { id: "plan", label: "Kerangka" },
   { id: "draft", label: "Draf" },
-];
-
-const loadingSteps = [
-  "Membaca konteks proyek",
-  "Menyusun struktur laporan",
-  "Menyisipkan tabel dan placeholder gambar",
-  "Merangkai referensi dan daftar pustaka",
-  "Merapikan draft final",
 ];
 
 const revisionSteps = [
@@ -466,8 +459,7 @@ export default function ReportBuilderPage() {
   const [isExtractingSource, setIsExtractingSource] = useState(false);
   const [sourceError, setSourceError] = useState("");
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState(0);
-  const [generationLabel, setGenerationLabel] = useState("Menunggu perintah");
+  const [liveJob, setLiveJob] = useState<LiveReportJob | null>(null);
   const [reportError, setReportError] = useState("");
   const [searchingReferenceId, setSearchingReferenceId] = useState<string | null>(null);
   const [revisionMode, setRevisionMode] = useState<RevisionMode>("format");
@@ -496,28 +488,26 @@ export default function ReportBuilderPage() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
 
+  // Setelah refresh/tab tertutup: cari job ringkas yang belum selesai → tawarkan lanjut.
   useEffect(() => {
-    if (!isGeneratingReport) return;
-
-    const initTimer = window.setTimeout(() => {
-      setGenerationProgress(8);
-      setGenerationLabel(loadingSteps[0]);
-    }, 0);
-
-    const timer = window.setInterval(() => {
-      setGenerationProgress((prev) => {
-        const next = Math.min(prev + Math.max(2, Math.round((95 - prev) / 8)), 95);
-        const labelIndex = Math.min(Math.floor(next / 20), loadingSteps.length - 1);
-        setGenerationLabel(loadingSteps[labelIndex]);
-        return next;
-      });
-    }, 900);
-
-    return () => {
-      window.clearTimeout(initTimer);
-      window.clearInterval(timer);
-    };
-  }, [isGeneratingReport]);
+    let cancelled = false;
+    (async () => {
+      const remembered = rememberedJobId("ringkas");
+      try {
+        const job = remembered ? await peekJob(remembered) : await findActiveJob("ringkas");
+        if (!cancelled && job && (job.status === "queued" || job.status === "running")) {
+          rememberJob("ringkas", job.id);
+          setLiveJob(job);
+          setActiveStep("draft");
+        } else if (remembered && !job) {
+          rememberJob("ringkas", null);
+        }
+      } catch {
+        if (remembered) rememberJob("ringkas", null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!isRevisingReport) return;
@@ -565,8 +555,8 @@ export default function ReportBuilderPage() {
     setSourceError("");
     setRevisionInstruction("");
     setRevisionTarget("");
-    setGenerationProgress(0);
-    setGenerationLabel("Menunggu perintah");
+    setLiveJob(null);
+    rememberJob("ringkas", null);
     setRevisionProgress(0);
     setRevisionLabel("Menunggu instruksi revisi");
     localStorage.setItem(STORAGE_KEY, JSON.stringify(freshProject));
@@ -617,69 +607,75 @@ export default function ReportBuilderPage() {
     };
     setProject(reportProject);
     setActiveStep("draft");
-
-    setIsGeneratingReport(true);
-    setGenerationProgress(2);
-    setGenerationLabel("Memulai job generate laporan");
     setReportError("");
 
     try {
-      const startResponse = await authenticatedFetch("/api/report-jobs/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: reportProject, mode: "ringkas" }),
-      });
-
-      const startData = await readApiPayload<never>(startResponse, "Gagal memulai job laporan.");
-      if (!startResponse.ok || !startData?.success || !startData.job?.id) {
-        throw new Error(startData?.error || "Gagal memulai job laporan.");
-      }
-
-      const jobId = startData.job.id;
-      setGenerationProgress(startData.job.progress || 5);
-      setGenerationLabel(startData.job.stage || "Job laporan dimulai");
-
-      let finalJob: ReportJob | null = null;
-      // Setiap poll mengerjakan 1 BAB di server (request blocking ±10-40s),
-      // jadi jeda antar poll cukup pendek.
-      for (let attempt = 0; attempt < 600; attempt += 1) {
-        await new Promise((resolve) => window.setTimeout(resolve, 400));
-        const statusResponse = await authenticatedFetch(`/api/report-jobs/status/${jobId}`, { cache: "no-store" });
-        const statusData = await readApiPayload<never>(statusResponse, "Gagal membaca progres generate laporan.");
-
-        if (!statusResponse.ok || !statusData?.success) {
-          throw new Error(statusData?.error || "Gagal membaca progres generate laporan.");
-        }
-
-        const job = statusData.job;
-        if (!job) {
-          throw new Error("Status job tidak ditemukan.");
-        }
-        setGenerationProgress(Math.min(100, Math.max(0, Number(job.progress || 0))));
-        setGenerationLabel(job.stage || "Generate laporan berjalan");
-
-        if (job.status === "done" || job.status === "failed") {
-          finalJob = job;
-          break;
-        }
-      }
-
-      if (!finalJob) throw new Error("Generate masih berjalan lebih dari 36 menit. Cek ulang beberapa saat lagi atau mulai ulang job kalau progres benar-benar berhenti.");
-      if (finalJob.status === "failed") throw new Error(finalJob.error || "Generate laporan gagal.");
-
-      setProject((prev) => ({
-        ...prev,
-        workflowStage: "drafted",
-        reportDraft: { content: finalJob.result ?? "", generatedAt: new Date().toISOString() },
-      }));
-      setGenerationProgress(100);
-      setGenerationLabel(finalJob.stage || "Laporan selesai disusun");
-      setActiveStep("draft");
+      const job = await startJob(reportProject, "ringkas");
+      setLiveJob(job);
+      await pollJob(job.id);
     } catch (error: unknown) {
       setReportError(getErrorMessage(error, "Gagal generate laporan lengkap."));
-    } finally {
-      window.setTimeout(() => setIsGeneratingReport(false), 500);
     }
+  };
+
+  /** Poll sampai selesai; tiap poll = server menulis 1 bagian. */
+  const pollJob = async (jobId: string) => {
+    setIsGeneratingReport(true);
+    setReportError("");
+    try {
+      const finalJob = await runJobUntilDone(jobId, { onUpdate: setLiveJob });
+      setLiveJob(finalJob);
+      if (finalJob.status === "done") {
+        rememberJob("ringkas", null);
+        setProject((prev) => ({
+          ...prev,
+          workflowStage: "drafted",
+          reportDraft: { content: finalJob.result ?? "", generatedAt: new Date().toISOString() },
+        }));
+        setActiveStep("draft");
+      } else if (finalJob.status === "failed") {
+        setReportError(finalJob.error || "Generate laporan gagal. Bagian yang sudah jadi tersimpan — klik Coba lagi.");
+      }
+    } catch (error: unknown) {
+      // Koneksi putus / polling berhenti: job tetap ada di server, bisa dilanjutkan.
+      setReportError(getErrorMessage(error, "Koneksi terputus. Klik Lanjutkan untuk meneruskan."));
+      try { setLiveJob(await peekJob(jobId)); } catch { /* biarkan state terakhir */ }
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const resumeJob = () => {
+    if (!liveJob || isGeneratingReport) return;
+    void pollJob(liveJob.id);
+  };
+
+  const retryJob = async (redoFallback: boolean) => {
+    if (!liveJob || isGeneratingReport) return;
+    try {
+      const job = await jobAction(liveJob.id, "retry", redoFallback);
+      setLiveJob(job);
+      rememberJob("ringkas", job.id);
+      await pollJob(job.id);
+    } catch (error: unknown) {
+      setReportError(getErrorMessage(error, "Gagal mengulang job."));
+    }
+  };
+
+  const cancelJob = async () => {
+    if (!liveJob) return;
+    try {
+      const job = await jobAction(liveJob.id, "cancel");
+      setLiveJob(job);
+      rememberJob("ringkas", null);
+    } catch (error: unknown) {
+      setReportError(getErrorMessage(error, "Gagal membatalkan job."));
+    }
+  };
+
+  const discardJob = () => {
+    setLiveJob(null);
+    rememberJob("ringkas", null);
   };
 
   const reviseReport = async () => {
@@ -907,21 +903,16 @@ export default function ReportBuilderPage() {
                 {(activeStep === "setup" || activeStep === "context") && <><button onClick={generateFullReport} disabled={isGeneratingReport || project.sources.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Bot className="w-4 h-4" /> Buat draf laporan</button><button onClick={generatePlan} className="rounded-lg border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-blue-700">{project.outline.length ? "Buat ulang kerangka" : "Lihat kerangka dulu"}</button></>}
               </div>
             </div>
-            {isGeneratingReport && (
-              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4">
-                <div className="mb-2 flex items-center justify-between text-xs font-black text-blue-800">
-                  <span>{generationLabel}</span>
-                  <span>{generationProgress}%</span>
-                </div>
-                <div className="h-3 overflow-hidden rounded-full bg-white">
-                  <div className="h-full rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 transition-all duration-700" style={{ width: `${generationProgress}%` }} />
-                </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-5">
-                  {loadingSteps.map((label, index) => {
-                    const done = generationProgress >= (index + 1) * 20;
-                    return <div key={label} className={`rounded-lg px-2 py-2 text-[10px] font-black ${done ? "bg-white text-blue-700" : "bg-blue-100/60 text-blue-400"}`}>{label}</div>;
-                  })}
-                </div>
+            {liveJob && (
+              <div className="mt-4">
+                <ReportJobProgress
+                  job={liveJob}
+                  polling={isGeneratingReport}
+                  onResume={resumeJob}
+                  onRetry={retryJob}
+                  onCancel={cancelJob}
+                  onDiscard={discardJob}
+                />
               </div>
             )}
             <details className="mt-4 text-sm text-slate-600"><summary className="cursor-pointer font-semibold">Lihat ringkasan bahan</summary><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4">

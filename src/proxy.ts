@@ -69,6 +69,8 @@ const PROTECTED_API_PREFIXES = [
  */
 const PUBLIC_API_EXACT_PATHS = [
   "/api/tugas/courses/by-token",
+  // Cron tick: auth via REPORT_CRON_SECRET di handler (bukan cookie).
+  "/api/report-jobs/tick",
 ];
 
 /**

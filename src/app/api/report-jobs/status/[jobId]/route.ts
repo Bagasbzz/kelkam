@@ -30,7 +30,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { advanceReportJob } from "@/lib/report/report-jobs";
+import { advanceReportJob, getReportJob } from "@/lib/report/report-jobs";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
 
@@ -55,10 +55,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ jobId: s
     return NextResponse.json({ success: false, error: "ID job tidak valid." }, { status: 400 });
   }
 
-  // advanceReportJob: kerjakan 1 step kalau ada yang queued/stale, lalu return state.
+  // ?peek=1 → hanya baca state (dipakai UI saat membuka halaman / cek macet).
+  const peek = new URL(req.url).searchParams.get("peek") === "1";
+
   let job;
   try {
-    job = await advanceReportJob(jobId, auth.user.id);
+    job = peek ? await getReportJob(jobId, auth.user.id) : await advanceReportJob(jobId, auth.user.id);
   } catch (error) {
     console.error("API /api/report-jobs/status failed:", error);
     return NextResponse.json({ success: false, error: "Gagal memproses job laporan." }, { status: 500 });
