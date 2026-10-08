@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type OpenAI from "openai";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import {
   autoLayoutDiagram,
   validateDiagramData,
@@ -622,7 +622,7 @@ function parseCompactSpec(value: unknown): CompactSpec {
 }
 
 function extractJson(text: string) {
-  let json = text.trim();
+  let json = stripThinking(text);
   if (json.startsWith("```json")) json = json.slice(7);
   if (json.startsWith("```")) json = json.slice(3);
   if (json.endsWith("```")) json = json.slice(0, -3);
@@ -815,7 +815,7 @@ async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budgetMs: nu
         model,
         messages,
         temperature: repairSpec ? 0.08 : askFirst ? 0.18 : 0.1,
-        max_tokens: repairSpec ? 1400 : askFirst ? 650 : 1800,
+        max_tokens: repairSpec ? 2000 : askFirst ? 900 : 2800,
       };
       emit({
         type: "status",

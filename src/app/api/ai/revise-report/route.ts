@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
 
@@ -202,7 +202,7 @@ Aturan ketat:
       max_tokens: 3600,
     }, { timeout: 35000 });
 
-    const data = response.choices[0]?.message.content?.trim() || "";
+    const data = stripThinking(response.choices[0]?.message.content);
     if (!data) {
       return NextResponse.json({ success: false, error: "AI belum menghasilkan revisi laporan." }, { status: 502 });
     }

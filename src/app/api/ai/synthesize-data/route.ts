@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { getErrorMessage } from "@/lib/errors";
 
 export const maxDuration = 60;
@@ -73,7 +73,7 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
       max_tokens: 3500,
     }, { timeout: 35000 });
 
-    const aiResponse = response.choices[0].message.content || "";
+    const aiResponse = stripThinking(response.choices[0].message.content);
 
     return NextResponse.json({ 
       success: true, 

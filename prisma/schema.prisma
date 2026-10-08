@@ -77,6 +77,7 @@ model User {
   referenceLibrary  ReferenceLibrary[]
   referenceEvidence ReferenceEvidence[]
   reportJobs        ReportJob[]
+  imageJobs         ImageJob[]
   fileUploads       FileUpload[]
   studioProjects    StudioProject[]
   studioSources     StudioSource[]
@@ -293,10 +294,44 @@ model FileUpload {
 
   submissions TugasSubmission[]
   extracted   ExtractedText?
+  imageJobs   ImageJob[]
 
   @@index([ownerId])
   @@index([createdAt])
   @@map("file_uploads")
+}
+
+// ===========================================================================
+// IMAGE JOBS (generate gambar AI — lambat, jalan di background)
+// ===========================================================================
+
+/**
+ * Satu permintaan generate gambar. Hasil PNG disimpan lewat saveUpload
+ * (FileUpload) dan dirujuk via fileUploadId.
+ * Lifecycle: queued → running → done | failed.
+ * sessionId opsional: ReportSession yang memesan gambar (untuk Laporan).
+ */
+model ImageJob {
+  id           String      @id // "img_<uuid>" dari aplikasi
+  ownerId      String      @map("owner_id")
+  owner        User        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sessionId    String?     @map("session_id")
+  title        String      @default("")
+  prompt       String
+  status       String      @default("queued") // queued | running | done | failed
+  fileUploadId String?     @map("file_upload_id")
+  file         FileUpload? @relation(fields: [fileUploadId], references: [id], onDelete: SetNull)
+  error        String?
+  attempts     Int         @default(0)
+  startedAt    DateTime?   @map("started_at")
+  finishedAt   DateTime?   @map("finished_at")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@index([sessionId])
+  @@index([status])
+  @@map("image_jobs")
 }
 
 // ===========================================================================

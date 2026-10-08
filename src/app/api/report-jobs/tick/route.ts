@@ -16,6 +16,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { tickReportJobs } from "@/lib/report/report-jobs";
+import { tickImageJobs } from "@/lib/server/image-jobs";
 
 export const maxDuration = 120;
 
@@ -39,6 +40,8 @@ async function handle(req: Request) {
   const limit = Math.min(4, Math.max(1, Number(process.env.REPORT_TICK_JOBS || 2)));
   try {
     const result = await tickReportJobs(limit);
+    // Image job yang tertinggal (proses restart) ikut dijalankan di sini, tanpa menunggu.
+    void tickImageJobs(1).catch((err) => console.error("[tick] image jobs failed:", err));
     return NextResponse.json({ success: true, ...result }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("API /api/report-jobs/tick failed:", error);

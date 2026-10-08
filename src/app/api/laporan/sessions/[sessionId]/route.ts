@@ -9,6 +9,7 @@ import { prisma } from "@/lib/db/prisma";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { getSessionState } from "@/lib/server/laporan/assistant";
+import { listImageJobs } from "@/lib/server/image-jobs";
 
 export const runtime = "nodejs";
 
@@ -23,12 +24,15 @@ export async function GET(_req: Request, context: Ctx) {
   const found = await getSessionState(sessionId, auth.user.id);
   if (!found) return NextResponse.json({ success: false, error: "Sesi tidak ditemukan." }, { status: 404 });
 
-  const messages = await prisma.reportMessage.findMany({
-    where: { sessionId, role: { in: ["user", "assistant"] } },
-    orderBy: { createdAt: "asc" },
-    take: 200,
-    select: { id: true, role: true, content: true, toolCalls: true, createdAt: true },
-  });
+  const [messages, figures] = await Promise.all([
+    prisma.reportMessage.findMany({
+      where: { sessionId, role: { in: ["user", "assistant"] } },
+      orderBy: { createdAt: "asc" },
+      take: 200,
+      select: { id: true, role: true, content: true, toolCalls: true, createdAt: true },
+    }),
+    listImageJobs(auth.user.id, { sessionId, limit: 30 }),
+  ]);
 
   const { state, job } = found;
   return NextResponse.json({
@@ -45,6 +49,7 @@ export async function GET(_req: Request, context: Ctx) {
       draft: state.draft,
     },
     job,
+    figures,
     messages,
   }, NO_STORE);
 }

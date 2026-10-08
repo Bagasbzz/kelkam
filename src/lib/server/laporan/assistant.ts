@@ -10,7 +10,8 @@
  */
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
+import { startImageJob } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
 import { startReportJob, getReportJob, type ReportJob } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
@@ -191,6 +192,7 @@ ALUR:
 2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram/UML, daftar tabel, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
 3. EXECUTING — hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik.
+5. GAMBAR — bila user minta ilustrasi/gambar (arsitektur sistem, skema, ilustrasi konsep) atau rencana butuh gambar non-UML, panggil generateFigure dengan prompt deskriptif berbahasa Inggris (gaya: diagram teknis bersih, latar putih, tanpa teks panjang). Gambar dibuat di background (±2 menit); beri tahu user bahwa gambar akan muncul di panel "Gambar" dan otomatis masuk ekspor DOCX lewat placeholder [Gambar: Judul - keterangan] di draft. Untuk UML, arahkan ke fitur UML Builder, jangan generateFigure.
 
 ATURAN KEJUJURAN (mutlak):
 - Sumber hanya dari hasil findSources (DOI terverifikasi Crossref). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
@@ -278,6 +280,23 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: "reviseSection",
       description: "Tulis ulang satu bagian draft (berdasarkan judul heading) sesuai instruksi. Hanya saat stage=drafted.",
       parameters: { type: "object", properties: { sectionTitle: { type: "string" }, instruction: { type: "string" } }, required: ["sectionTitle", "instruction"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "generateFigure",
+      description: "Buat gambar ilustrasi (bukan UML) lewat model gambar AI di background. Jika draft sudah ada dan sectionTitle diberikan, placeholder [Gambar: title - caption] disisipkan di akhir bagian itu agar ikut terekspor ke DOCX.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Judul singkat gambar, mis. 'Arsitektur Sistem'." },
+          prompt: { type: "string", description: "Deskripsi visual detail dalam bahasa Inggris untuk model gambar." },
+          caption: { type: "string", description: "Keterangan gambar untuk laporan (Bahasa Indonesia)." },
+          sectionTitle: { type: "string", description: "Judul heading di draft tempat gambar ditempatkan (opsional)." },
+        },
+        required: ["title", "prompt"],
+      },
     },
   },
 ];
@@ -423,6 +442,42 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       events.push(`Bagian "${sec.title}" direvisi`);
       return { ok: true, section: sec.title, preview: out.content.slice(0, 600) };
     }
+    case "generateFigure": {
+      const title = asStr(args.title, 160);
+      const prompt = asStr(args.prompt, 4000);
+      if (!title || prompt.length < 8) return { error: "title dan prompt wajib diisi." };
+      const caption = asStr(args.caption, 300) || title;
+      const stylePrompt = `${prompt}\n\nStyle: clean technical illustration for an academic report, white background, flat vector look, high contrast, minimal text, no watermark.`;
+      let job;
+      try {
+        job = await startImageJob({ ownerId: state.ownerId, prompt: stylePrompt, title, sessionId: state.id });
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : "Gagal memulai pembuatan gambar." };
+      }
+      let placed: string | null = null;
+      const placeholder = `[Gambar: ${title} - ${caption}]`;
+      if (state.draft && !state.draft.includes(`[Gambar: ${title}`)) {
+        const target = asStr(args.sectionTitle, 200).toLowerCase();
+        const { lines, sections } = splitSections(state.draft);
+        const idx = target ? sections.findIndex((s) => s.title.toLowerCase().includes(target) || target.includes(s.title.toLowerCase())) : -1;
+        if (idx >= 0) {
+          const sec = sections[idx];
+          const next = [...lines.slice(0, sec.end), "", placeholder, "", ...lines.slice(sec.end)].join("\n");
+          state.draft = next;
+          placed = sec.title;
+          await persist(state);
+        }
+      }
+      events.push(`Gambar "${title}" diproses di background`);
+      return {
+        ok: true,
+        jobId: job.id,
+        title,
+        placeholder,
+        placedInSection: placed,
+        note: "Gambar dibuat ±2 menit di background. Jika placeholder belum ditempatkan, user bisa menaruh teks placeholder di draft secara manual.",
+      };
+    }
     default:
       return { error: `Tool ${name} tidak dikenal.` };
   }
@@ -528,9 +583,9 @@ export async function runReportAssistantTurn(input: AssistantTurnInput): Promise
     const msg = completion.choices[0]?.message;
     if (!msg) break;
     const calls = msg.tool_calls ?? [];
-    if (!calls.length) { reply = msg.content?.trim() || ""; break; }
+    if (!calls.length) { reply = stripThinking(msg.content); break; }
 
-    messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: calls });
+    messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
     for (const call of calls) {
       if (call.type !== "function") continue;
       let args: Record<string, unknown> = {};
@@ -568,7 +623,7 @@ async function summarizeOld(messages: { role: string; content: string }[], prev:
       }, { timeout: 15_000 }),
       16_000,
     );
-    return r.choices[0]?.message?.content?.trim() || prev || "";
+    return stripThinking(r.choices[0]?.message?.content) || prev || "";
   } catch {
     return prev || "";
   }

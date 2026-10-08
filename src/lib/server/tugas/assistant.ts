@@ -10,7 +10,7 @@
 
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
 
 const MAX_STEPS = 8;
@@ -86,7 +86,7 @@ async function summarizeOld(messages: { role: string; content: string }[], prev:
       }, { timeout: 15_000 }),
       16_000,
     );
-    return r.choices[0]?.message?.content?.trim() || prev || "";
+    return stripThinking(r.choices[0]?.message?.content) || prev || "";
   } catch {
     return prev || "";
   }
@@ -175,12 +175,12 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
 
     const calls = msg.tool_calls ?? [];
     if (!calls.length) {
-      reply = msg.content?.trim() || "";
+      reply = stripThinking(msg.content);
       break;
     }
 
     // Tambahkan assistant message dengan tool_calls
-    messages.push({ role: "assistant", content: msg.content ?? "", tool_calls: calls });
+    messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
 
     let stop = false;
     for (const call of calls) {
@@ -216,7 +216,7 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     }
 
     if (stop) {
-      reply = msg.content?.trim() || pendingQuestion?.question || "";
+      reply = stripThinking(msg.content) || pendingQuestion?.question || "";
       break;
     }
   }

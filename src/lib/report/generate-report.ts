@@ -1,4 +1,4 @@
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { isAbortLikeError } from "@/lib/errors";
 
 const REPORT_TIMEOUT_MS = Number(process.env.AI_REPORT_TIMEOUT_MS || 25000);
@@ -170,7 +170,7 @@ export async function generateReportDraft(project: unknown) {
       max_tokens: 4800,
     }, { timeout: REPORT_TIMEOUT_MS });
 
-    return { content: normalizeReportOutput(response.choices[0].message.content || "", project), source: "ai" };
+    return { content: normalizeReportOutput(stripThinking(response.choices[0].message.content), project), source: "ai" };
   } catch (error: unknown) {
     if (isAbortLikeError(error)) {
       return { content: fallbackReport(project), source: "fallback-timeout" };
@@ -423,7 +423,7 @@ Aturan wajib:
     }, { timeout: CHAPTER_TIMEOUT_MS });
 
     const choice = response.choices[0];
-    let content = cleanChapterOutput(choice?.message.content || "");
+    let content = cleanChapterOutput(stripThinking(choice?.message.content));
     let finishReason = choice?.finish_reason || "unknown";
     let tokensUsed = response.usage?.total_tokens ?? 0;
     emit(`Respons diterima ${Math.round((Date.now() - startedAt) / 1000)}s, ${content.split(/\s+/).length} kata, finish=${finishReason}`);
@@ -441,7 +441,7 @@ Aturan wajib:
         temperature: 0.15,
         max_tokens: Math.round(maxTokens / 2),
       }, { timeout: CHAPTER_TIMEOUT_MS });
-      const extra = cleanChapterOutput(cont.choices[0]?.message.content || "");
+      const extra = cleanChapterOutput(stripThinking(cont.choices[0]?.message.content));
       if (extra) content = `${content}\n${extra}`;
       finishReason = cont.choices[0]?.finish_reason || finishReason;
       tokensUsed += cont.usage?.total_tokens ?? 0;

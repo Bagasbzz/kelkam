@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot, CheckCircle2, Download, ExternalLink, FileText, Loader2, MessageSquarePlus,
-  Paperclip, Play, Send, ShieldCheck, Trash2, User as UserIcon, Upload, ListChecks, BookOpen, Table2, Workflow,
+  Paperclip, Play, Send, ShieldCheck, Trash2, User as UserIcon, Upload, ListChecks, BookOpen, Table2, Workflow, Image as ImageIcon,
 } from "lucide-react";
 import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
 import ReportJobProgress from "@/components/ReportJobProgress";
@@ -25,11 +25,12 @@ const getErrorMessage = (e: unknown) => baseErrorMessage(e, "Terjadi kesalahan."
 interface SessionSummary { id: string; title: string | null; stage: string; jobId: string | null; updatedAt: string }
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; toolCalls?: { tools?: string[]; events?: string[] } | null }
 interface MaterialSummary { id: string; kind: string; title: string; fileName?: string; chars: number }
+interface FigureJob { id: string; status: "queued" | "running" | "done" | "failed"; title: string; prompt: string; fileId: string | null; url: string | null; error: string | null; createdAt: string }
 interface SessionDetail {
   id: string; title: string | null; stage: string; brief: ReportBrief; plan: ReportPlan | null;
   sources: VerifiedSource[]; materials: MaterialSummary[]; jobId: string | null; draft: string | null;
 }
-type Tab = "rencana" | "sumber" | "bahan" | "draft";
+type Tab = "rencana" | "sumber" | "bahan" | "gambar" | "draft";
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF ✓", landing_page: "Halaman", closed: "Berbayar", broken: "Rusak", unknown: "?" };
@@ -49,6 +50,7 @@ export default function LaporanPage() {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [job, setJob] = useState<ReportJob | null>(null);
+  const [figures, setFigures] = useState<FigureJob[]>([]);
   const [polling, setPolling] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -70,10 +72,11 @@ export default function LaporanPage() {
   }, []);
 
   const loadDetail = useCallback(async (id: string) => {
-    const data = await api<{ session: SessionDetail; job: ReportJob | null; messages: ChatMessage[] }>(`/api/laporan/sessions/${id}`, { cache: "no-store" });
+    const data = await api<{ session: SessionDetail; job: ReportJob | null; messages: ChatMessage[]; figures?: FigureJob[] }>(`/api/laporan/sessions/${id}`, { cache: "no-store" });
     setDetail(data.session);
     setMessages(data.messages);
     setJob(data.job);
+    setFigures(data.figures ?? []);
     return data;
   }, []);
 
@@ -120,6 +123,19 @@ export default function LaporanPage() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // ------------------------------------------------------ figure polling
+  const figuresPending = figures.some((f) => f.status === "queued" || f.status === "running");
+  useEffect(() => {
+    if (!figuresPending) return;
+    const timer = window.setInterval(async () => {
+      const pending = figures.filter((f) => f.status === "queued" || f.status === "running");
+      const updated = await Promise.all(pending.map((f) => api<{ job: FigureJob }>(`/api/ai/generate-image/${f.id}`, { cache: "no-store" }).then((d) => d.job).catch(() => f)));
+      setFigures((prev) => prev.map((f) => updated.find((u) => u.id === f.id) ?? f));
+    }, 8000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [figuresPending, figures.length]);
+
   // --------------------------------------------------------------- actions
   const createSession = async () => {
     try {
@@ -155,6 +171,7 @@ export default function LaporanPage() {
       await loadSessions();
       if (data.toolsUsed.includes("proposePlan") || data.toolsUsed.includes("findSources")) setTab(data.toolsUsed.includes("findSources") ? "sumber" : "rencana");
       if (data.toolsUsed.includes("reviseSection")) setTab("draft");
+      if (data.toolsUsed.includes("generateFigure")) setTab("gambar");
       if (data.jobId && fresh.job && (fresh.job.status === "queued" || fresh.job.status === "running")) pollJob(data.jobId);
     } catch (e) {
       setError(getErrorMessage(e));
@@ -203,7 +220,15 @@ export default function LaporanPage() {
     if (!detail?.draft) return;
     setExporting(true);
     try {
-      await exportMarkdownToDocx(detail.draft, detail.title || detail.brief.title || "Laporan", { profile: DOCX_PRESETS[preset].profile });
+      // Sertakan gambar AI yang sudah jadi; key = judul lowercase (cocok dengan placeholder [Gambar: Judul - …]).
+      const images: Record<string, Uint8Array> = {};
+      await Promise.all(figures.filter((f) => f.status === "done" && f.url).map(async (f) => {
+        try {
+          const res = await authenticatedFetch(f.url!, { cache: "force-cache" });
+          if (res.ok) images[f.title.trim().toLowerCase()] = new Uint8Array(await res.arrayBuffer());
+        } catch { /* gambar dilewati, placeholder tetap tercetak */ }
+      }));
+      await exportMarkdownToDocx(detail.draft, detail.title || detail.brief.title || "Laporan", { profile: DOCX_PRESETS[preset].profile, images });
     } catch (e) { setError(getErrorMessage(e)); }
     finally { setExporting(false); }
   };
@@ -317,7 +342,7 @@ export default function LaporanPage() {
 
           <div className="rounded-2xl border border-slate-200 bg-white">
             <div className="flex border-b border-slate-100 text-xs font-bold">
-              {([["rencana", "Rencana", ListChecks], ["sumber", `Sumber (${detail?.sources.length ?? 0})`, BookOpen], ["bahan", `Bahan (${detail?.materials.length ?? 0})`, Upload], ["draft", "Draft", FileText]] as const).map(([key, label, Icon]) => (
+              {([["rencana", "Rencana", ListChecks], ["sumber", `Sumber (${detail?.sources.length ?? 0})`, BookOpen], ["bahan", `Bahan (${detail?.materials.length ?? 0})`, Upload], ["gambar", `Gambar (${figures.length})`, ImageIcon], ["draft", "Draft", FileText]] as const).map(([key, label, Icon]) => (
                 <button key={key} type="button" onClick={() => setTab(key)} className={`flex flex-1 items-center justify-center gap-1 px-2 py-2 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}><Icon className="h-3.5 w-3.5" />{label}</button>
               ))}
             </div>
@@ -388,6 +413,28 @@ export default function LaporanPage() {
                       <FileText className="h-3.5 w-3.5 text-slate-400" />
                       <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-[10px] text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
                       <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {detail && tab === "gambar" && (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-500">Minta di chat, mis. “buatkan gambar arsitektur sistem untuk BAB III”. Gambar dibuat di background (±2 menit) dan otomatis masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code> di draft. Untuk UML pakai UML Builder.</p>
+                  {!figures.length && <p className="text-xs text-slate-500">Belum ada gambar.</p>}
+                  {figures.map((f) => (
+                    <div key={f.id} className="rounded-xl border border-slate-100 p-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        {f.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : f.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
+                        <div className="min-w-0 flex-1 truncate font-semibold">{f.title || "Gambar"}</div>
+                        <span className="text-[10px] text-slate-500">{f.status === "queued" ? "antre" : f.status === "running" ? "diproses" : f.status === "done" ? "selesai" : "gagal"}</span>
+                      </div>
+                      {f.status === "failed" && f.error && <div className="mt-1 text-[11px] text-red-600">{f.error}</div>}
+                      {f.status === "done" && f.url && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <a href={f.url} target="_blank" rel="noreferrer"><img src={f.url} alt={f.title} className="mt-2 w-full rounded-lg border border-slate-100" /></a>
+                      )}
+                      {f.status === "done" && <div className="mt-1 text-[10px] text-slate-500">Placeholder: <code>[Gambar: {f.title} - keterangan]</code></div>}
                     </div>
                   ))}
                 </div>

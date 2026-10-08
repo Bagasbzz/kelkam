@@ -23,7 +23,7 @@ const REQUIRED_COLUMNS: Array<[table: string, column: string]> = [
   ["report_jobs", "heartbeat_at"],
   ["report_job_steps", "tokens_used"],
 ];
-const REQUIRED_TABLES = ["extracted_texts", "submission_analyses", "admin_chat_sessions", "report_job_steps"];
+const REQUIRED_TABLES = ["extracted_texts", "submission_analyses", "admin_chat_sessions", "report_job_steps", "image_jobs"];
 
 export async function GET() {
   try {

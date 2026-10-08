@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 
 export const maxDuration = 60;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -67,8 +67,9 @@ export async function POST(req: Request) {
       ],
     };
 
+    // Butuh model vision; AI_MODEL_FAST (deepseek) tidak menerima gambar.
     const analysis = await aiClient.chat.completions.create({
-      model: AI_MODEL_FAST,
+      model: AI_MODEL,
       messages: [
         {
           role: "system",
@@ -80,7 +81,7 @@ export async function POST(req: Request) {
       max_tokens: 900,
     }, { timeout: 25000 });
 
-    const extracted = extractJson(analysis.choices[0].message.content || "{}");
+    const extracted = extractJson(stripThinking(analysis.choices[0].message.content) || "{}");
     const reconstructionPrompt = extracted.reconstructionPrompt || prompt;
     if (!reconstructionPrompt) {
       return NextResponse.json({ success: false, error: "AI belum berhasil menangkap struktur diagram dari gambar ini." }, { status: 422 });
