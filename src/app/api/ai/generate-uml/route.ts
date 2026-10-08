@@ -8,7 +8,7 @@ import {
 } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
 
-export const maxDuration = 45;
+export const maxDuration = 120;
 
 type DiagramType = "flowchart" | "usecase" | "activity" | "sequence";
 type GenerationMode = "direct" | "clarify";
@@ -698,7 +698,8 @@ export async function POST(req: Request) {
     const runGeneration = async (repairSpec?: CompactSpec, repairErrors: string[] = []) => {
       // Untuk klarifikasi awal atau perbaikan spec, pakai AI_MODEL_FAST agar cepat dan responsif
       const modelToUse = (askFirst || repairSpec) ? AI_MODEL_FAST : AI_MODEL;
-      const timeoutLimit = (askFirst || repairSpec) ? 20000 : 30000;
+      // GPT-5 class models often need >30 s for 1.800 token JSON; route budget total ~100 s.
+      const timeoutLimit = (askFirst || repairSpec) ? 35000 : 60000;
 
       const response = await aiClient.chat.completions.create({
         model: modelToUse,
@@ -833,8 +834,10 @@ export async function POST(req: Request) {
         { status: 504 }
       );
     }
+    const providerStatus = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
+    const detail = error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 200) : "";
     return NextResponse.json(
-      { success: false, error: "Gagal menghasilkan diagram. Coba lagi atau gunakan mode tanya dulu." },
+      { success: false, error: `Gagal menghasilkan diagram${providerStatus ? ` (AI ${providerStatus})` : ""}${detail ? `: ${detail}` : "."} Coba lagi atau gunakan mode tanya dulu.` },
       { status: 500 }
     );
   }

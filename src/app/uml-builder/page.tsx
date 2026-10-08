@@ -213,6 +213,7 @@ export default function UMLBuilder() {
   const [aiClarificationAnswers, setAiClarificationAnswers] = useState<string[]>([]);
   const [aiMode, setAiMode] = useState<'direct' | 'clarify'>('direct');
   const [aiStatusText, setAiStatusText] = useState('');
+  const [aiError, setAiError] = useState('');
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
@@ -254,6 +255,7 @@ export default function UMLBuilder() {
     setAiClarificationQuestions([]);
     setAiClarificationAnswers([]);
     setAiStatusText('');
+    setAiError('');
     setAiWarnings([]);
     setUmlReferenceImage(null);
   }, []);
@@ -281,6 +283,7 @@ export default function UMLBuilder() {
     }
     setIsGeneratingAI(true);
     setAiWarnings([]);
+    setAiError('');
     setAiStatusText(aiMode === 'clarify' && aiClarificationQuestions.length === 0 ? 'AI sedang mencari pertanyaan paling penting...' : 'AI sedang menyusun diagram final...');
     showToast('AI sedang menyusun diagram...');
     try {
@@ -306,6 +309,7 @@ export default function UMLBuilder() {
       });
       const data = await readUmlApiPayload(res);
       if (!res.ok && !data.needsClarification) {
+        setAiError(data.error || `Gagal menghubungi AI (HTTP ${res.status}).`);
         showToast(data.error || `Gagal menghubungi AI (${res.status}).`);
         return;
       }
@@ -351,9 +355,11 @@ export default function UMLBuilder() {
         setIsAiModalOpen(false);
         showToast('Diagram AI berhasil dibuat dan lolos pemeriksaan.');
       } else {
+        setAiError(data.error || 'AI tidak mengembalikan diagram. Coba perjelas kebutuhan atau ulangi.');
         showToast(data.error || 'Gagal membuat diagram.');
       }
-    } catch {
+    } catch (error) {
+      setAiError(error instanceof Error && error.message ? `Gangguan koneksi: ${error.message}` : 'Terjadi gangguan saat menghubungi AI.');
       showToast('Terjadi gangguan saat menghubungi AI.');
     } finally {
       setAiStatusText('');
@@ -1482,7 +1488,7 @@ export default function UMLBuilder() {
       </main>
 
       {/* AI Floating Button */}
-        <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 100, display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 300, display: 'flex', alignItems: 'center', gap: '12px' }}>
         {diagramMeta.reportDiagramId && (
           <button
             onClick={handleApproveToReport}
@@ -1660,6 +1666,22 @@ export default function UMLBuilder() {
                   <div style={{ height: '6px', background: '#e2e8f0', borderRadius: '999px', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: '68%', background: 'linear-gradient(90deg, #4f46e5, #7c3aed)', animation: 'pulse 1.4s ease-in-out infinite' }} />
                   </div>
+                </div>
+              )}
+
+              {aiError && (
+                <div role="alert" style={{
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  color: '#b91c1c',
+                  borderRadius: '10px',
+                  padding: '12px',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  lineHeight: 1.5,
+                  marginBottom: '1rem'
+                }}>
+                  {aiError}
                 </div>
               )}
 
