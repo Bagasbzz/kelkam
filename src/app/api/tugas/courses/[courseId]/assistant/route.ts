@@ -59,8 +59,20 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
       return NextResponse.json({ success: false, error: "AI terlalu lama merespons. Coba persempit permintaan." }, { status: 504 });
     }
     console.error("API tugas assistant POST failed:", error);
-    return publicErrorResponse(error, "Asisten gagal memproses permintaan.");
+    // Endpoint khusus admin: tampilkan penyebab (status provider / kode Prisma) agar bisa didiagnosis.
+    const detail = describeAssistantError(error);
+    return publicErrorResponse(error, `Asisten gagal memproses permintaan.${detail ? ` (${detail})` : ""}`);
   }
+}
+
+function describeAssistantError(error: unknown): string {
+  if (!(error instanceof Error)) return "";
+  const e = error as Error & { status?: number; code?: string };
+  const parts: string[] = [];
+  if (typeof e.status === "number") parts.push(`AI ${e.status}`);
+  if (typeof e.code === "string") parts.push(`kode ${e.code}`);
+  parts.push(e.message.replace(/\s+/g, " ").slice(0, 220));
+  return parts.join(": ");
 }
 
 export async function GET(req: Request, context: { params: Promise<{ courseId: string }> }) {
