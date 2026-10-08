@@ -17,6 +17,8 @@ const MAX_STEPS = 8;
 const HISTORY_LIMIT = 12;
 const TOOL_RESULT_MAX_CHARS = 14_000;
 const STEP_TIMEOUT_MS = 40_000;
+// Total anggaran satu giliran; harus < maxDuration route (120 s) + timeout client.
+const TURN_BUDGET_MS = 100_000;
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -146,8 +148,15 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
   const toolLog: Array<{ name: string; args: unknown }> = [];
   let pendingQuestion: AssistantTurnResult["pendingQuestion"] = null;
   let reply = "";
+  const startedAt = Date.now();
 
   for (let step = 0; step < MAX_STEPS; step++) {
+    const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
+    if (remaining < 8_000) {
+      reply = `Waktu giliran habis setelah ${toolsUsed.length} langkah tool (${Array.from(new Set(toolsUsed)).join(", ")}). Persempit permintaan (mis. satu pertemuan / beberapa mahasiswa) lalu kirim lagi.`;
+      break;
+    }
+    const stepTimeout = Math.min(STEP_TIMEOUT_MS, remaining - 3_000);
     const completion = await withTimeout(
       aiClient.chat.completions.create({
         model,
@@ -156,8 +165,8 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
         tool_choice: "auto",
         temperature: 0.2,
         max_tokens: 1600,
-      }, { timeout: STEP_TIMEOUT_MS }),
-      STEP_TIMEOUT_MS + 2000,
+      }, { timeout: stepTimeout }),
+      stepTimeout + 2000,
     );
 
     const choice = completion.choices[0];

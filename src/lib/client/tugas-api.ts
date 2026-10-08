@@ -32,6 +32,8 @@ export class ApiClientError extends Error {
 
 const REQUEST_TIMEOUT_MS = 45_000;
 const UPLOAD_TIMEOUT_MS = 60_000;
+// Asisten multi-step tool-calling; selaras dengan maxDuration=120 di route.
+const ASSISTANT_TIMEOUT_MS = 125_000;
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
@@ -145,9 +147,9 @@ export interface ManagedCourse {
 
 async function request<T>(
   path: string,
-  init?: RequestInit & { json?: unknown },
+  init?: RequestInit & { json?: unknown; timeoutMs?: number },
 ): Promise<T> {
-  const { json, ...rest } = init ?? {};
+  const { json, timeoutMs, ...rest } = init ?? {};
   const headers: Record<string, string> = {
     ...((rest.headers as Record<string, string>) || {}),
   };
@@ -160,7 +162,7 @@ async function request<T>(
       body,
       headers: json !== undefined ? { ...headers, "Content-Type": "application/json" } : headers,
     },
-    REQUEST_TIMEOUT_MS,
+    timeoutMs ?? REQUEST_TIMEOUT_MS,
   );
 
   const payload = (await resp.json().catch(() => ({ success: false }))) as {
@@ -435,6 +437,7 @@ export function sendAssistantMessage(
   return request<AssistantTurn>(`/api/tugas/courses/${courseId}/assistant`, {
     method: "POST",
     json: input,
+    timeoutMs: ASSISTANT_TIMEOUT_MS,
   });
 }
 
