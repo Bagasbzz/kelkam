@@ -26,7 +26,7 @@ import type OpenAI from "openai";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, stripThinking } from "@/lib/ai/client";
+import { aiClient, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
 
 export type AgentKind = "laporan" | "tugas";
 export type AgentRunStatus = "queued" | "running" | "paused" | "waiting_user" | "done" | "failed" | "cancelled";
@@ -117,6 +117,29 @@ export const DEFAULT_MAX_STEPS = 60;
 const RUN_TTL_MS = 24 * 60 * 60 * 1000;
 
 const ACTIVE: AgentRunStatus[] = ["queued", "running"];
+/** Batas tunggu rate-limit di dalam satu segmen; lebih dari ini → lepas lock, lanjut segmen berikutnya. */
+const RATE_LIMIT_MAX_WAIT_MS = 70_000;
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** Parse pesan 429 ("reset after 51s" / "1m 35s" / header retry-after) → ms tunggu, atau null bila bukan rate limit. */
+function rateLimitWaitMs(err: unknown): number | null {
+  const e = err as { status?: number; message?: string; headers?: Record<string, string> };
+  const msg = e?.message ?? String(err);
+  if (e?.status !== 429 && !/429|rate limit/i.test(msg)) return null;
+  const ra = Number(e?.headers?.["retry-after"]);
+  if (Number.isFinite(ra) && ra > 0) return ra * 1000;
+  const m = /after\s+(?:(\d+)\s*m)?\s*(?:(\d+(?:\.\d+)?)\s*s)?/i.exec(msg);
+  const minutes = m?.[1] ? Number(m[1]) : 0;
+  const seconds = m?.[2] ? Number(m[2]) : 0;
+  const total = minutes * 60 + seconds;
+  return total > 0 ? total * 1000 : 15_000;
+}
+
+/** Model alternatif saat model aktif kena rate limit (limit biasanya per model). */
+function alternateModel(current: string) {
+  return current === AI_MODEL_FAST ? AI_MODEL : AI_MODEL_FAST;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -375,6 +398,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   const attachments = asArr(row0.attachments) as AgentAttachment[];
   let stepCount = row0.stepCount;
   let consecutiveErrors = 0;
+  let model = row0.model;
+  /** model → epoch ms saat kuota diperkirakan pulih (hanya untuk segmen ini). */
+  const availableAt = new Map<string, number>();
 
   // Event ditulis ke DB dengan throttle supaya mode "attach" dan cron bisa melihat progres.
   let lastEventFlush = 0;
@@ -434,7 +460,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       const system = await driver.systemPrompt(ref);
       const r = await withTimeout(
         aiClient.chat.completions.create({
-          model: row0.model,
+          model,
           messages: [
             { role: "system", content: system },
             ...compactMessages(messages, true),
@@ -473,7 +499,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
 
       // 4. Panggil model.
       const isLast = stepCount === row0.maxSteps - 1;
-      emit(`Berpikir (langkah ${stepCount + 1})…`);
+      emit(`Berpikir (langkah ${stepCount + 1}, ${model})…`);
       messages = compactMessages(messages);
       let completion: OpenAI.Chat.Completions.ChatCompletion;
       try {
@@ -481,7 +507,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         const timeout = Math.min(STEP_TIMEOUT_MS, remaining - 5_000);
         completion = await withTimeout(
           aiClient.chat.completions.create({
-            model: row0.model,
+            model,
             messages: [{ role: "system", content: system }, ...messages],
             tools: driver.tools,
             tool_choice: isLast ? "none" : "auto",
@@ -492,8 +518,31 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         );
         consecutiveErrors = 0;
       } catch (err) {
-        consecutiveErrors += 1;
         const msg = err instanceof Error ? err.message : String(err);
+        // Rate limit bukan kegagalan: ganti model, tunggu sesuai "reset after" bila masih muat di segmen.
+        const waitMs = rateLimitWaitMs(err);
+        if (waitMs !== null) {
+          availableAt.set(model, Date.now() + waitMs);
+          const next = alternateModel(model);
+          const nextWait = Math.max(0, (availableAt.get(next) ?? 0) - Date.now());
+          if (nextWait === 0) {
+            emit(`Kuota model ${model} penuh (reset ±${Math.ceil(waitMs / 1000)}s) — beralih ke ${next}…`, "warn");
+            model = next;
+            continue;
+          }
+          // Kedua model dibatasi → tunggu yang paling cepat pulih bila masih muat di segmen.
+          const wait = Math.min(waitMs, nextWait) + 1_000;
+          const left = opts.budgetMs - (Date.now() - startedAt) - MIN_STEP_BUDGET_MS;
+          model = waitMs <= nextWait ? model : next;
+          if (wait <= Math.min(left, RATE_LIMIT_MAX_WAIT_MS)) {
+            emit(`Kuota semua model penuh — menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut dengan ${model}…`, "warn");
+            await sleep(wait);
+          } else {
+            return release("queued", `Kuota AI sedang dibatasi (±${Math.ceil(wait / 1000)}s) — dilanjutkan otomatis setelah pulih…`);
+          }
+          continue;
+        }
+        consecutiveErrors += 1;
         emit(`Model gagal merespons (${msg.slice(0, 120)}) — percobaan ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`, "warn");
         if (/context|token|length|too large|maximum/i.test(msg)) messages = compactMessages(messages, true);
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
