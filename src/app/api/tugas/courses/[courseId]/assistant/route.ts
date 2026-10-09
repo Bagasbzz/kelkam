@@ -4,7 +4,8 @@
  * Admin AI chatbot untuk 1 course (tool-calling atas data tugas/submission).
  *
  *   POST body { message, sessionId?, answerTo?, deep? }
- *        → { success, sessionId, reply, pendingQuestion, toolsUsed, model }
+ *        → NDJSON stream progres agent run (header x-run-id, x-session-id);
+ *          event terakhir `result{run, continue}`. Lanjutkan via ./assistant/run.
  *   GET  ?sessionId=   → riwayat pesan sesi
  *   GET  (tanpa param) → daftar sesi admin ini di course ini
  *
@@ -15,7 +16,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { requireCourseAdmin } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
-import { runAssistantTurn } from "@/lib/server/tugas/assistant";
+import { startTugasAssistantRun } from "@/lib/server/tugas/assistant";
+import { streamAgentRun } from "@/lib/server/agent-runs/stream";
 
 export const maxDuration = 120;
 export const runtime = "nodejs";
@@ -41,7 +43,7 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
       return NextResponse.json({ success: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." }, { status: 400 });
     }
 
-    const result = await runAssistantTurn({
+    const { runId, sessionId } = await startTugasAssistantRun({
       courseId,
       adminId: admin.id,
       sessionId: parsed.data.sessionId ?? null,
@@ -50,7 +52,10 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
       deep: parsed.data.deep ?? false,
     });
 
-    return NextResponse.json({ success: true, ...result }, { headers: { "Cache-Control": "private, no-store" } });
+    const res = streamAgentRun(runId, admin.id);
+    res.headers.set("x-run-id", runId);
+    res.headers.set("x-session-id", sessionId);
+    return res;
   } catch (error) {
     if (error instanceof ApiRequestError) {
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });

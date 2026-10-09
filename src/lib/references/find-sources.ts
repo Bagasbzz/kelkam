@@ -58,6 +58,8 @@ export interface FindSourcesOptions extends SearchOptions {
   requirement?: JournalRequirement;
   /** Minimum DOI terverifikasi; default true (sumber tanpa DOI valid dibuang). */
   requireDoi?: boolean;
+  /** Callback progres (untuk UI live). */
+  onProgress?: (text: string) => void;
 }
 
 function normalizeDoi(value: unknown) {
@@ -208,12 +210,14 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     yearTo: options.yearTo ?? null,
     openAccessOnly: Boolean(options.openAccessOnly),
   };
+  const progress = options.onProgress ?? (() => {});
   const [ss, oa, cr] = await Promise.all([
     searchSemanticScholar(query, searchOptions),
     searchOpenAlex(query, searchOptions),
     searchCrossref(query, searchOptions),
   ]);
   const merged = mergeAndDeduplicate([ss, oa, cr]).filter((p) => p.title && (options.requireDoi === false || p.doi));
+  progress(`${merged.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}) — memverifikasi DOI…`);
 
   const doiChecked = await Promise.all(
     merged.slice(0, Math.min(limit * 2, 20)).map(async (paper) => {
@@ -236,6 +240,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     .sort((a, b) => Number(b.citationCount || 0) - Number(a.citationCount || 0))
     .slice(0, limit);
 
+  progress(`${eligible.length} lolos verifikasi DOI & syarat jurnal — mengecek ketersediaan PDF…`);
   const pdfStatuses = await verifyPdfUrls(eligible.map((p) => p.pdfUrl));
 
   return eligible.map((p, i) => {

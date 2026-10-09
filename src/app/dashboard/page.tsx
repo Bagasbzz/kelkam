@@ -13,9 +13,12 @@ import {
 } from "lucide-react";
 import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
 import ReportJobProgress from "@/components/ReportJobProgress";
+import AgentRunProgress from "@/components/ui/AgentRunProgress";
+import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import Button from "@/components/ui/Button";
 import { getErrorMessage as baseErrorMessage } from "@/lib/errors";
 import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/client/report-job";
+import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
 import type { VerifiedSource } from "@/lib/references/find-sources";
 import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
 import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
@@ -63,6 +66,13 @@ export default function LaporanPage() {
   const [executing, setExecuting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Agent run (chat) yang sedang di-stream
+  const [run, setRun] = useState<AgentRunPublic | null>(null);
+  const [runEvents, setRunEvents] = useState<AgentEvent[]>([]);
+  const [runStartedAt, setRunStartedAt] = useState(0);
+  const [lastBeatAt, setLastBeatAt] = useState(0);
+  const [runBusy, setRunBusy] = useState(false);
+  const runAbortRef = useRef<AbortController | null>(null);
 
   // ---------------------------------------------------------------- loaders
   const loadSessions = useCallback(async () => {
@@ -91,11 +101,18 @@ export default function LaporanPage() {
   useEffect(() => {
     if (!activeId) { setDetail(null); setMessages([]); setJob(null); return; }
     abortRef.current?.abort();
+    runAbortRef.current?.abort();
+    setRun(null); setRunEvents([]); setSending(false);
     setError(null);
     loadDetail(activeId).catch((e) => setError(getErrorMessage(e)));
+    // Auto-attach ke run yang masih berjalan (mis. setelah refresh / sinyal putus).
+    fetchActiveRun(`/api/laporan/sessions/${activeId}/run`).then((active) => {
+      if (active && isRunLive(active.status)) attachRun(activeId, () => authenticatedFetch(`/api/laporan/sessions/${activeId}/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: active.id, action: "continue" }) }), active);
+    }).catch(() => { /* abaikan */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, loadDetail]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, sending]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, sending, runEvents.length]);
 
   // --------------------------------------------------------- job polling
   const pollJob = useCallback(async (jobId: string) => {
@@ -121,7 +138,7 @@ export default function LaporanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail?.jobId, job?.id]);
 
-  useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => () => { abortRef.current?.abort(); runAbortRef.current?.abort(); }, []);
 
   // ------------------------------------------------------ figure polling
   const figuresPending = figures.some((f) => f.status === "queued" || f.status === "running");
@@ -155,27 +172,74 @@ export default function LaporanPage() {
     } catch (e) { setError(getErrorMessage(e)); }
   };
 
+  /**
+   * Ikuti run sampai selesai: stream event live, sambung ulang otomatis saat
+   * segmen server habis / koneksi putus, lalu muat ulang riwayat & detail.
+   * `initial` diisi saat auto-attach ke run yang sudah ada (id sudah diketahui).
+   */
+  const attachRun = async (sessionId: string, first: () => Promise<Response>, initial?: AgentRunPublic) => {
+    runAbortRef.current?.abort();
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    let runId = initial?.id ?? "";
+    setSending(true);
+    setRun(initial ?? null);
+    setRunEvents(initial?.events ?? []);
+    setRunStartedAt(initial ? new Date(initial.createdAt).getTime() : Date.now());
+    setLastBeatAt(Date.now());
+    try {
+      const final = await followRun({
+        first,
+        continueUrl: `/api/laporan/sessions/${sessionId}/run`,
+        runId: () => runId,
+        signal: controller.signal,
+        observer: {
+          onRun: (r) => { runId = r.id; setRun(r); setRunEvents(r.events); setLastBeatAt(Date.now()); },
+          onEvent: (ev) => { setRunEvents((prev) => [...prev.slice(-80), ev]); setLastBeatAt(Date.now()); },
+          onHeartbeat: () => setLastBeatAt(Date.now()),
+        },
+      });
+      if (controller.signal.aborted) return;
+      const fresh = await loadDetail(sessionId);
+      await loadSessions();
+      const tools = final?.toolsUsed ?? [];
+      if (tools.includes("proposePlan") || tools.includes("findSources")) setTab(tools.includes("findSources") ? "sumber" : "rencana");
+      if (tools.includes("reviseSection")) setTab("draft");
+      if (tools.includes("generateFigure")) setTab("gambar");
+      if (fresh.session.jobId && fresh.job && (fresh.job.status === "queued" || fresh.job.status === "running")) pollJob(fresh.session.jobId);
+      if (final?.status === "failed") setError(final.error || "Proses gagal. Ketik \"lanjut\" untuk mencoba meneruskan.");
+    } catch (e) {
+      if (!controller.signal.aborted) setError(getErrorMessage(e));
+    } finally {
+      if (runAbortRef.current === controller) { setSending(false); setRun(null); setRunEvents([]); }
+    }
+  };
+
   const send = async (text?: string) => {
     const message = (text ?? input).trim();
     if (!message || !activeId || sending) return;
     setInput("");
-    setSending(true);
     setError(null);
     setMessages((prev) => [...prev, { id: `u${Date.now()}`, role: "user", content: message }]);
-    try {
-      const data = await api<{ reply: string; toolsUsed: string[]; jobId: string | null; stage: string }>(`/api/laporan/sessions/${activeId}/message`, {
-        method: "POST", body: JSON.stringify({ message, deep }),
-      });
-      setMessages((prev) => [...prev, { id: `a${Date.now()}`, role: "assistant", content: data.reply, toolCalls: { tools: data.toolsUsed } }]);
-      const fresh = await loadDetail(activeId);
-      await loadSessions();
-      if (data.toolsUsed.includes("proposePlan") || data.toolsUsed.includes("findSources")) setTab(data.toolsUsed.includes("findSources") ? "sumber" : "rencana");
-      if (data.toolsUsed.includes("reviseSection")) setTab("draft");
-      if (data.toolsUsed.includes("generateFigure")) setTab("gambar");
-      if (data.jobId && fresh.job && (fresh.job.status === "queued" || fresh.job.status === "running")) pollJob(data.jobId);
-    } catch (e) {
-      setError(getErrorMessage(e));
-    } finally { setSending(false); }
+    const sessionId = activeId;
+    await attachRun(sessionId, () => authenticatedFetch(`/api/laporan/sessions/${sessionId}/message`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, deep }),
+    }));
+  };
+
+  const pauseRun = async () => {
+    if (!run || !activeId) return;
+    setRunBusy(true);
+    try { await controlRun(`/api/laporan/sessions/${activeId}/run`, run.id, "pause"); }
+    catch (e) { setError(getErrorMessage(e)); }
+    finally { setRunBusy(false); }
+  };
+  const cancelRun = async () => {
+    if (!run || !activeId) return;
+    setRunBusy(true);
+    try { await controlRun(`/api/laporan/sessions/${activeId}/run`, run.id, "cancel"); }
+    catch (e) { setError(getErrorMessage(e)); }
+    finally { setRunBusy(false); }
   };
 
   const execute = async (ignoreMinSources = false) => {
@@ -284,14 +348,14 @@ export default function LaporanPage() {
             {messages.map((m) => (
               <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
                 {m.role === "assistant" && <Bot className="mt-1 h-4 w-4 shrink-0 text-blue-600" />}
-                <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
-                  {m.content}
+                <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "whitespace-pre-wrap bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+                  {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : m.content}
                   {m.toolCalls?.tools?.length ? <div className="mt-1 text-[10px] text-slate-500">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
                 </div>
                 {m.role === "user" && <UserIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
               </div>
             ))}
-            {sending && <div className="flex items-center gap-2 text-xs text-slate-500"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Asisten sedang berpikir / mencari sumber…</div>}
+            {sending && <AgentRunProgress run={run} events={runEvents} startedAt={runStartedAt} lastBeatAt={lastBeatAt} onPause={pauseRun} onCancel={cancelRun} busy={runBusy} />}
             <div ref={bottomRef} />
           </div>
 

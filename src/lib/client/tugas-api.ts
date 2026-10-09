@@ -32,8 +32,6 @@ export class ApiClientError extends Error {
 
 const REQUEST_TIMEOUT_MS = 45_000;
 const UPLOAD_TIMEOUT_MS = 60_000;
-// Asisten multi-step tool-calling; selaras dengan maxDuration=120 di route.
-const ASSISTANT_TIMEOUT_MS = 125_000;
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
@@ -438,16 +436,27 @@ export interface AssistantMessage {
   createdAt: string;
 }
 
-export function sendAssistantMessage(
+/**
+ * Kirim pesan ke Asisten Dosen sebagai agent run tahan lama. Mengembalikan
+ * `Response` stream NDJSON (header `x-session-id`, `x-run-id`) — dibaca dengan
+ * `followRun` dari `@/lib/client/agent-run`.
+ */
+export async function openAssistantRunStream(
   courseId: string,
   input: { message: string; sessionId?: string | null; answerTo?: string | null; deep?: boolean },
-) {
-  return request<AssistantTurn>(`/api/tugas/courses/${courseId}/assistant`, {
+  signal?: AbortSignal,
+): Promise<Response> {
+  return authenticatedFetch(`/api/tugas/courses/${courseId}/assistant`, {
     method: "POST",
-    json: input,
-    timeoutMs: ASSISTANT_TIMEOUT_MS,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+    signal,
   });
 }
+
+export const assistantRunUrl = (courseId: string) => `/api/tugas/courses/${courseId}/assistant/run`;
+export const assistantActiveRunUrl = (courseId: string, sessionId: string) =>
+  `${assistantRunUrl(courseId)}?sessionId=${encodeURIComponent(sessionId)}`;
 
 export function fetchAssistantSessions(courseId: string) {
   return request<{ sessions: AssistantSessionSummary[] }>(`/api/tugas/courses/${courseId}/assistant`);

@@ -1,12 +1,15 @@
 /**
  * POST /api/laporan/sessions/[sessionId]/message  { message, deep? }
- * → satu giliran asisten Laporan (tool-calling). Rate limit 40 / 10 menit.
+ * → membuat/melanjutkan agent run, lalu men-stream progres (NDJSON) sampai
+ *   segmen waktu habis; event terakhir `result{continue}` memberi tahu klien
+ *   untuk menyambung ulang via /run. Rate limit 40 / 10 menit.
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
-import { runReportAssistantTurn } from "@/lib/server/laporan/assistant";
+import { startReportAssistantRun } from "@/lib/server/laporan/assistant";
+import { streamAgentRun } from "@/lib/server/agent-runs/stream";
 
 export const maxDuration = 120;
 export const runtime = "nodejs";
@@ -30,13 +33,13 @@ export async function POST(req: Request, context: { params: Promise<{ sessionId:
       return NextResponse.json({ success: false, error: parsed.error.issues[0]?.message ?? "Input tidak valid." }, { status: 400 });
     }
 
-    const result = await runReportAssistantTurn({
+    const { runId } = await startReportAssistantRun({
       sessionId,
       ownerId: auth.user.id,
       message: parsed.data.message,
       deep: parsed.data.deep ?? false,
     });
-    return NextResponse.json({ success: true, ...result }, { headers: { "Cache-Control": "private, no-store" } });
+    return streamAgentRun(runId, auth.user.id);
   } catch (error) {
     if (error instanceof ApiRequestError) return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
     if (error instanceof Error && /tidak ditemukan/i.test(error.message)) return NextResponse.json({ success: false, error: error.message }, { status: 404 });

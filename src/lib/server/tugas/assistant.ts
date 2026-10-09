@@ -1,10 +1,10 @@
 /**
- * Agent loop Admin AI Tugas (tool-calling).
+ * Asisten Dosen AI Tugas — driver untuk engine agent run tahan lama.
  * -----------------------------------------------------------------------------
  * - Riwayat dipangkas (N pesan terakhir) + ringkasan sesi + "memory" rubric
  *   dari jawaban admin → hemat token tanpa kehilangan konteks.
- * - Loop maksimal MAX_STEPS panggilan tool per giliran.
- * - askUser menghentikan loop dan mengembalikan pertanyaan ke UI.
+ * - Loop tool dijalankan oleh `agent-runs/engine` (resumable, tanpa batas 120 s).
+ * - askUser menghentikan run (status waiting_user) dan pertanyaan ke UI.
  * -----------------------------------------------------------------------------
  */
 
@@ -12,15 +12,14 @@ import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
+import {
+  appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
+  type AgentDriver, type AgentRunPublic, type AgentToolContext,
+} from "@/lib/server/agent-runs/engine";
 
-const MAX_STEPS = 14;
+const MAX_STEPS = 80;
 const HISTORY_LIMIT = 12;
-const TOOL_RESULT_MAX_CHARS = 16_000;
-const STEP_TIMEOUT_MS = 40_000;
-// Total anggaran satu giliran; harus < maxDuration route (120 s) + timeout client.
-const TURN_BUDGET_MS = 105_000;
-// Sisa waktu minimum untuk memaksa jawaban akhir (tanpa tool) sebelum budget habis.
-const FINAL_ANSWER_RESERVE_MS = 20_000;
+const RUN_KIND = "tugas" as const;
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -39,15 +38,6 @@ export interface AssistantAttachment {
   name: string;
   url: string;
   size: number;
-}
-
-export interface AssistantTurnResult {
-  sessionId: string;
-  reply: string;
-  pendingQuestion: { question: string; options?: string[] } | null;
-  toolsUsed: string[];
-  attachments: AssistantAttachment[];
-  model: string;
 }
 
 function systemPrompt(courseName: string, memory: Record<string, unknown> | null, summary: string | null) {
@@ -70,18 +60,14 @@ ATURAN:
 8. Keterlambatan: gunakan kolom terlambatMenit/keterlambatan dari tools (zona Asia/Jakarta); sebutkan durasi konkret.
 9. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan hati-hati dan sarankan konfirmasi.
 10. Bila admin minta file Word/dokumen yang bisa diunduh: pakai exportSubmissionDocx (isi pengumpulan/kode) atau exportReportDocx (hasil analisis Anda). Tautan unduh tampil otomatis; cukup sebutkan nama filenya.
-11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya. Jika pekerjaan belum selesai karena batas langkah, laporkan apa yang SUDAH ditemukan dan apa yang tersisa — jangan menjawab kosong.${memBlock}${sumBlock}`;
+11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya.
+12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.${memBlock}${sumBlock}`;
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let t: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error("AI timeout")), ms); });
   try { return await Promise.race([p, timeout]); } finally { if (t) clearTimeout(t); }
-}
-
-function clipToolResult(obj: unknown): string {
-  const s = JSON.stringify(obj);
-  return s.length > TOOL_RESULT_MAX_CHARS ? `${s.slice(0, TOOL_RESULT_MAX_CHARS)}…[dipotong]` : s;
 }
 
 /** Ringkas riwayat lama menjadi 1 paragraf (pakai model cepat). */
@@ -106,7 +92,13 @@ async function summarizeOld(messages: { role: string; content: string }[], prev:
   }
 }
 
-export async function runAssistantTurn(input: AssistantTurnInput): Promise<AssistantTurnResult> {
+export interface StartRunResult { runId: string; sessionId: string; resumed: boolean }
+
+/**
+ * Buat (atau lanjutkan) run agent untuk pesan admin. Pesan user disimpan ke
+ * riwayat; loop tool dijalankan engine. Return id run untuk di-stream route.
+ */
+export async function startTugasAssistantRun(input: AssistantTurnInput): Promise<StartRunResult> {
   const course = await prisma.course.findUnique({ where: { id: input.courseId }, select: { name: true } });
   if (!course) throw new Error("Course tidak ditemukan.");
 
@@ -118,6 +110,18 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     session = await prisma.adminChatSession.create({
       data: { courseId: input.courseId, userId: input.adminId, title: input.message.slice(0, 80) },
     });
+  }
+
+  // Lanjutkan run yang dijeda/antre (mis. user ketik "lanjut" setelah sinyal putus).
+  const active = await findActiveAgentRun(input.adminId, RUN_KIND, session.id);
+  if (active) {
+    if (active.status === "running") return { runId: active.id, sessionId: session.id, resumed: true };
+    if (active.status === "paused") await controlAgentRun(active.id, input.adminId, "resume");
+    if (!isContinueKeyword(input.message)) {
+      await appendUserMessage(active.id, input.adminId, input.message);
+      await prisma.adminChatMessage.create({ data: { sessionId: session.id, role: "user", content: input.message } });
+    }
+    return { runId: active.id, sessionId: session.id, resumed: true };
   }
 
   const memory = (session.memory as Record<string, unknown> | null) ?? {};
@@ -145,10 +149,7 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     summary = await summarizeOld(old, summary);
   }
 
-  const messages: Msg[] = [
-    { role: "system", content: systemPrompt(course.name, memory, summary) },
-    ...recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content })),
-  ];
+  const messages: Msg[] = recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content }));
   if (input.answerTo) {
     messages.splice(messages.length - 1, 0, {
       role: "assistant",
@@ -156,129 +157,83 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     });
   }
 
-  const attachments: AssistantAttachment[] = [];
-  const ctx: ToolContext = { courseId: input.courseId, adminId: input.adminId, attachments };
-  const model = input.deep ? AI_MODEL : AI_MODEL_FAST;
-  const toolsUsed: string[] = [];
-  const toolLog: Array<{ name: string; args: unknown }> = [];
-  let pendingQuestion: AssistantTurnResult["pendingQuestion"] = null;
-  let reply = "";
-  const startedAt = Date.now();
+  // Simpan memory/summary sekarang agar system prompt tiap langkah memakai versi terbaru.
+  await prisma.adminChatSession.update({
+    where: { id: session.id },
+    data: { memory: memory as object, summary: summary ?? undefined },
+  });
 
-  /** Paksa model menulis jawaban akhir dari data yang sudah terkumpul (tanpa tool). */
-  const forceFinalAnswer = async (reason: string) => {
-    const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
-    const t = Math.max(Math.min(STEP_TIMEOUT_MS, remaining - 2_000), 8_000);
-    try {
-      const r = await withTimeout(
-        aiClient.chat.completions.create({
-          model,
-          messages: [...messages, { role: "user", content: `[SISTEM] ${reason} Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah ditemukan/dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool.` }],
-          temperature: 0.2,
-          max_tokens: 1600,
-        }, { timeout: t }),
-        t + 2000,
-      );
-      return stripThinking(r.choices[0]?.message?.content);
-    } catch {
-      return "";
-    }
-  };
-
-  for (let step = 0; step < MAX_STEPS; step++) {
-    const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
-    if (remaining < FINAL_ANSWER_RESERVE_MS) {
-      reply = await forceFinalAnswer("Batas waktu giliran hampir habis.");
-      break;
-    }
-    const isLastStep = step === MAX_STEPS - 1;
-    const stepTimeout = Math.min(STEP_TIMEOUT_MS, remaining - 3_000);
-    const completion = await withTimeout(
-      aiClient.chat.completions.create({
-        model,
-        messages,
-        tools: TOOL_DEFS,
-        tool_choice: isLastStep ? "none" : "auto",
-        temperature: 0.2,
-        max_tokens: 1600,
-      }, { timeout: stepTimeout }),
-      stepTimeout + 2000,
-    );
-
-    const choice = completion.choices[0];
-    const msg = choice?.message;
-    if (!msg) break;
-
-    const calls = msg.tool_calls ?? [];
-    if (!calls.length) {
-      reply = stripThinking(msg.content);
-      break;
-    }
-
-    // Tambahkan assistant message dengan tool_calls
-    messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
-
-    let stop = false;
-    for (const call of calls) {
-      if (call.type !== "function") continue;
-      const name = call.function.name;
-      let args: Record<string, unknown> = {};
-      try { args = call.function.arguments ? JSON.parse(call.function.arguments) : {}; } catch { args = {}; }
-      toolsUsed.push(name);
-      toolLog.push({ name, args });
-
-      if (name === "askUser") {
-        pendingQuestion = {
-          question: String(args.question ?? "Mohon konteks tambahan."),
-          options: Array.isArray(args.options) ? args.options.map(String).slice(0, 6) : undefined,
-        };
-        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ ok: true, note: "Pertanyaan diteruskan ke admin." }) });
-        stop = true;
-        continue;
-      }
-
-      const impl = TOOL_IMPL[name];
-      let result: unknown;
-      if (!impl) {
-        result = { error: `Tool ${name} tidak dikenal.` };
-      } else {
-        try {
-          result = await impl(ctx, args as never);
-        } catch (err) {
-          result = { error: err instanceof Error ? err.message : "Tool gagal." };
-        }
-      }
-      messages.push({ role: "tool", tool_call_id: call.id, content: clipToolResult(result) });
-    }
-
-    if (stop) {
-      reply = stripThinking(msg.content) || pendingQuestion?.question || "";
-      break;
-    }
-  }
-
-  if (!reply && !pendingQuestion) {
-    reply = (await forceFinalAnswer("Batas langkah tool tercapai.")) || `Saya sudah menjalankan ${toolsUsed.length} langkah (${Array.from(new Set(toolsUsed)).join(", ")}) tetapi belum sampai kesimpulan. Persempit permintaan (mis. sebutkan pertemuan atau nama mahasiswa) lalu kirim lagi.`;
-  }
-  if (attachments.length && !pendingQuestion) {
-    reply += `\n\nFile siap diunduh: ${attachments.map((a) => `[${a.name}](${a.url})`).join(", ")}`;
-  }
-
-  // Persist assistant reply + memory/summary
-  await prisma.$transaction([
-    prisma.adminChatMessage.create({
-      data: {
-        sessionId: session.id,
-        role: "assistant",
-        content: pendingQuestion ? `[Pertanyaan ke admin] ${pendingQuestion.question}` : reply,
-        toolCalls: toolLog.length || attachments.length ? ({ calls: toolLog, attachments } as unknown as object) : undefined,
-      },
-    }),
-    prisma.adminChatSession.update({
-      where: { id: session.id },
-      data: { memory: memory as object, summary: summary ?? undefined },
-    }),
-  ]);
-
-  return { sessionId: session.id, reply, pendingQuestion, toolsUsed, attachments, model };
+  const run = await createAgentRun({
+    ownerId: input.adminId,
+    kind: RUN_KIND,
+    sessionId: session.id,
+    model: input.deep ? AI_MODEL : AI_MODEL_FAST,
+    messages,
+    maxSteps: MAX_STEPS,
+    meta: { courseId: input.courseId, courseName: course.name },
+  });
+  return { runId: run.id, sessionId: session.id, resumed: false };
 }
+
+/** Kalimat progres manusiawi per tool. */
+function describeToolCall(name: string, args: Record<string, unknown>): string | null {
+  const s = (v: unknown, n = 60) => (typeof v === "string" ? v.slice(0, n) : "");
+  switch (name) {
+    case "getCourseOverview":
+    case "getCourseContext": return "Membaca konteks course: tugas, deskripsi, materi…";
+    case "listTugas": return "Mengambil daftar tugas…";
+    case "getTugasDetail": return "Membaca deskripsi & instruksi tugas…";
+    case "listSubmissions": return "Mengambil daftar pengumpulan…";
+    case "listMissing": return "Mencari mahasiswa yang belum mengumpulkan…";
+    case "analyzeLateness": return "Menganalisis keterlambatan pengumpulan…";
+    case "listStudents": return "Mengambil daftar mahasiswa…";
+    case "getStudentHistory": return "Membaca riwayat mahasiswa…";
+    case "getSubmissionContent": return "Membuka isi pengumpulan (file/ZIP)…";
+    case "readSubmissionFile": return `Membaca file ${s(args.path ?? args.file ?? args.fileName) || "pengumpulan"}…`;
+    case "setFeedback": return "Menyimpan nilai & feedback…";
+    case "rekapNilai": return "Merekap nilai…";
+    case "compareSimilarity": return "Membandingkan kemiripan antar pengumpulan…";
+    case "detectAI": return "Memeriksa indikasi teks buatan AI…";
+    case "getMaterials": return "Mengambil daftar materi pertemuan…";
+    case "getMaterialContent": return "Membaca isi materi (PPTX/PDF)…";
+    case "exportSubmissionDocx":
+    case "exportReportDocx": return "Menyusun dokumen Word…";
+    default: return null;
+  }
+}
+
+export const tugasAgentDriver: AgentDriver = {
+  kind: RUN_KIND,
+  tools: TOOL_DEFS,
+  askUserTool: "askUser",
+  temperature: 0.2,
+  maxTokens: 1600,
+  describeToolCall,
+  async systemPrompt(run) {
+    const session = await prisma.adminChatSession.findFirst({ where: { id: run.sessionId, userId: run.ownerId }, select: { memory: true, summary: true } });
+    const courseName = String(run.meta.courseName ?? "");
+    return systemPrompt(courseName, (session?.memory as Record<string, unknown> | null) ?? null, session?.summary ?? null);
+  },
+  async runTool(name, args, ctx: AgentToolContext) {
+    const impl = TOOL_IMPL[name];
+    if (!impl) return { error: `Tool ${name} tidak dikenal.` };
+    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments };
+    return impl(toolCtx, args as never);
+  },
+  async onFinish(run: AgentRunPublic) {
+    if (run.status === "cancelled" && !run.reply) return;
+    const content = run.pendingQuestion
+      ? `[Pertanyaan ke admin] ${run.pendingQuestion.question}`
+      : run.reply || (run.status === "failed" ? `Maaf, proses gagal: ${run.error || "kesalahan tak dikenal"}. Ketik "lanjut" untuk mencoba meneruskan.` : "");
+    if (!content) return;
+    const tools = run.toolsUsed.map((name) => ({ name }));
+    await prisma.adminChatMessage.create({
+      data: {
+        sessionId: run.sessionId,
+        role: "assistant",
+        content,
+        toolCalls: tools.length || run.attachments.length ? ({ calls: tools, attachments: run.attachments, runId: run.id } as unknown as object) : undefined,
+      },
+    });
+  },
+};

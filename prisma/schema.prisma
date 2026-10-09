@@ -834,3 +834,40 @@ model ReportMessage {
   @@index([sessionId, createdAt])
   @@map("report_messages")
 }
+
+/**
+ * Run agent tool-calling yang tahan lama & bisa dilanjutkan (asisten Laporan
+ * dan Asisten Dosen). `messages` = riwayat loop (tanpa system prompt),
+ * dipersist tiap langkah sehingga putus koneksi/restart tidak mengulang dari awal.
+ * status: queued (siap dilanjutkan) | running (sedang dikerjakan worker) |
+ *         paused (dihentikan user) | waiting_user (askUser) | done | failed | cancelled
+ */
+model AgentRun {
+  id              String    @id @default(cuid())
+  ownerId         String    @map("owner_id")
+  kind            String // "laporan" | "tugas"
+  sessionId       String    @map("session_id")
+  status          String    @default("queued")
+  model           String
+  stepCount       Int       @default(0) @map("step_count")
+  maxSteps        Int       @default(60) @map("max_steps")
+  messages        Json
+  meta            Json?
+  events          Json?
+  toolsUsed       Json?     @map("tools_used")
+  attachments     Json?
+  pendingQuestion Json?     @map("pending_question")
+  reply           String?   @db.Text
+  error           String?
+  control         String? // "pause" | "cancel" (permintaan user, dibaca worker)
+  lockToken       String?   @map("lock_token")
+  heartbeatAt     DateTime? @map("heartbeat_at")
+  startedAt       DateTime? @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  @@index([ownerId, kind, sessionId, status])
+  @@index([status, heartbeatAt])
+  @@map("agent_runs")
+}

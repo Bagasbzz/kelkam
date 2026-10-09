@@ -9,14 +9,19 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Download, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
+import { Bot, Download, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
 import Button from "@/components/ui/Button";
 import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
+import AgentRunProgress from "@/components/ui/AgentRunProgress";
+import { authenticatedFetch } from "@/components/AuthProvider";
+import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
 import {
+  assistantActiveRunUrl,
+  assistantRunUrl,
   deleteAssistantSession,
   fetchAssistantHistory,
   fetchAssistantSessions,
-  sendAssistantMessage,
+  openAssistantRunStream,
   type AssistantAttachment,
   type AssistantSessionSummary,
 } from "@/lib/client/tugas-api";
@@ -49,6 +54,15 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  // Agent run yang sedang di-stream
+  const [run, setRun] = useState<AgentRunPublic | null>(null);
+  const [runEvents, setRunEvents] = useState<AgentEvent[]>([]);
+  const [runStartedAt, setRunStartedAt] = useState(0);
+  const [lastBeatAt, setLastBeatAt] = useState(0);
+  const [runBusy, setRunBusy] = useState(false);
+  const runAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => runAbortRef.current?.abort(), []);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -63,9 +77,10 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, pendingQuestion]);
+  }, [messages, pendingQuestion, runEvents.length]);
 
   async function openSession(id: string) {
+    runAbortRef.current?.abort();
     setBusy(true);
     setError(null);
     try {
@@ -77,6 +92,17 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
           .filter((m) => m.role === "user" || m.role === "assistant")
           .map((m) => ({ id: m.id, role: m.role as "user" | "assistant", content: m.content })),
       );
+      // Auto-attach bila ada run yang masih berjalan (mis. setelah refresh / sinyal putus).
+      const active = await fetchActiveRun(assistantActiveRunUrl(courseId, id)).catch(() => null);
+      if (active && isRunLive(active.status)) {
+        setBusy(false);
+        void followAgentRun(
+          id,
+          () => authenticatedFetch(assistantRunUrl(courseId), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: active.id, action: "continue" }) }),
+          active,
+        );
+        return;
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat sesi.");
     } finally {
@@ -85,6 +111,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
   }
 
   function newSession() {
+    runAbortRef.current?.abort();
     setSessionId(null);
     setMessages([]);
     setPendingQuestion(null);
@@ -101,35 +128,82 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
     }
   }
 
-  async function send(text: string, answerTo?: string) {
-    const message = text.trim();
-    if (!message || busy) return;
+  /**
+   * Ikuti run sampai selesai (stream + sambung ulang otomatis), lalu tampilkan
+   * jawaban akhir / pertanyaan askUser.
+   */
+  async function followAgentRun(knownSessionId: string | null, first: () => Promise<Response>, initial?: AgentRunPublic) {
+    runAbortRef.current?.abort();
+    const controller = new AbortController();
+    runAbortRef.current = controller;
+    let runId = initial?.id ?? "";
+    let sid = knownSessionId;
     setBusy(true);
     setError(null);
-    setInput("");
-    const tempId = `tmp-${Date.now()}`;
-    setMessages((prev) => [
-      ...prev,
-      { id: tempId, role: "user", content: message },
-      { id: `${tempId}-a`, role: "assistant", content: "", pending: true },
-    ]);
+    setRun(initial ?? null);
+    setRunEvents(initial?.events ?? []);
+    setRunStartedAt(initial ? new Date(initial.createdAt).getTime() : Date.now());
+    setLastBeatAt(Date.now());
+    const placeholderId = `run-${Date.now()}`;
+    setMessages((prev) => [...prev, { id: placeholderId, role: "assistant", content: "", pending: true }]);
     try {
-      const r = await sendAssistantMessage(courseId, { message, sessionId, answerTo: answerTo ?? null, deep });
-      setSessionId(r.sessionId);
-      setPendingQuestion(r.pendingQuestion);
-      const replyText = r.reply || (r.pendingQuestion ? "" : "(tidak ada jawaban)");
+      const final = await followRun({
+        first: async () => {
+          const res = await first();
+          const headerSid = res.headers.get("x-session-id");
+          if (headerSid) { sid = headerSid; setSessionId(headerSid); }
+          return res;
+        },
+        continueUrl: assistantRunUrl(courseId),
+        runId: () => runId,
+        signal: controller.signal,
+        observer: {
+          onRun: (r) => { runId = r.id; if (!sid) { sid = r.sessionId; setSessionId(r.sessionId); } setRun(r); setRunEvents(r.events); setLastBeatAt(Date.now()); },
+          onEvent: (ev) => { setRunEvents((prev) => [...prev.slice(-80), ev]); setLastBeatAt(Date.now()); },
+          onHeartbeat: () => setLastBeatAt(Date.now()),
+        },
+      });
+      if (controller.signal.aborted) return;
+      const pq = final?.pendingQuestion ?? null;
+      setPendingQuestion(pq);
+      const replyText = final?.reply
+        || (final?.status === "failed" ? `Proses gagal: ${final.error || "kesalahan tak dikenal"}. Ketik "lanjut" untuk mencoba meneruskan.` : "")
+        || (final?.status === "paused" ? "Dijeda. Ketik \"lanjut\" untuk meneruskan dari langkah terakhir." : "")
+        || (final?.status === "cancelled" ? "Dihentikan." : "")
+        || (pq ? "" : "(tidak ada jawaban)");
       setMessages((prev) => {
-        const next: ChatMsg[] = prev.filter((m) => m.id !== `${tempId}-a`);
-        if (replyText) next.push({ id: `${tempId}-a`, role: "assistant", content: replyText, attachments: r.attachments ?? [], toolsUsed: r.toolsUsed });
+        const next = prev.filter((m) => m.id !== placeholderId);
+        if (replyText) next.push({ id: placeholderId, role: "assistant", content: replyText, attachments: final?.attachments ?? [], toolsUsed: final?.toolsUsed ?? [] });
         return next;
       });
       void loadSessions();
     } catch (err) {
-      setMessages((prev) => prev.filter((m) => m.id !== `${tempId}-a`));
+      if (controller.signal.aborted) return;
+      setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
       setError(err instanceof Error ? err.message : "Asisten gagal merespons.");
     } finally {
-      setBusy(false);
+      if (runAbortRef.current === controller) { setBusy(false); setRun(null); setRunEvents([]); }
     }
+  }
+
+  async function send(text: string, answerTo?: string) {
+    const message = text.trim();
+    if (!message || busy) return;
+    setInput("");
+    setMessages((prev) => [...prev, { id: `tmp-${Date.now()}`, role: "user", content: message }]);
+    const sid = sessionId;
+    await followAgentRun(sid, () => openAssistantRunStream(courseId, { message, sessionId: sid, answerTo: answerTo ?? null, deep }, runAbortRef.current?.signal));
+  }
+
+  async function pauseRun() {
+    if (!run) return;
+    setRunBusy(true);
+    try { await controlRun(assistantRunUrl(courseId), run.id, "pause"); } catch (err) { setError(err instanceof Error ? err.message : "Gagal menjeda."); } finally { setRunBusy(false); }
+  }
+  async function cancelRun() {
+    if (!run) return;
+    setRunBusy(true);
+    try { await controlRun(assistantRunUrl(courseId), run.id, "cancel"); } catch (err) { setError(err instanceof Error ? err.message : "Gagal menghentikan."); } finally { setRunBusy(false); }
   }
 
   function answerQuestion(answer: string) {
@@ -198,9 +272,9 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
           {messages.map((m) => (
             <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
               {m.role === "assistant" && <Bot className="mt-1 h-4 w-4 shrink-0 text-blue-600" />}
-              <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "whitespace-pre-wrap bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+              <div className={`${m.pending ? "w-full max-w-[85%]" : "max-w-[85%]"} rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "whitespace-pre-wrap bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
                 {m.pending ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                  <AgentRunProgress run={run} events={runEvents} startedAt={runStartedAt} lastBeatAt={lastBeatAt} onPause={pauseRun} onCancel={cancelRun} busy={runBusy} />
                 ) : m.role === "assistant" ? (
                   <>
                     <SimpleMarkdown text={m.content} />

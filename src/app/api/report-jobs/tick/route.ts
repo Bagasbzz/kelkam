@@ -17,6 +17,7 @@ import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { tickReportJobs } from "@/lib/report/report-jobs";
 import { tickImageJobs } from "@/lib/server/image-jobs";
+import { tickAgentRuns } from "@/lib/server/agent-runs/engine";
 
 export const maxDuration = 120;
 
@@ -42,6 +43,8 @@ async function handle(req: Request) {
     const result = await tickReportJobs(limit);
     // Image job yang tertinggal (proses restart) ikut dijalankan di sini, tanpa menunggu.
     void tickImageJobs(1).catch((err) => console.error("[tick] image jobs failed:", err));
+    // Agent run (chat AI) yang antre tanpa klien terhubung: lanjutkan 1 run per tick.
+    void tickAgentRuns(1, 80_000).catch((err) => console.error("[tick] agent runs failed:", err));
     return NextResponse.json({ success: true, ...result }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("API /api/report-jobs/tick failed:", error);

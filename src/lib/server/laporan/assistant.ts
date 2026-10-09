@@ -15,11 +15,13 @@ import { startImageJob } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
 import { startReportJob, getReportJob, type ReportJob } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
+import {
+  appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
+  type AgentDriver, type AgentRunPublic, type AgentToolContext,
+} from "@/lib/server/agent-runs/engine";
 
-const MAX_STEPS = 6;
 const HISTORY_LIMIT = 16;
-const STEP_TIMEOUT_MS = 50_000;
-const TURN_BUDGET_MS = 100_000;
+const MAX_STEPS = 60;
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -67,18 +69,6 @@ export interface AssistantTurnInput {
   ownerId: string;
   message: string;
   deep?: boolean;
-}
-
-export interface AssistantTurnResult {
-  reply: string;
-  toolsUsed: string[];
-  stage: string;
-  brief: ReportBrief;
-  plan: ReportPlan | null;
-  sources: VerifiedSource[];
-  jobId: string | null;
-  draft: string | null;
-  model: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,7 +352,7 @@ function splitSections(markdown: string) {
   return { lines, sections };
 }
 
-async function runTool(state: SessionState, name: string, args: Record<string, unknown>, events: string[]): Promise<unknown> {
+async function runTool(state: SessionState, name: string, args: Record<string, unknown>, events: string[], emit: (text: string) => void = () => {}): Promise<unknown> {
   switch (name) {
     case "updateBrief": {
       state.brief = mergeBrief(state.brief, args);
@@ -383,16 +373,19 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       const query = asStr(args.query, 300);
       if (!query) return { error: "Query kosong." };
       const limit = Math.min(12, Math.max(1, Number(args.limit) || 6));
+      emit(`Mencari literatur "${query}" di Semantic Scholar, OpenAlex, Crossref…`);
       const found = await findVerifiedSources(query, {
         limit,
         requirement: state.brief.journalRequirement,
         yearFrom: state.brief.yearFrom ?? null,
+        onProgress: emit,
       });
       const existing = args.replace ? [] : state.sources;
       const seen = new Set(existing.map((s) => s.id));
       const added = found.filter((s) => !seen.has(s.id));
       state.sources = [...existing, ...added].slice(0, 60);
       await persist(state);
+      emit(`Ditemukan ${added.length} sumber baru terverifikasi (total ${state.sources.length})${added[0] ? `: ${added[0].authors[0] || "?"} ${added[0].year || ""}` : ""}`);
       events.push(`Sumber "${query}": ${added.length} baru (${state.sources.length} total)`);
       return {
         ok: true,
@@ -414,6 +407,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       state.jobId = job.id;
       state.stage = "executing";
       await persist(state);
+      emit(`Job penulisan dibuat: ${job.totalSteps} bagian akan ditulis di background`);
       events.push(`Job penulisan dimulai (${job.totalSteps} langkah)`);
       return { ok: true, jobId: job.id, totalSteps: job.totalSteps };
     }
@@ -428,6 +422,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       const original = lines.slice(sec.start, sec.end).join("\n");
       const payload = buildProjectPayload({ id: state.id, brief: state.brief, plan: state.plan ?? { outline: [], diagrams: [], tables: [], sourceQueries: [] }, sources: state.sources, materials: state.materials });
       const planSec = state.plan?.outline.find((s) => s.title.toLowerCase() === sec.title.toLowerCase());
+      emit(`Menulis ulang bagian "${sec.title}"…`);
       const out = await generateChapter(payload, {
         index: idx,
         total: sections.length,
@@ -537,11 +532,47 @@ export async function executeSession(sessionId: string, ownerId: string, opts: {
   return { jobId: state.jobId as string, stage: state.stage };
 }
 
-export async function runReportAssistantTurn(input: AssistantTurnInput): Promise<AssistantTurnResult> {
+// ---------------------------------------------------------------------------
+// Agent run (tahan lama, bisa dilanjutkan) — lihat agent-runs/engine.ts
+// ---------------------------------------------------------------------------
+
+const RUN_KIND = "laporan" as const;
+
+/** Nama tool → kalimat progres yang dibaca user. */
+function describeToolCall(name: string, args: Record<string, unknown>): string | null {
+  switch (name) {
+    case "updateBrief": return "Mencatat kebutuhan laporan…";
+    case "proposePlan": return "Menyusun rencana outline, diagram, dan tabel…";
+    case "findSources": return `Mencari sumber: "${asStr(args.query, 80)}"`;
+    case "startExecution": return "Memulai penulisan penuh…";
+    case "reviseSection": return `Merevisi bagian "${asStr(args.sectionTitle, 80)}"…`;
+    case "generateFigure": return `Membuat gambar "${asStr(args.title, 80)}"…`;
+    default: return null;
+  }
+}
+
+/**
+ * Buat run baru untuk pesan user ini. Jika ada run yang dijeda/antre dan user
+ * mengetik "lanjut", run lama dilanjutkan (tidak mengulang dari awal).
+ * Return id run; route kemudian men-stream `serveAgentRun`.
+ */
+export async function startReportAssistantRun(input: AssistantTurnInput): Promise<{ runId: string; resumed: boolean }> {
   const row = await prisma.reportSession.findFirst({ where: { id: input.sessionId, ownerId: input.ownerId } });
   if (!row) throw new Error("Sesi tidak ditemukan.");
   const state = loadState(row);
   await syncJobIntoSession(state);
+
+  // Lanjutkan run yang belum selesai.
+  const active = await findActiveAgentRun(input.ownerId, RUN_KIND, state.id);
+  if (active) {
+    if (active.status === "running") return { runId: active.id, resumed: true };
+    if (active.status === "paused") await controlAgentRun(active.id, input.ownerId, "resume");
+    if (!isContinueKeyword(input.message)) {
+      await appendUserMessage(active.id, input.ownerId, input.message);
+      await prisma.reportMessage.create({ data: { sessionId: state.id, role: "user", content: input.message } });
+    }
+    return { runId: active.id, resumed: true };
+  }
 
   await prisma.reportMessage.create({ data: { sessionId: state.id, role: "user", content: input.message } });
 
@@ -558,55 +589,60 @@ export async function runReportAssistantTurn(input: AssistantTurnInput): Promise
     await prisma.reportSession.update({ where: { id: state.id }, data: { summary: state.summary } });
   }
 
-  const messages: Msg[] = [
-    { role: "system", content: systemPrompt({ stage: state.stage, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials, jobId: state.jobId, hasDraft: Boolean(state.draft), summary: state.summary }) },
-    ...recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content })),
-  ];
-
-  const model = input.deep ? AI_MODEL : AI_MODEL_FAST;
-  const toolsUsed: string[] = [];
-  const events: string[] = [];
-  let reply = "";
-  const startedAt = Date.now();
-
-  for (let step = 0; step < MAX_STEPS; step++) {
-    const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
-    if (remaining < 8_000) {
-      reply = `Giliran ini sudah menjalankan: ${events.join("; ") || toolsUsed.join(", ")}. Lanjutkan dengan pesan berikutnya.`;
-      break;
-    }
-    const stepTimeout = Math.min(STEP_TIMEOUT_MS, remaining - 3_000);
-    const completion = await withTimeout(
-      aiClient.chat.completions.create({ model, messages, tools: TOOL_DEFS, tool_choice: "auto", temperature: 0.3, max_tokens: 1800 }, { timeout: stepTimeout }),
-      stepTimeout + 2000,
-    );
-    const msg = completion.choices[0]?.message;
-    if (!msg) break;
-    const calls = msg.tool_calls ?? [];
-    if (!calls.length) { reply = stripThinking(msg.content); break; }
-
-    messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
-    for (const call of calls) {
-      if (call.type !== "function") continue;
-      let args: Record<string, unknown> = {};
-      try { args = call.function.arguments ? JSON.parse(call.function.arguments) : {}; } catch { args = {}; }
-      toolsUsed.push(call.function.name);
-      let result: unknown;
-      try { result = await runTool(state, call.function.name, args, events); }
-      catch (err) { result = { error: err instanceof Error ? err.message : "Tool gagal." }; }
-      const text = JSON.stringify(result);
-      messages.push({ role: "tool", tool_call_id: call.id, content: text.length > 12_000 ? `${text.slice(0, 12_000)}…` : text });
-    }
-    // Refresh state block agar langkah berikutnya melihat state terbaru.
-    messages[0] = { role: "system", content: systemPrompt({ stage: state.stage, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials, jobId: state.jobId, hasDraft: Boolean(state.draft), summary: state.summary }) };
-  }
-
-  if (!reply) reply = events.length ? `Selesai: ${events.join("; ")}.` : "Maaf, saya belum bisa merespons. Coba ulangi dengan kalimat lain.";
-
-  await prisma.reportMessage.create({ data: { sessionId: state.id, role: "assistant", content: reply, toolCalls: toolsUsed.length ? { tools: toolsUsed, events } : undefined } });
-
-  return { reply, toolsUsed, stage: state.stage, brief: state.brief, plan: state.plan, sources: state.sources, jobId: state.jobId, draft: state.draft, model };
+  const messages: Msg[] = recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content }));
+  const run = await createAgentRun({
+    ownerId: input.ownerId,
+    kind: RUN_KIND,
+    sessionId: state.id,
+    model: input.deep ? AI_MODEL : AI_MODEL_FAST,
+    messages,
+    maxSteps: MAX_STEPS,
+    meta: { events: [] },
+  });
+  return { runId: run.id, resumed: false };
 }
+
+async function loadSessionForRun(sessionId: string, ownerId: string): Promise<SessionState> {
+  const row = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId } });
+  if (!row) throw new Error("Sesi tidak ditemukan.");
+  const state = loadState(row);
+  await syncJobIntoSession(state);
+  return state;
+}
+
+export const laporanAgentDriver: AgentDriver = {
+  kind: RUN_KIND,
+  tools: TOOL_DEFS,
+  temperature: 0.3,
+  maxTokens: 1800,
+  describeToolCall,
+  async systemPrompt(run) {
+    const state = await loadSessionForRun(run.sessionId, run.ownerId);
+    return `${systemPrompt({ stage: state.stage, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials, jobId: state.jobId, hasDraft: Boolean(state.draft), summary: state.summary })}
+
+MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali (mis. findSources untuk tiap query, satu per satu) sampai pekerjaan benar-benar selesai. Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke user. Setelah semua selesai, tulis satu jawaban akhir yang ringkas. Jika user mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada.`;
+  },
+  async runTool(name, args, ctx: AgentToolContext) {
+    const state = await loadSessionForRun(ctx.run.sessionId, ctx.run.ownerId);
+    const events: string[] = [];
+    const result = await runTool(state, name, args, events, ctx.emit);
+    return result;
+  },
+  async onFinish(run: AgentRunPublic) {
+    if (run.status === "cancelled" && !run.reply) return;
+    const content = run.reply || (run.status === "failed" ? `Maaf, proses gagal: ${run.error || "kesalahan tak dikenal"}. Ketik "lanjut" untuk mencoba meneruskan.` : "");
+    if (!content) return;
+    const toolEvents = run.events.filter((e) => e.level === "tool").map((e) => e.text);
+    await prisma.reportMessage.create({
+      data: {
+        sessionId: run.sessionId,
+        role: "assistant",
+        content,
+        toolCalls: run.toolsUsed.length ? { tools: Array.from(new Set(run.toolsUsed)), events: toolEvents.slice(-20), runId: run.id } : undefined,
+      },
+    });
+  },
+};
 
 async function summarizeOld(messages: { role: string; content: string }[], prev: string | null): Promise<string> {
   const text = messages.map((m) => `${m.role}: ${m.content.slice(0, 600)}`).join("\n");
