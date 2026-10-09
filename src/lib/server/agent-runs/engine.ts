@@ -468,7 +468,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           ],
           temperature: 0.2,
           max_tokens: driver.maxTokens ?? 1800,
-        }, { timeout: 60_000 }),
+        }, { timeout: 60_000, maxRetries: 0 }),
         62_000,
       );
       return stripThinking(r.choices[0]?.message?.content);
@@ -513,7 +513,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
             tool_choice: isLast ? "none" : "auto",
             temperature: driver.temperature ?? 0.2,
             max_tokens: driver.maxTokens ?? 1800,
-          }, { timeout }),
+          }, { timeout, maxRetries: 0 }), // retry SDK tidur mengikuti retry-after → bisa makan seluruh segmen
           timeout + 2_000,
         );
         consecutiveErrors = 0;
@@ -528,12 +528,14 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           if (nextWait === 0) {
             emit(`Kuota model ${model} penuh (reset ±${Math.ceil(waitMs / 1000)}s) — beralih ke ${next}…`, "warn");
             model = next;
+            await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
             continue;
           }
           // Kedua model dibatasi → tunggu yang paling cepat pulih bila masih muat di segmen.
           const wait = Math.min(waitMs, nextWait) + 1_000;
           const left = opts.budgetMs - (Date.now() - startedAt) - MIN_STEP_BUDGET_MS;
           model = waitMs <= nextWait ? model : next;
+          await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
           if (wait <= Math.min(left, RATE_LIMIT_MAX_WAIT_MS)) {
             emit(`Kuota semua model penuh — menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut dengan ${model}…`, "warn");
             await sleep(wait);
