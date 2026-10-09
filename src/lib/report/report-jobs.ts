@@ -28,12 +28,33 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import {
   assembleReport,
+  auditChapter,
   compactProject,
   fallbackChapter,
   generateChapter,
   type ReportMode,
 } from "@/lib/report/generate-report";
+import { generateUmlForReport, isUmlDiagramType } from "@/lib/uml/pipeline";
+import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
+
+// ---------------------------------------------------------------------------
+// Jenis step. Disimpan lewat prefix `sectionId` supaya tidak perlu kolom baru:
+//   "diagram:<id>" → buat diagram UML via engine UML Builder (sebelum bab)
+//   "<sectionId>"  → tulis satu bab
+//   "audit:<idx>"  → audit & perbaiki bab pada step index <idx> (setelah semua bab)
+// ---------------------------------------------------------------------------
+
+export type ReportStepKind = "diagram" | "chapter" | "audit";
+
+const DIAGRAM_PREFIX = "diagram:";
+const AUDIT_PREFIX = "audit:";
+
+export function stepKind(sectionId: string | null | undefined): ReportStepKind {
+  if (sectionId?.startsWith(DIAGRAM_PREFIX)) return "diagram";
+  if (sectionId?.startsWith(AUDIT_PREFIX)) return "audit";
+  return "chapter";
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,6 +73,7 @@ export interface ReportJobEvent {
 export interface ReportJobStep {
   index: number;
   title: string;
+  kind: ReportStepKind;
   status: ReportStepStatus;
   attempts: number;
   error?: string;
@@ -182,6 +204,7 @@ function toPublic(row: JobRow): ReportJob {
     steps: row.steps.map((step) => ({
       index: step.index,
       title: step.title,
+      kind: stepKind(step.sectionId),
       status: step.status as ReportStepStatus,
       attempts: step.attempts,
       error: step.error || undefined,
@@ -299,6 +322,28 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
     { t: new Date().toISOString(), level: "info", msg: `Job dibuat: ${outline.length} bagian, mode ${mode}, ${sourceCount} sumber, ${compact.references.length} referensi, ${compact.diagrams.length} diagram` },
   ];
 
+  // Diagram UML yang bisa dibuat engine (flowchart/usecase/activity/sequence) jadi
+  // step tersendiri SEBELUM bab, supaya penulis bab sudah tahu isi diagramnya.
+  const umlDiagrams = compact.diagrams.filter((diagram) => isUmlDiagramType(diagram.type) && !diagram.approved && diagram.title);
+  const skipped = compact.diagrams.length - umlDiagrams.length;
+  if (skipped > 0) {
+    log.push({ t: new Date().toISOString(), level: "info", msg: `${skipped} diagram bertipe non-UML/sudah approved → tidak dibuat engine (tetap jadi placeholder)` });
+  }
+  const withAudit = mode === "lengkap";
+
+  type StepSeed = { sectionId: string | null; title: string };
+  const seeds: StepSeed[] = [
+    ...umlDiagrams.map((diagram, i) => ({ sectionId: `${DIAGRAM_PREFIX}${diagram.id || `diagram-${i + 1}`}`, title: `Diagram: ${diagram.title}` })),
+    ...outline.map((section, index) => ({ sectionId: section.id ?? `section-${index + 1}`, title: section.title || `Bagian ${index + 1}` })),
+  ];
+  if (withAudit) {
+    const chapterStart = umlDiagrams.length;
+    outline.forEach((section, index) => {
+      seeds.push({ sectionId: `${AUDIT_PREFIX}${chapterStart + index}`, title: `Audit: ${section.title || `Bagian ${index + 1}`}` });
+    });
+  }
+  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlDiagrams.length} diagram UML → ${outline.length} bab → ${withAudit ? `${outline.length} audit` : "tanpa audit (mode ringkas)"}` });
+
   const row = await prisma.reportJob.create({
     data: {
       id,
@@ -307,17 +352,17 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
       title,
       status: "queued",
       progress: 2,
-      stage: `Menyiapkan ${outline.length} bagian laporan`,
+      stage: `Menyiapkan ${seeds.length} langkah laporan`,
       mode,
-      totalSteps: outline.length,
+      totalSteps: seeds.length,
       payload: safeProject as object,
       log: log as unknown as Prisma.InputJsonValue,
       heartbeatAt: new Date(),
       steps: {
-        create: outline.map((section, index) => ({
+        create: seeds.map((seed, index) => ({
           index,
-          sectionId: section.id ?? null,
-          title: section.title || `Bagian ${index + 1}`,
+          sectionId: seed.sectionId,
+          title: seed.title,
           status: "queued",
         })),
       },
@@ -443,15 +488,20 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
 
   if (!next) return finalizeJob(row, ownerId, log);
 
+  const kind = stepKind(next.sectionId);
   const project = row.payload as unknown;
   const compact = compactProject(project);
-  const section = compact.outline[next.index] ?? {
+  // Bab dicari berdasarkan sectionId (index step tidak lagi = index outline karena ada step diagram).
+  const outlineIndex = compact.outline.findIndex((section, i) => (section.id ?? `section-${i + 1}`) === next.sectionId);
+  const section = compact.outline[outlineIndex] ?? {
     id: next.sectionId ?? undefined,
     title: next.title,
     purpose: "",
     requiredDiagrams: [],
   };
-  const previousSummaries = steps
+  const chapterSteps = steps.filter((step) => stepKind(step.sectionId) === "chapter");
+  const chapterPosition = Math.max(0, chapterSteps.findIndex((step) => step.id === next.id));
+  const previousSummaries = chapterSteps
     .filter((step) => step.index < next.index && step.summary)
     .map((step) => step.summary as string);
 
@@ -460,9 +510,10 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   const wasStale = next.status === "running";
 
   if (wasStale) {
-    log.push({ t: new Date().toISOString(), level: "warn", msg: `Bagian ${next.index + 1} terdeteksi macet (>${Math.round(STALE_STEP_MS / 1000)}s), diulang` });
+    log.push({ t: new Date().toISOString(), level: "warn", msg: `Langkah ${next.index + 1} terdeteksi macet (>${Math.round(STALE_STEP_MS / 1000)}s), diulang` });
   }
 
+  const verb = kind === "diagram" ? "Membuat" : kind === "audit" ? "Mengaudit" : "Menulis";
   await prisma.$transaction([
     prisma.reportJobStep.update({
       where: { id: next.id },
@@ -472,71 +523,86 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
       where: { id: row.id },
       data: {
         status: "running",
-        stage: `Menulis ${next.title} (${next.index + 1}/${row.totalSteps})`,
+        stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps})`,
         progress: progressFor(doneBefore, row.totalSteps),
       },
     }),
   ]);
-  await appendLog(row.id, log, "info", `Mulai bagian ${next.index + 1}/${row.totalSteps}: ${next.title}${attemptNo > 1 ? ` (percobaan ${attemptNo})` : ""}`);
+  await appendLog(row.id, log, "info", `Mulai langkah ${next.index + 1}/${row.totalSteps}: ${next.title}${attemptNo > 1 ? ` (percobaan ${attemptNo})` : ""}`);
 
-  // Event dari generateChapter dibuffer lalu ditulis sekali agar hemat query,
+  // Event dari generator dibuffer lalu ditulis berurutan agar hemat query,
   // tapi heartbeat tetap diperbarui supaya UI tahu proses hidup.
   let pendingWrite: Promise<unknown> = Promise.resolve();
   const onEvent = (message: string) => {
     pendingWrite = pendingWrite.then(() => appendLog(row.id, log, "info", `  ${message}`)).catch(() => undefined);
   };
 
+  const mode = (row.mode === "ringkas" ? "ringkas" : "lengkap") as ReportMode;
   const chapterInput = {
-    index: next.index,
-    total: row.totalSteps,
+    index: chapterPosition,
+    total: chapterSteps.length || 1,
     section,
     previousSummaries,
-    mode: (row.mode === "ringkas" ? "ringkas" : "lengkap") as ReportMode,
+    mode,
     onEvent,
   };
 
   const stepStarted = Date.now();
   try {
-    const chapter = await generateChapter(project, chapterInput);
+    if (kind === "diagram") {
+      await runDiagramStep(row, next, project, onEvent);
+    } else if (kind === "audit") {
+      await runAuditStep(row, next, steps, project, mode, onEvent);
+    } else {
+      const chapter = await generateChapter(project, chapterInput);
+      await pendingWrite;
+      const seconds = Math.round((Date.now() - stepStarted) / 1000);
+      await prisma.reportJobStep.update({
+        where: { id: next.id },
+        data: {
+          status: chapter.source === "ai" ? "done" : "fallback",
+          output: chapter.content,
+          summary: chapter.summary,
+          finishedAt: new Date(),
+          tokensUsed: chapter.tokensUsed ?? 0,
+        },
+      });
+      await appendLog(
+        row.id,
+        log,
+        chapter.source === "ai" ? "info" : "warn",
+        chapter.source === "ai"
+          ? `Selesai bab: ${countWords(chapter.content)} kata, ${chapter.tokensUsed ?? 0} token, ${seconds}s`
+          : `Bab "${next.title}" dipakai placeholder (output tidak memadai), ${seconds}s`,
+      );
+    }
     await pendingWrite;
-    const seconds = Math.round((Date.now() - stepStarted) / 1000);
-    await prisma.reportJobStep.update({
-      where: { id: next.id },
-      data: {
-        status: chapter.source === "ai" ? "done" : "fallback",
-        output: chapter.content,
-        summary: chapter.summary,
-        finishedAt: new Date(),
-        tokensUsed: chapter.tokensUsed ?? 0,
-      },
-    });
-    await appendLog(
-      row.id,
-      log,
-      chapter.source === "ai" ? "info" : "warn",
-      chapter.source === "ai"
-        ? `Selesai bagian ${next.index + 1}: ${countWords(chapter.content)} kata, ${chapter.tokensUsed ?? 0} token, ${seconds}s`
-        : `Bagian ${next.index + 1} dipakai placeholder (output tidak memadai), ${seconds}s`,
-    );
   } catch (error) {
     await pendingWrite;
     const message = error instanceof Error ? error.message.slice(0, 300) : "unknown";
     console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptNo}):`, message);
 
-    if (attemptNo >= MAX_STEP_ATTEMPTS) {
+    if (kind !== "chapter") {
+      // Diagram/audit tidak boleh menggagalkan laporan: tandai fallback, lanjut.
+      await prisma.reportJobStep.update({
+        where: { id: next.id },
+        data: { status: "fallback", error: message, finishedAt: new Date() },
+      });
+      await appendLog(row.id, log, "warn", `${next.title} gagal (${message}) → dilewati`);
+    } else if (attemptNo >= MAX_STEP_ATTEMPTS) {
       // Habis percobaan → fallback placeholder supaya laporan tetap utuh.
-      const fallback = fallbackChapter(chapterInput);
+      const fallback = fallbackChapter(chapterInput, project);
       await prisma.reportJobStep.update({
         where: { id: next.id },
         data: { status: "fallback", output: fallback.content, summary: fallback.summary, error: message, finishedAt: new Date() },
       });
-      await appendLog(row.id, log, "error", `Bagian ${next.index + 1} gagal ${MAX_STEP_ATTEMPTS}x (${message}) → placeholder, bisa diisi lewat revisi`);
+      await appendLog(row.id, log, "error", `Bab "${next.title}" gagal ${MAX_STEP_ATTEMPTS}x (${message}) → placeholder, bisa diisi lewat revisi`);
     } else {
       await prisma.reportJobStep.update({
         where: { id: next.id },
         data: { status: "failed", error: message },
       });
-      await appendLog(row.id, log, "warn", `Bagian ${next.index + 1} gagal (${message}), akan diulang`);
+      await appendLog(row.id, log, "warn", `Bab "${next.title}" gagal (${message}), akan diulang`);
     }
   }
 
@@ -551,7 +617,7 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
     where: { id: fresh.id },
     data: {
       progress: progressFor(doneCount, fresh.totalSteps),
-      stage: `${doneCount}/${fresh.totalSteps} bagian selesai`,
+      stage: `${doneCount}/${fresh.totalSteps} langkah selesai`,
       heartbeatAt: new Date(),
     },
     include: { steps: { orderBy: { index: "asc" } } },
@@ -559,11 +625,190 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   return toPublic(updated);
 }
 
+// ---------------------------------------------------------------------------
+// Step: diagram UML (engine UML Builder) → disimpan ke payload.diagrams[i]
+// ---------------------------------------------------------------------------
+
+/** Diagram hasil engine yang disimpan di payload job & disalin ke rencana sesi. */
+export interface ReportDiagramArtifact {
+  id: string;
+  title: string;
+  type: string;
+  purpose: string;
+  sectionId?: string;
+  status: "approved" | "planned" | "failed";
+  caption: string;
+  /** Data siap render DiagramCanvas / diagramToSvg. */
+  diagramData?: { nodes: unknown[]; edges: unknown[]; meta: { title: string; lanes: string[]; diagramType: string } };
+  /** SVG string hasil render server (dipakai dashboard untuk preview + rasterisasi PNG saat ekspor). */
+  svg?: string;
+  flowSummary?: string;
+  error?: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+function payloadDiagrams(payload: unknown): Record<string, unknown>[] {
+  if (!isRecord(payload) || !Array.isArray(payload.diagrams)) return [];
+  return payload.diagrams.filter(isRecord);
+}
+
+/** Ambil artefak diagram yang sudah jadi dari payload job (untuk sesi/dashboard). */
+export function extractDiagramArtifacts(payload: unknown): ReportDiagramArtifact[] {
+  return payloadDiagrams(payload)
+    .filter((diagram) => diagram.status === "approved" && isRecord(diagram.diagramData))
+    .map((diagram) => ({
+      id: String(diagram.id || ""),
+      title: String(diagram.title || ""),
+      type: String(diagram.type || "flowchart"),
+      purpose: String(diagram.purpose || ""),
+      sectionId: typeof diagram.sectionId === "string" ? diagram.sectionId : undefined,
+      status: "approved",
+      caption: String(diagram.caption || diagram.title || ""),
+      diagramData: diagram.diagramData as ReportDiagramArtifact["diagramData"],
+      svg: typeof diagram.svg === "string" ? diagram.svg : undefined,
+      flowSummary: typeof diagram.flowSummary === "string" ? diagram.flowSummary : undefined,
+    }));
+}
+
+async function runDiagramStep(
+  row: JobRow,
+  step: JobRow["steps"][number],
+  project: unknown,
+  emit: (message: string) => void,
+) {
+  const diagramId = (step.sectionId || "").slice(DIAGRAM_PREFIX.length);
+  const diagrams = payloadDiagrams(row.payload);
+  const target = diagrams.find((diagram) => diagram.id === diagramId);
+  if (!target) throw new Error(`Diagram ${diagramId} tidak ada di payload`);
+  const diagramType = String(target.type || "");
+  if (!isUmlDiagramType(diagramType)) throw new Error(`Tipe ${diagramType} tidak didukung engine UML`);
+
+  const compact = compactProject(project);
+  const sectionTitle = compact.outline.find((section) => section.id && section.id === target.sectionId)?.title;
+  const result = await generateUmlForReport({
+    diagramType,
+    title: String(target.title || diagramId),
+    purpose: String(target.purpose || target.caption || ""),
+    reportContext: {
+      reportTitle: compact.title,
+      topic: compact.topic,
+      projectType: compact.projectType,
+      section: sectionTitle,
+      materials: compact.sources.slice(0, 4).map((source) => `${source.title}: ${source.content.slice(0, 500)}`),
+    },
+    budgetMs: 80_000,
+    onStatus: emit,
+  });
+
+  const stepStarted = step.startedAt?.getTime() ?? Date.now();
+  if (!result.ok || !result.data) {
+    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error: result.error } : diagram));
+    await prisma.reportJob.update({
+      where: { id: row.id },
+      data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
+    });
+    await prisma.reportJobStep.update({
+      where: { id: step.id },
+      data: { status: "fallback", error: (result.error || "gagal").slice(0, 300), finishedAt: new Date() },
+    });
+    emit(`Diagram "${target.title}" tidak jadi dibuat: ${result.error || "gagal"} → bab tetap memakai placeholder`);
+    return;
+  }
+
+  const data = result.data;
+  const svg = diagramToSvg({ nodes: data.nodes, edges: data.edges, lanes: data.lanes, title: data.title });
+  const flowSummary = summarizeDiagram({ nodes: data.nodes, edges: data.edges, lanes: data.lanes });
+  const artifact: ReportDiagramArtifact = {
+    id: diagramId,
+    title: String(target.title || data.title),
+    type: diagramType,
+    purpose: String(target.purpose || ""),
+    sectionId: typeof target.sectionId === "string" ? target.sectionId : undefined,
+    status: "approved",
+    caption: String(target.caption || target.title || ""),
+    diagramData: { nodes: data.nodes, edges: data.edges, meta: data.meta },
+    svg,
+    flowSummary,
+  };
+  const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, ...artifact } : diagram));
+  await prisma.reportJob.update({
+    where: { id: row.id },
+    data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
+  });
+  await prisma.reportJobStep.update({
+    where: { id: step.id },
+    data: {
+      status: "done",
+      output: JSON.stringify({ id: diagramId, nodes: data.nodes.length, edges: data.edges.length, warnings: result.warnings }),
+      summary: flowSummary.slice(0, 400),
+      finishedAt: new Date(),
+    },
+  });
+  emit(`Diagram "${artifact.title}" selesai: ${data.nodes.length} elemen, ${data.edges.length} relasi${result.warnings.length ? `, ${result.warnings.length} peringatan` : ""}, ${Math.round((Date.now() - stepStarted) / 1000)}s`);
+}
+
+// ---------------------------------------------------------------------------
+// Step: audit satu bab (pass kedua) → output step audit = versi final bab
+// ---------------------------------------------------------------------------
+
+async function runAuditStep(
+  row: JobRow,
+  step: JobRow["steps"][number],
+  steps: JobRow["steps"],
+  project: unknown,
+  mode: ReportMode,
+  emit: (message: string) => void,
+) {
+  const targetIndex = Number((step.sectionId || "").slice(AUDIT_PREFIX.length));
+  const target = steps.find((item) => item.index === targetIndex);
+  if (!target || !target.output) {
+    await prisma.reportJobStep.update({ where: { id: step.id }, data: { status: "fallback", error: "bab belum ada", finishedAt: new Date() } });
+    emit("Bab target audit tidak punya output, dilewati");
+    return;
+  }
+  if (target.status === "fallback") {
+    await prisma.reportJobStep.update({ where: { id: step.id }, data: { status: "fallback", error: "bab placeholder", finishedAt: new Date() } });
+    emit("Bab target masih placeholder, audit dilewati");
+    return;
+  }
+  const chapterSteps = steps.filter((item) => stepKind(item.sectionId) === "chapter");
+  const position = Math.max(0, chapterSteps.findIndex((item) => item.id === target.id));
+  const result = await auditChapter(project, {
+    content: target.output,
+    sectionTitle: target.title,
+    index: position,
+    total: chapterSteps.length || 1,
+    mode,
+    onEvent: emit,
+  });
+  await prisma.reportJobStep.update({
+    where: { id: step.id },
+    data: {
+      status: result.changed ? "done" : "fallback",
+      output: result.changed ? result.content : null,
+      summary: result.issues.join("; ").slice(0, 400) || null,
+      tokensUsed: result.tokensUsed,
+      error: result.changed ? null : "tidak ada perubahan",
+      finishedAt: new Date(),
+    },
+  });
+}
+
 async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]): Promise<ReportJob> {
-  const chapters = row.steps
+  // Bab final = output audit (bila ada & berhasil) atau output bab.
+  const auditByTarget = new Map<number, string>();
+  for (const step of row.steps) {
+    if (stepKind(step.sectionId) === "audit" && step.status === "done" && step.output) {
+      auditByTarget.set(Number((step.sectionId || "").slice(AUDIT_PREFIX.length)), step.output);
+    }
+  }
+  const chapterSteps = row.steps
+    .filter((step) => stepKind(step.sectionId) === "chapter")
+    .sort((a, b) => a.index - b.index);
+  const chapters = chapterSteps
     .filter((step) => isStepFinished(step.status) && step.output)
-    .sort((a, b) => a.index - b.index)
-    .map((step) => step.output as string);
+    .map((step) => auditByTarget.get(step.index) ?? (step.output as string));
 
   if (!chapters.length) {
     await appendLog(row.id, log, "error", "Tidak ada bagian yang berhasil ditulis", {
@@ -576,7 +821,9 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
     return toPublic(failed as JobRow);
   }
 
-  const fallbackCount = row.steps.filter((step) => step.status === "fallback").length;
+  const fallbackCount = chapterSteps.filter((step) => step.status === "fallback").length;
+  const diagramsDone = extractDiagramArtifacts(row.payload).length;
+  const auditedCount = auditByTarget.size;
   const result = assembleReport(row.payload, chapters);
   const totalWords = countWords(result);
   const totalTokens = row.steps.reduce((acc, step) => acc + step.tokensUsed, 0);
@@ -584,7 +831,7 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
     row.id,
     log,
     fallbackCount ? "warn" : "info",
-    `Laporan dirakit: ${chapters.length} bagian, ±${totalWords} kata, ${totalTokens} token${fallbackCount ? `, ${fallbackCount} bagian placeholder` : ""}`,
+    `Laporan dirakit: ${chapters.length} bab, ${diagramsDone} diagram UML, ${auditedCount} bab diaudit, ±${totalWords} kata, ${totalTokens} token${fallbackCount ? `, ${fallbackCount} bab placeholder` : ""}`,
     {
       status: "done",
       progress: 100,

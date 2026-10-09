@@ -45,6 +45,35 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
+/** Rasterisasi SVG (string) → PNG bytes via canvas, skala 2x agar tajam di DOCX. */
+async function svgToPng(svg: string, scale = 2): Promise<Uint8Array> {
+  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error("SVG tidak bisa dimuat"));
+      el.src = url;
+    });
+    const width = Math.max(1, Math.round((img.naturalWidth || 800) * scale));
+    const height = Math.max(1, Math.round((img.naturalHeight || 600) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas tidak tersedia");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!png) throw new Error("Gagal encode PNG");
+    return new Uint8Array(await png.arrayBuffer());
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export default function LaporanPage() {
   const { user, loading: authLoading, openLoginModal } = useAuth();
 
@@ -139,6 +168,14 @@ export default function LaporanPage() {
   }, [detail?.jobId, job?.id]);
 
   useEffect(() => () => { abortRef.current?.abort(); runAbortRef.current?.abort(); }, []);
+
+  // Selama job jalan, muat ulang sesi tiap step selesai agar diagram UML hasil engine tampil progresif.
+  const jobDoneSteps = job?.doneSteps ?? 0;
+  useEffect(() => {
+    if (!activeId || !job || (job.status !== "running" && job.status !== "queued") || jobDoneSteps === 0) return;
+    loadDetail(activeId).catch(() => { /* abaikan */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobDoneSteps]);
 
   // ------------------------------------------------------ figure polling
   const figuresPending = figures.some((f) => f.status === "queued" || f.status === "running");
@@ -292,9 +329,33 @@ export default function LaporanPage() {
           if (res.ok) images[f.title.trim().toLowerCase()] = new Uint8Array(await res.arrayBuffer());
         } catch { /* gambar dilewati, placeholder tetap tercetak */ }
       }));
-      await exportMarkdownToDocx(detail.draft, detail.title || detail.brief.title || "Laporan", { profile: DOCX_PRESETS[preset].profile, images });
+      // Diagram UML dari engine (SVG) → PNG
+      await Promise.all((detail.plan?.diagrams ?? []).filter((d) => d.svg).map(async (d) => {
+        try { images[d.title.trim().toLowerCase()] = await svgToPng(d.svg!); } catch { /* placeholder tetap tercetak */ }
+      }));
+      const title = detail.title || detail.brief.title || "Laporan";
+      const cover = {
+        title,
+        subtitle: detail.brief.documentType ? `${detail.brief.documentType}${detail.brief.course ? ` — ${detail.brief.course}` : ""}` : undefined,
+        author: user?.name || undefined,
+        institution: detail.brief.institution || undefined,
+        year: String(new Date().getFullYear()),
+      };
+      await exportMarkdownToDocx(detail.draft, title, { profile: { ...DOCX_PRESETS[preset].profile, cover }, images });
     } catch (e) { setError(getErrorMessage(e)); }
     finally { setExporting(false); }
+  };
+
+  /** Buka diagram hasil engine di UML Builder untuk diedit. */
+  const openInUmlBuilder = (d: NonNullable<ReportPlan["diagrams"]>[number]) => {
+    localStorage.setItem("uml-ai-prefill", JSON.stringify({
+      prompt: `Buat ${d.type} berjudul "${d.title}". Tujuan: ${d.purpose}`,
+      diagramType: d.type,
+      title: d.title,
+      reportDiagramId: d.id,
+      diagramData: d.diagramData ? { nodes: d.diagramData.nodes, edges: d.diagramData.edges, meta: { title: d.diagramData.meta?.title || d.title, lanes: d.diagramData.meta?.lanes || [] } } : undefined,
+    }));
+    window.open("/uml-builder", "_blank", "noopener");
   };
 
   const draftSections = useMemo(() => (detail?.draft ? detail.draft.split("\n").filter((l) => /^#{1,3}\s/.test(l)).map((l) => l.replace(/^#+\s*/, "")) : []), [detail?.draft]);
@@ -432,7 +493,7 @@ export default function LaporanPage() {
                       {detail.plan.diagrams.length > 0 && (
                         <div>
                           <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan.diagrams.length})</div>
-                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type})</span> — {d.purpose}</li>)}</ul>
+                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type}{d.svg ? " · sudah dibuat" : ""})</span> — {d.purpose}</li>)}</ul>
                         </div>
                       )}
                       {detail.plan.tables.length > 0 && (
@@ -484,8 +545,33 @@ export default function LaporanPage() {
 
               {detail && tab === "gambar" && (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-500">Minta di chat, mis. “buatkan gambar arsitektur sistem untuk BAB III”. Gambar dibuat di background (±2 menit) dan otomatis masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code> di draft. Untuk UML pakai UML Builder.</p>
-                  {!figures.length && <p className="text-xs text-slate-500">Belum ada gambar.</p>}
+                  <p className="text-[11px] text-slate-500">Minta di chat, mis. “buatkan gambar arsitektur sistem untuk BAB III”. Gambar dibuat di background (±2 menit) dan otomatis masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code> di draft. Diagram UML dari rencana dibuat otomatis oleh engine UML Builder saat eksekusi.</p>
+                  {(detail.plan?.diagrams ?? []).length > 0 && (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram UML ({detail.plan!.diagrams.length})</div>
+                      {detail.plan!.diagrams.map((d) => (
+                        <div key={d.id} className="rounded-xl border border-slate-100 p-2 text-xs">
+                          <div className="flex items-center gap-2">
+                            {d.svg ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : d.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <span className="h-3.5 w-3.5 rounded-full bg-slate-300" />}
+                            <div className="min-w-0 flex-1 truncate font-semibold">{d.title} <span className="font-normal text-slate-500">({d.type})</span></div>
+                            <span className="text-[10px] text-slate-500">{d.svg ? "selesai" : d.status === "failed" ? "gagal" : jobActive ? "dibuat…" : "belum dibuat"}</span>
+                          </div>
+                          {d.svg && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.svg)}`} alt={d.title} className="mt-2 w-full rounded-lg border border-slate-100 bg-white" />
+                          )}
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="text-[10px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
+                            {(d.diagramData || !jobActive) && (
+                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3 w-3" /> Buka di UML Builder</button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!figures.length && !(detail.plan?.diagrams ?? []).length && <p className="text-xs text-slate-500">Belum ada gambar.</p>}
+                  {figures.length > 0 && <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><ImageIcon className="h-3.5 w-3.5" /> Ilustrasi AI ({figures.length})</div>}
                   {figures.map((f) => (
                     <div key={f.id} className="rounded-xl border border-slate-100 p-2 text-xs">
                       <div className="flex items-center gap-2">

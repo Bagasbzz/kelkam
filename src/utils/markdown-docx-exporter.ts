@@ -19,22 +19,29 @@
 import {
   AlignmentType,
   BorderStyle,
+  Bookmark,
   Document,
   Footer,
   HeadingLevel,
   ImageRun,
+  LeaderType,
   LevelFormat,
+  NumberFormat,
   Packer,
   PageBreak,
   PageNumber,
+  PageReference,
   Paragraph,
   Table,
   TableCell,
   TableOfContents,
   TableRow,
+  TabStopPosition,
+  TabStopType,
   TextRun,
   WidthType,
   convertMillimetersToTwip,
+  type ISectionOptions,
 } from "docx";
 import { saveAs } from "file-saver";
 
@@ -91,9 +98,14 @@ type Block =
   | { type: "paragraph"; text: string }
   | { type: "quote"; text: string }
   | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "table"; rows: string[][] }
+  | { type: "table"; rows: string[][]; title?: string }
   | { type: "figure"; title: string; caption: string }
   | { type: "pagebreak" };
+
+/** Baris `**Tabel: Judul**` tepat sebelum tabel → judul tabel (bukan paragraf). */
+const TABLE_TITLE_RE = /^\*\*\s*Tabel\s*[:.]\s*(.+?)\s*\*\*\s*$/i;
+/** `[Gambar: Judul - keterangan]`; pemisah " - " terakhir, judul boleh mengandung tanda hubung. */
+const FIGURE_RE = /^\[Gambar:\s*(.+?)\]\s*(.*)$/i;
 
 function sanitizeFileName(value: string) {
   return String(value || "laporan-akademik")
@@ -125,10 +137,14 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     const text = paragraph.join(" ").trim();
     paragraph = [];
     // Placeholder gambar sebagai blok tersendiri
-    const figure = text.match(/^\[Gambar:\s*([^\]-]+?)(?:\s*-\s*([^\]]*))?\]\s*(.*)$/i);
+    const figure = text.match(FIGURE_RE);
     if (figure) {
-      const captionText = (text.replace(figure[0], "") || figure[3] || "").replace(/^caption:\s*/i, "").trim();
-      blocks.push({ type: "figure", title: figure[1].trim(), caption: captionText || figure[1].trim() });
+      const inner = figure[1].trim();
+      const sep = inner.lastIndexOf(" - ");
+      const title = (sep > 0 ? inner.slice(0, sep) : inner).trim();
+      const captionFromInner = sep > 0 ? inner.slice(sep + 3).trim() : "";
+      const trailing = (figure[2] || "").replace(/^caption:\s*/i, "").trim();
+      blocks.push({ type: "figure", title, caption: captionFromInner || trailing || title });
       return;
     }
     blocks.push({ type: "paragraph", text });
@@ -136,8 +152,16 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
   const flushTable = () => {
     if (!table.length) return;
     const rows = parseMarkdownTable(table);
-    if (rows) blocks.push({ type: "table", rows });
-    else paragraph.push(...table);
+    if (rows) {
+      // Judul tabel dari paragraf `**Tabel: ...**` tepat sebelumnya
+      let title: string | undefined;
+      const prev = blocks[blocks.length - 1];
+      if (prev && prev.type === "paragraph") {
+        const m = prev.text.match(TABLE_TITLE_RE);
+        if (m) { title = m[1]; blocks.pop(); }
+      }
+      blocks.push({ type: "table", rows, title });
+    } else paragraph.push(...table);
     table = [];
   };
   const flushList = () => {
@@ -151,6 +175,9 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
 
     if (line.trim().startsWith("|")) { flushParagraph(); flushList(); table.push(line.trim()); continue; }
     flushTable();
+
+    // Judul tabel berdiri sendiri → paragraf tersendiri agar bisa diambil flushTable
+    if (TABLE_TITLE_RE.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "paragraph", text: line.trim() }); continue; }
 
     if (/^(---|\*\*\*|<!--\s*pagebreak\s*-->)\s*$/.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "pagebreak" }); continue; }
 
@@ -189,22 +216,81 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
 // Inline formatting → TextRun[]
 // ---------------------------------------------------------------------------
 
-function inlineRuns(text: string, base: { font: string; size: number; bold?: boolean; italics?: boolean; color?: string }) {
+/**
+ * Istilah asing yang lazim di laporan TI berbahasa Indonesia dan wajib italic
+ * (PUEBI). Hanya dipakai pada teks polos (bukan yang sudah bold/italic/code).
+ * Kata yang sudah diserap KBBI (data, internet, komputer, aplikasi) tidak masuk.
+ */
+const FOREIGN_TERMS = [
+  "software", "hardware", "database", "framework", "user", "users", "interface", "online", "offline",
+  "website", "web", "server", "client", "cloud", "backend", "frontend", "back-end", "front-end", "input",
+  "output", "feedback", "stakeholder", "stakeholders", "smartphone", "mobile", "platform", "tools", "tool",
+  "device", "login", "logout", "download", "upload", "real-time", "realtime", "dashboard", "prototype",
+  "prototyping", "black box", "white box", "use case", "flowchart", "activity diagram", "sequence diagram",
+  "class diagram", "et al.", "e-learning", "deep learning", "machine learning", "artificial intelligence",
+  "dataset", "training", "testing", "library", "browser", "update", "bug", "error", "e-commerce", "startup",
+  "internet of things", "big data", "open source", "username", "password", "requirement", "requirements",
+  "waterfall", "agile", "scrum", "sprint", "deployment", "hosting", "domain", "responsive", "usability",
+  "user experience", "user interface", "end user", "end-user", "query", "request", "response", "endpoint",
+  "token", "session", "cache", "log", "logging", "monitoring", "workflow", "gap", "trend", "benchmark",
+  "survey", "sampling", "purposive sampling", "random sampling", "cross-sectional", "mixed method",
+  "mixed methods", "literature review", "state of the art", "novelty", "insight", "overview", "chatbot",
+  "notification", "push notification", "cloud computing", "smart", "wireless", "gateway", "firmware",
+  "sensor", "microcontroller", "single page application", "full stack", "full-stack", "source code", "coding",
+  "debugging", "unit testing", "integration testing", "user acceptance testing", "form", "field", "search",
+  "filter", "sorting", "export", "import", "preview", "draft", "template", "layout", "wireframe", "mockup",
+];
+const FOREIGN_RE = new RegExp(
+  `(?<![\\w-])(${[...FOREIGN_TERMS].sort((a, b) => b.length - a.length).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\w-])`,
+  "gi",
+);
+
+/** Pecah teks polos menjadi run, bagian istilah asing di-italic. */
+function plainRuns(text: string, base: { font: string; size: number; bold?: boolean; italics?: boolean; color?: string }, autoItalic: boolean) {
+  if (!autoItalic || base.italics) return [new TextRun({ ...base, text })];
+  const runs: TextRun[] = [];
+  let last = 0;
+  for (const match of text.matchAll(FOREIGN_RE)) {
+    const index = match.index ?? 0;
+    if (index > last) runs.push(new TextRun({ ...base, text: text.slice(last, index) }));
+    runs.push(new TextRun({ ...base, text: match[0], italics: true }));
+    last = index + match[0].length;
+  }
+  if (last < text.length) runs.push(new TextRun({ ...base, text: text.slice(last) }));
+  return runs.length ? runs : [new TextRun({ ...base, text })];
+}
+
+function inlineRuns(text: string, base: { font: string; size: number; bold?: boolean; italics?: boolean; color?: string }, autoItalic = false) {
   const runs: TextRun[] = [];
   const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|_[^_]+_)/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
-    if (index > last) runs.push(new TextRun({ ...base, text: text.slice(last, index) }));
+    if (index > last) runs.push(...plainRuns(text.slice(last, index), base, autoItalic));
     const token = match[0];
     if (token.startsWith("**")) runs.push(new TextRun({ ...base, text: token.slice(2, -2), bold: true }));
     else if (token.startsWith("`")) runs.push(new TextRun({ ...base, text: token.slice(1, -1), font: "Consolas" }));
     else runs.push(new TextRun({ ...base, text: token.slice(1, -1), italics: true }));
     last = index + token.length;
   }
-  if (last < text.length) runs.push(new TextRun({ ...base, text: text.slice(last) }));
+  if (last < text.length) runs.push(...plainRuns(text.slice(last), base, autoItalic));
   return runs.length ? runs : [new TextRun({ ...base, text })];
 }
+
+/** Ukuran PNG dari header IHDR; fallback 4:3 bila bukan PNG. */
+function pngSize(data: Uint8Array): { width: number; height: number } {
+  const isPng = data.length > 24 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47;
+  if (!isPng) return { width: 4, height: 3 };
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const width = view.getUint32(16);
+  const height = view.getUint32(20);
+  return width > 0 && height > 0 ? { width, height } : { width: 4, height: 3 };
+}
+
+const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV"];
+/** Heading level-1 yang bukan bab bernomor (bagian depan/belakang). */
+const NON_CHAPTER_RE = /^(daftar pustaka|referensi|bibliograf|lampiran|abstrak|abstract|kata pengantar|ringkasan|daftar isi|daftar gambar|daftar tabel|halaman|lembar|glosarium)/i;
+const BIBLIOGRAPHY_RE = /^(daftar pustaka|referensi|bibliograf)/i;
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -214,71 +300,140 @@ export interface ExportOptions {
   profile?: Partial<DocxFormatProfile>;
   /** key: judul gambar (lowercase, trimmed) → PNG bytes */
   images?: Record<string, Uint8Array | ArrayBuffer>;
+  /** Italic otomatis untuk istilah asing umum (default true). */
+  autoItalic?: boolean;
 }
 
 export async function buildDocxBlob(markdown: string, options: ExportOptions = {}) {
   const profile: DocxFormatProfile = { ...DEFAULT_DOCX_PROFILE, ...options.profile, margin: { ...DEFAULT_DOCX_PROFILE.margin, ...options.profile?.margin } };
   const images = options.images || {};
+  const autoItalic = options.autoItalic !== false;
   const sizeHalfPt = Math.round(profile.fontSize * 2);
   const lineTwips = Math.round(240 * profile.lineSpacing);
   const base = { font: profile.font, size: sizeHalfPt };
+  const maxImageWidthPx = 480;
 
   let tableCounter = 0;
   let figureCounter = 0;
+  let chapterCounter = 0;
+  let subChapterCounter = 0;
   let seenH1 = false;
+  let inBibliography = false;
   const blocks = parseMarkdownToBlocks(markdown);
 
-  // Judul H1 pertama dipakai untuk cover/judul dokumen
+  // Daftar gambar/tabel: bookmark pada caption → PAGEREF di bagian depan.
+  const figureEntries: Array<{ label: string; bookmark: string }> = [];
+  const tableEntries: Array<{ label: string; bookmark: string }> = [];
+
+  // Judul H1 pertama di markdown dianggap judul dokumen (dipakai cover bila ada)
+  // dan tidak dirender ulang sebagai bab bila cover aktif.
+  const firstHeading = blocks.find((b) => b.type === "heading");
+  const docTitleIndex = firstHeading && firstHeading.type === "heading" && firstHeading.level === 1 ? blocks.indexOf(firstHeading) : -1;
+
+  const front: Array<Paragraph | Table | TableOfContents> = [];
   const children: Array<Paragraph | Table | TableOfContents> = [];
 
   if (profile.cover) {
     const cover = profile.cover;
     const centered = (text: string, size: number, bold = false, spacingBefore = 0) => new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { before: spacingBefore, after: 200 },
+      spacing: { before: spacingBefore, after: 200, line: 360 },
       children: [new TextRun({ text, bold, size, font: profile.font })],
     });
-    children.push(centered(cover.title, sizeHalfPt + 8, true, 2400));
-    if (cover.subtitle) children.push(centered(cover.subtitle, sizeHalfPt + 2));
-    if (cover.author) children.push(centered(cover.author, sizeHalfPt, true, 2400));
-    if (cover.institution) children.push(centered(cover.institution, sizeHalfPt, true, 1800));
-    if (cover.year) children.push(centered(cover.year, sizeHalfPt));
-    children.push(new Paragraph({ children: [new PageBreak()] }));
+    const title = cover.title || (docTitleIndex >= 0 && blocks[docTitleIndex].type === "heading" ? (blocks[docTitleIndex] as { text: string }).text : "LAPORAN");
+    if (cover.subtitle) front.push(centered(cover.subtitle.toUpperCase(), sizeHalfPt + 2, true, 1200));
+    front.push(centered(title.toUpperCase(), sizeHalfPt + 8, true, cover.subtitle ? 600 : 1800));
+    if (cover.author) {
+      front.push(centered("Disusun oleh:", sizeHalfPt, false, 2400));
+      front.push(centered(cover.author, sizeHalfPt, true));
+    }
+    if (cover.institution) front.push(centered(cover.institution.toUpperCase(), sizeHalfPt + 2, true, 2400));
+    if (cover.year) front.push(centered(cover.year, sizeHalfPt, true, cover.institution ? 0 : 2400));
   }
+
+  const frontTitle = (text: string) => new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { after: 360, line: lineTwips },
+    // Halaman baru untuk tiap daftar; bila tanpa cover, daftar pertama mulai di halaman 1
+    pageBreakBefore: front.length > 0,
+    children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 4 })],
+  });
+  const listEntry = (label: string, bookmark: string) => new Paragraph({
+    tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX, leader: LeaderType.DOT }],
+    spacing: { after: 80, line: lineTwips },
+    indent: { left: convertMillimetersToTwip(12), hanging: convertMillimetersToTwip(12) },
+    children: [new TextRun({ ...base, text: label }), new TextRun({ ...base, children: ["\t"] }), new PageReference(bookmark, { hyperlink: true })],
+  });
 
   if (profile.includeToc) {
-    children.push(new Paragraph({
-      heading: HeadingLevel.HEADING_1,
-      alignment: AlignmentType.CENTER,
-      spacing: { after: 240 },
-      children: [new TextRun({ text: "DAFTAR ISI", bold: true, font: profile.font, size: sizeHalfPt + 4 })],
-    }));
-    children.push(new TableOfContents("Daftar Isi", { hyperlink: true, headingStyleRange: "1-3" }));
-    children.push(new Paragraph({ children: [new PageBreak()] }));
+    front.push(frontTitle("DAFTAR ISI"));
+    front.push(new TableOfContents("Daftar Isi", { hyperlink: true, headingStyleRange: "1-3" }));
   }
 
-  for (const block of blocks) {
+  const headingBase = (level: number, text: string) => new Paragraph({
+    heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4][level - 1],
+    alignment: level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
+    spacing: { before: level === 1 ? 0 : 360, after: level === 1 ? 360 : 200, line: lineTwips },
+    pageBreakBefore: level === 1 && seenH1,
+    keepNext: true,
+    children: [new TextRun({ text, bold: true, font: profile.font, size: level === 1 ? sizeHalfPt + 4 : sizeHalfPt, color: "000000" })],
+  });
+
+  const captionParagraph = (label: string, bookmark: string) => new Paragraph({
+    alignment: AlignmentType.CENTER,
+    spacing: { before: 80, after: 240, line: lineTwips },
+    children: [new Bookmark({ id: bookmark, children: [new TextRun({ text: label, bold: true, font: profile.font, size: sizeHalfPt - 2 })] })],
+  });
+
+  blocks.forEach((block, blockIndex) => {
+    if (blockIndex === docTitleIndex && profile.cover) return; // judul dokumen sudah di cover
     switch (block.type) {
       case "heading": {
         const level = Math.min(block.level, 4);
-        const headingLevel = [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4][level - 1];
-        children.push(new Paragraph({
-          heading: headingLevel,
-          alignment: level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
-          spacing: { before: level === 1 ? 0 : 360, after: 200, line: lineTwips },
-          pageBreakBefore: level === 1 && seenH1,
-          children: [new TextRun({ text: level === 1 ? block.text.toUpperCase() : block.text, bold: true, font: profile.font, size: level === 1 ? sizeHalfPt + 4 : sizeHalfPt, color: "000000" })],
-        }));
-        if (level === 1) seenH1 = true;
+        let text = block.text.replace(/^\*\*|\*\*$/g, "").trim();
+        if (level === 1) {
+          inBibliography = BIBLIOGRAPHY_RE.test(text);
+          subChapterCounter = 0;
+          const alreadyNumbered = /^bab\s+[ivxlc\d]+/i.test(text);
+          if (!NON_CHAPTER_RE.test(text) && !alreadyNumbered && blockIndex !== docTitleIndex) {
+            chapterCounter += 1;
+            text = `BAB ${ROMAN[chapterCounter - 1] || chapterCounter}\n${text}`;
+          }
+          const [first, ...rest] = text.toUpperCase().split("\n");
+          const para = headingBase(1, first);
+          if (rest.length) {
+            para.addChildElement(new TextRun({ text: rest.join(" "), bold: true, font: profile.font, size: sizeHalfPt + 4, color: "000000", break: 1 }));
+          }
+          children.push(para);
+          seenH1 = true;
+        } else {
+          // Subbab tanpa nomor → "N.M Judul" mengikuti nomor bab aktif.
+          const hasNumber = /^\d+(\.\d+)*\.?\s/.test(text);
+          if (level === 2 && !hasNumber && chapterCounter > 0 && !inBibliography) {
+            subChapterCounter += 1;
+            text = `${chapterCounter}.${subChapterCounter} ${text}`;
+          }
+          children.push(headingBase(level, text));
+        }
         break;
       }
       case "paragraph":
-        children.push(new Paragraph({
-          alignment: AlignmentType.JUSTIFIED,
-          spacing: { after: 120, line: lineTwips },
-          indent: { firstLine: convertMillimetersToTwip(12.5) },
-          children: inlineRuns(block.text, base),
-        }));
+        if (inBibliography) {
+          // Entri daftar pustaka: hanging indent, tanpa first-line indent, tanpa auto-italic.
+          children.push(new Paragraph({
+            alignment: AlignmentType.JUSTIFIED,
+            spacing: { after: 240, line: lineTwips },
+            indent: { left: convertMillimetersToTwip(12.5), hanging: convertMillimetersToTwip(12.5) },
+            children: inlineRuns(block.text, base, false),
+          }));
+        } else {
+          children.push(new Paragraph({
+            alignment: AlignmentType.JUSTIFIED,
+            spacing: { after: 120, line: lineTwips },
+            indent: { firstLine: convertMillimetersToTwip(12.5) },
+            children: inlineRuns(block.text, base, autoItalic),
+          }));
+        }
         break;
       case "quote":
         children.push(new Paragraph({
@@ -295,68 +450,119 @@ export async function buildDocxBlob(markdown: string, options: ExportOptions = {
             numbering: { reference: block.ordered ? "numbered" : "bullets", level: 0 },
             alignment: AlignmentType.JUSTIFIED,
             spacing: { after: 60, line: lineTwips },
-            children: inlineRuns(item, base),
+            children: inlineRuns(item, base, autoItalic && !inBibliography),
           }));
         });
         break;
       case "table": {
         tableCounter += 1;
         const header = block.rows[0];
+        const label = `Tabel ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${tableCounter}. ${block.title || header.slice(0, 3).join(" / ")}`;
+        const bookmark = `tabel_${tableCounter}`;
+        tableEntries.push({ label, bookmark });
+        // Standar akademik: judul tabel di ATAS tabel.
         children.push(new Paragraph({
           alignment: AlignmentType.CENTER,
-          spacing: { before: 200, after: 80 },
+          spacing: { before: 240, after: 80, line: lineTwips },
           keepNext: true,
-          children: [new TextRun({ text: `Tabel ${tableCounter}. ${header.slice(0, 3).join(" / ")}`, bold: true, font: profile.font, size: sizeHalfPt - 2 })],
+          children: [new Bookmark({ id: bookmark, children: [new TextRun({ text: label, bold: true, font: profile.font, size: sizeHalfPt - 2 })] })],
         }));
         children.push(new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
           rows: block.rows.map((row, rowIndex) => new TableRow({
             tableHeader: rowIndex === 0,
+            cantSplit: true,
             children: row.map((cell) => new TableCell({
               shading: rowIndex === 0 ? { fill: "E7E6E6" } : undefined,
               children: [new Paragraph({
                 spacing: { before: 60, after: 60 },
+                alignment: rowIndex === 0 ? AlignmentType.CENTER : AlignmentType.LEFT,
                 children: inlineRuns(cell, { ...base, size: sizeHalfPt - 2, bold: rowIndex === 0 }),
               })],
             })),
           })),
         }));
-        children.push(new Paragraph({ spacing: { after: 160 }, children: [] }));
+        children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
         break;
       }
       case "figure": {
         figureCounter += 1;
         const key = block.title.toLowerCase().trim();
         const image = images[key];
+        const label = `Gambar ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${figureCounter}. ${block.caption}`;
+        const bookmark = `gambar_${figureCounter}`;
+        figureEntries.push({ label, bookmark });
         if (image) {
           const data = image instanceof Uint8Array ? image : new Uint8Array(image);
+          const natural = pngSize(data);
+          const width = Math.min(maxImageWidthPx, natural.width);
+          const height = Math.round(width * (natural.height / natural.width));
+          // Batasi tinggi agar gambar+caption muat satu halaman
+          const maxHeight = 560;
+          const scale = height > maxHeight ? maxHeight / height : 1;
           children.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 200, after: 80 },
+            spacing: { before: 240, after: 80 },
             keepNext: true,
-            children: [new ImageRun({ type: "png", data, transformation: { width: 480, height: 320 } })],
+            children: [new ImageRun({ type: "png", data, transformation: { width: Math.round(width * scale), height: Math.round(height * scale) } })],
           }));
         } else {
           children.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 200, after: 80 },
+            spacing: { before: 240, after: 80 },
             keepNext: true,
             border: { top: { style: BorderStyle.DASHED, size: 6, color: "999999" }, bottom: { style: BorderStyle.DASHED, size: 6, color: "999999" }, left: { style: BorderStyle.DASHED, size: 6, color: "999999" }, right: { style: BorderStyle.DASHED, size: 6, color: "999999" } },
             children: [new TextRun({ text: `[Tempatkan gambar: ${block.title}]`, italics: true, color: "666666", font: profile.font, size: sizeHalfPt - 2 })],
           }));
         }
-        children.push(new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { after: 200 },
-          children: [new TextRun({ text: `Gambar ${figureCounter}. ${block.caption}`, bold: true, font: profile.font, size: sizeHalfPt - 2 })],
-        }));
+        children.push(captionParagraph(label, bookmark));
         break;
       }
       case "pagebreak":
         children.push(new Paragraph({ children: [new PageBreak()] }));
         break;
     }
+  });
+
+  // Daftar gambar & tabel (setelah daftar isi, hanya bila ada isinya)
+  if (profile.includeToc && figureEntries.length) {
+    front.push(frontTitle("DAFTAR GAMBAR"));
+    figureEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark)));
   }
+  if (profile.includeToc && tableEntries.length) {
+    front.push(frontTitle("DAFTAR TABEL"));
+    tableEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark)));
+  }
+
+  const pageMargin = {
+    top: convertMillimetersToTwip(profile.margin.top * 10),
+    right: convertMillimetersToTwip(profile.margin.right * 10),
+    bottom: convertMillimetersToTwip(profile.margin.bottom * 10),
+    left: convertMillimetersToTwip(profile.margin.left * 10),
+  };
+  const pageNumberFooter = () => new Footer({
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ children: [PageNumber.CURRENT], font: profile.font, size: sizeHalfPt - 2 })],
+    })],
+  });
+
+  const sections: ISectionOptions[] = [];
+  if (front.length) {
+    // Bagian depan: nomor halaman romawi kecil; cover (halaman pertama) tanpa nomor.
+    sections.push({
+      properties: { page: { margin: pageMargin, pageNumbers: { start: 1, formatType: NumberFormat.LOWER_ROMAN } }, titlePage: Boolean(profile.cover) },
+      footers: profile.includePageNumbers
+        ? { default: pageNumberFooter(), first: profile.cover ? new Footer({ children: [new Paragraph({ children: [] })] }) : undefined }
+        : undefined,
+      children: front,
+    });
+  }
+  sections.push({
+    properties: { page: { margin: pageMargin, pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL } } },
+    footers: profile.includePageNumbers ? { default: pageNumberFooter() } : undefined,
+    children,
+  });
 
   const doc = new Document({
     creator: "keluhkampus",
@@ -367,7 +573,12 @@ export async function buildDocxBlob(markdown: string, options: ExportOptions = {
         { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 360, after: 160 } } },
         { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 240, after: 120 } } },
         { id: "Heading4", name: "Heading 4", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, italics: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 200, after: 100 } } },
+        // Gaya TOC: tanpa warna/underline hyperlink bawaan Word
+        { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true, font: profile.font, size: sizeHalfPt }, paragraph: { spacing: { after: 80 } } },
+        { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt }, paragraph: { indent: { left: 440 }, spacing: { after: 60 } } },
+        { id: "TOC3", name: "toc 3", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt }, paragraph: { indent: { left: 880 }, spacing: { after: 60 } } },
       ],
+      characterStyles: [{ id: "Hyperlink", name: "Hyperlink", run: { color: "000000", underline: { type: "none" } } }],
     },
     numbering: {
       config: [
@@ -376,27 +587,7 @@ export async function buildDocxBlob(markdown: string, options: ExportOptions = {
       ],
     },
     features: { updateFields: profile.includeToc },
-    sections: [{
-      properties: {
-        page: {
-          margin: {
-            top: convertMillimetersToTwip(profile.margin.top * 10),
-            right: convertMillimetersToTwip(profile.margin.right * 10),
-            bottom: convertMillimetersToTwip(profile.margin.bottom * 10),
-            left: convertMillimetersToTwip(profile.margin.left * 10),
-          },
-        },
-      },
-      footers: profile.includePageNumbers ? {
-        default: new Footer({
-          children: [new Paragraph({
-            alignment: AlignmentType.CENTER,
-            children: [new TextRun({ children: [PageNumber.CURRENT], font: profile.font, size: sizeHalfPt - 2 })],
-          })],
-        }),
-      } : undefined,
-      children,
-    }],
+    sections,
   });
 
   return Packer.toBlob(doc);

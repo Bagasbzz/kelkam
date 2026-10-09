@@ -1,4 +1,4 @@
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { isAbortLikeError } from "@/lib/errors";
 
 const REPORT_TIMEOUT_MS = Number(process.env.AI_REPORT_TIMEOUT_MS || 25000);
@@ -57,11 +57,20 @@ export function compactProject(project: unknown) {
       title: truncate(diagram.title, 180),
       type: truncate(diagram.type, 40),
       purpose: truncate(diagram.purpose, 500),
+      sectionId: truncate(diagram.sectionId, 80) || undefined,
       approved: diagram.status === "approved" && Boolean(diagram.diagramData),
       status: truncate(diagram.status, 40),
       caption: truncate(diagram.caption, 300),
       dataSummary: diagram.diagramData ? summarizeDiagramData(diagram.diagramData) : null,
+      /** Ringkasan alur hasil engine UML (untuk narasi), diisi job setelah diagram jadi. */
+      flowSummary: truncate(diagram.flowSummary, 900) || undefined,
     })),
+    /** Gambar ilustrasi (non-UML) yang sudah jadi dari image job — judul harus dipakai persis di placeholder. */
+    figures: records(source.figures).slice(0, 20).map((figure) => ({
+      title: truncate(figure.title, 180),
+      caption: truncate(figure.caption, 300),
+      sectionId: truncate(figure.sectionId, 80) || undefined,
+    })).filter((figure) => figure.title),
     tables: records(source.tables).slice(0, 30).map((table) => ({
       title: truncate(table.title, 180),
       purpose: truncate(table.purpose, 500),
@@ -223,7 +232,13 @@ export interface ChapterOutput {
   model?: string;
 }
 
-const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 40000);
+/**
+ * Satu step job harus selesai < ~100 s (proxy hosting memutus ~120 s, step
+ * dianggap macet setelah STALE_STEP_MS). Panggilan utama + 1 lanjutan.
+ */
+const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 55000);
+const CONTINUATION_TIMEOUT_MS = 28000;
+const AUDIT_TIMEOUT_MS = Number(process.env.AI_AUDIT_TIMEOUT_MS || 75000);
 
 /** Hapus heading level-1 dan code fence yang kadang disisipkan model. */
 function cleanChapterOutput(raw: string) {
@@ -242,6 +257,28 @@ export function summarizeChapter(markdown: string, max = 420) {
     .replace(/\s+/g, " ")
     .trim();
   return body.slice(0, max);
+}
+
+/** Cocokkan id/judul diagram dari `requiredDiagrams` (string bebas dari rencana) ke daftar diagram proyek. */
+function resolveDiagram(compact: CompactProject, ref: string) {
+  const key = ref.trim().toLowerCase();
+  if (!key) return undefined;
+  return compact.diagrams.find((diagram) => diagram.id.toLowerCase() === key)
+    ?? compact.diagrams.find((diagram) => diagram.title.toLowerCase() === key)
+    ?? compact.diagrams.find((diagram) => diagram.title.toLowerCase().includes(key) || key.includes(diagram.title.toLowerCase()));
+}
+
+/** Diagram yang harus muncul di section: dari requiredDiagrams ATAU diagram.sectionId. */
+export function diagramsForSection(compact: CompactProject, section: ChapterInput["section"]) {
+  const picked = new Map<string, CompactDiagram>();
+  for (const ref of section.requiredDiagrams) {
+    const diagram = resolveDiagram(compact, ref);
+    if (diagram) picked.set(diagram.id || diagram.title, diagram);
+  }
+  for (const diagram of compact.diagrams) {
+    if (section.id && diagram.sectionId && diagram.sectionId === section.id) picked.set(diagram.id || diagram.title, diagram);
+  }
+  return Array.from(picked.values());
 }
 
 /**
@@ -265,10 +302,14 @@ function pickReferences(compact: CompactProject, section: ChapterInput["section"
 }
 
 /** Placeholder BAB kalau AI gagal/timeout — tetap valid markdown. */
-export function fallbackChapter(input: ChapterInput): ChapterOutput {
+export function fallbackChapter(input: ChapterInput, project?: unknown): ChapterOutput {
   const { section } = input;
+  const compact = project ? compactProject(project) : null;
   const diagrams = section.requiredDiagrams.length
-    ? `\n\n${section.requiredDiagrams.map((id) => `[Gambar: ${id} - masukkan dari UML Builder]`).join("\n")}`
+    ? `\n\n${section.requiredDiagrams.map((id) => {
+      const diagram = compact ? resolveDiagram(compact, id) : undefined;
+      return `[Gambar: ${diagram?.title || id} - ${diagram?.caption || diagram?.purpose || "masukkan dari UML Builder"}]`;
+    }).join("\n")}`
     : "";
   const content = `## ${section.title}\n\n${section.purpose || "Bagian ini perlu dikembangkan berdasarkan bahan proyek."}\n\n[ISI ${section.title.toUpperCase()}: respons AI gagal, gunakan fitur revisi untuk mengisi bagian ini]${diagrams}`;
   return { content, summary: section.purpose || section.title, source: "fallback", finishReason: "fallback" };
@@ -353,10 +394,9 @@ function selectSourceMaterial(project: unknown, section: ChapterInput["section"]
 }
 
 /**
- * Generate satu BAB. 1 panggilan AI, model dipilih dari mode:
- *   - ringkas → AI_MODEL_FAST, target ±300-500 kata
- *   - lengkap → AI_MODEL, target ±700-1200 kata
- * Kalau finish_reason "length", lakukan 1x continuation.
+ * Generate satu BAB. 1 panggilan AI (+ maks 2 lanjutan bila terpotong), model dari mode:
+ *   - ringkas → AI_MODEL_FAST, target ±400-600 kata
+ *   - lengkap → AI_MODEL, target ±1500-2500 kata, ≥N sitasi berbeda
  */
 export async function generateChapter(project: unknown, input: ChapterInput): Promise<ChapterOutput> {
   assertAiConfigured();
@@ -364,23 +404,36 @@ export async function generateChapter(project: unknown, input: ChapterInput): Pr
   const { section, mode, index, total } = input;
   const isRingkas = mode === "ringkas";
 
-  const sectionDiagrams = compact.diagrams.filter((diagram) => section.requiredDiagrams.includes(diagram.id));
-  const references = pickReferences(compact, section, isRingkas ? 5 : 10);
+  const sectionDiagrams = diagramsForSection(compact, section);
+  const sectionFigures = compact.figures.filter((figure) => !figure.sectionId || !section.id || figure.sectionId === section.id);
+  const references = pickReferences(compact, section, isRingkas ? 6 : 16);
+  const minCitations = isRingkas ? Math.min(3, references.length) : Math.min(8, references.length);
   // Bahan: head tiap sumber + chunk paling relevan untuk BAB ini (budget char).
-  const sources = selectSourceMaterial(project, section, isRingkas ? 6_000 : 14_000);
+  const sources = selectSourceMaterial(project, section, isRingkas ? 6_000 : 16_000);
 
-  const systemPrompt = `Anda adalah penulis laporan akademik keluhkampus untuk mahasiswa Indonesia.
+  const diagramPlaceholders = sectionDiagrams.map((diagram) => `[Gambar: ${diagram.title} - ${diagram.caption || diagram.purpose || diagram.title}]`);
+  const figurePlaceholders = sectionFigures.map((figure) => `[Gambar: ${figure.title} - ${figure.caption || figure.title}]`);
+  const mandatoryPlaceholders = [...diagramPlaceholders, ...figurePlaceholders];
+
+  const systemPrompt = `Anda adalah penulis laporan akademik senior keluhkampus untuk mahasiswa Indonesia. Kualitas harus setara skripsi yang dibimbing dosen: argumentatif, mendalam, dan setiap klaim penting didukung sitasi.
 Tugas: tulis SATU bagian laporan (BAB ${index + 1} dari ${total}) berjudul "${section.title}" dalam Bahasa Indonesia.
 
-Aturan wajib:
+ATURAN STRUKTUR:
 1. Output hanya markdown bagian ini. Mulai dengan heading "## ${section.title}". Tanpa judul laporan, tanpa daftar pustaka, tanpa basa-basi, tanpa code fence.
-2. Sub-bagian pakai heading "###". Jangan buat heading "#".
-3. Gaya ${compact.formality || "formal akademik"}, ${isRingkas ? "padat dan langsung ke inti (sekitar 300-500 kata)" : "mendalam dan runtut (sekitar 700-1200 kata)"}. Hindari pengulangan isi BAB sebelumnya.
+2. Sub-bagian pakai heading "### " dengan penomoran "${index + 1}.1", "${index + 1}.2", dst. (contoh "### ${index + 1}.1 Latar Belakang"). Sub-sub pakai "#### ${index + 1}.1.1". Jangan buat heading "#". Jangan tinggalkan heading tanpa isi: setiap sub-bagian minimal 2 paragraf utuh.
+3. Gaya ${compact.formality || "formal akademik"}, ${isRingkas ? "padat (sekitar 400-600 kata)" : "mendalam dan runtut (TARGET 1500-2500 kata; tiap paragraf 4-7 kalimat; jelaskan definisi, mekanisme, perbandingan pendekatan, implikasi untuk proyek ini, dan kaitan dengan bab lain)"}. Jangan mengulang isi BAB sebelumnya; rujuk saja ("sebagaimana dibahas pada BAB ...").
 4. Jangan mengarang data, angka, nama institusi, nama jurnal, atau link. Pakai placeholder spesifik seperti [ISI DATA ...] bila belum ada.
-5. Gunakan sumber/konteks yang relevan. Sitasi in-text pakai gaya ${compact.citationStyle || "APA"} hanya dari referensi yang diberikan; bila kurang, tulis [butuh referensi: topik].
-6. Diagram yang diminta harus muncul sebagai placeholder [Gambar: Judul - status] dengan caption, dan dijelaskan naratif memakai elemen utama bila ada.
-7. Bila ada tabel yang cocok untuk bagian ini, buat tabel markdown mengikuti rencana kolom.
-8. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan.`;
+
+ATURAN SITASI (wajib):
+5. Gunakan referensi yang diberikan secara nyata: minimal ${minCitations} referensi BERBEDA disitasi in-text gaya ${compact.citationStyle || "APA"} (Nama, Tahun). Sintesis antar-sumber (bandingkan/kontraskan temuan), bukan sekadar menyebut. Hanya sitasi referensi yang ada di daftar "referensi"; bila topik tak tercakup, tulis [butuh referensi: topik]. Gunakan abstrak referensi untuk mengisi substansi.
+
+ATURAN GAMBAR/TABEL:
+6. ${mandatoryPlaceholders.length ? `Placeholder gambar berikut WAJIB muncul PERSIS (tulis apa adanya, masing-masing di baris sendiri, di posisi yang paling relevan), lalu jelaskan isinya secara naratif minimal 1 paragraf memakai ringkasan alurnya:\n${mandatoryPlaceholders.map((item) => `   ${item}`).join("\n")}` : "Jangan membuat placeholder gambar baru."} Format umum placeholder gambar: [Gambar: Judul - caption].
+7. Bila ada tabel yang cocok untuk bagian ini, buat tabel markdown mengikuti rencana kolom, didahului baris "**Tabel: Judul Tabel**" dan diikuti paragraf penjelasan.
+
+ATURAN TIPOGRAFI:
+8. Istilah asing/bahasa Inggris dan nama latin ditulis miring dengan *...* (contoh: *framework*, *machine learning*, *end-to-end*). Singkatan diperkenalkan sekali dengan kepanjangannya.
+9. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan. Pastikan kalimat terakhir utuh.`;
 
   const userPayload = {
     laporan: {
@@ -392,7 +445,13 @@ Aturan wajib:
     bagianIni: {
       judul: section.title,
       tujuan: section.purpose,
-      diagramWajib: sectionDiagrams,
+      diagramWajib: sectionDiagrams.map((diagram) => ({
+        placeholder: `[Gambar: ${diagram.title} - ${diagram.caption || diagram.purpose || diagram.title}]`,
+        jenis: diagram.type,
+        tujuan: diagram.purpose,
+        ringkasanAlur: diagram.flowSummary || diagram.dataSummary || null,
+      })),
+      gambarIlustrasi: sectionFigures.map((figure) => ({ placeholder: `[Gambar: ${figure.title} - ${figure.caption || figure.title}]` })),
     },
     ringkasanBabSebelumnya: input.previousSummaries.slice(-4),
     sumber: sources,
@@ -401,11 +460,11 @@ Aturan wajib:
   };
 
   const model = isRingkas ? AI_MODEL_FAST : AI_MODEL;
-  const maxTokens = isRingkas ? 1600 : 3200;
+  const maxTokens = isRingkas ? 1800 : 5200;
   const emit = input.onEvent ?? (() => {});
 
   const chunkCount = sources.reduce((acc, source) => acc + source.kutipanRelevan.length, 0);
-  emit(`Bahan dipilih: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi, ${sectionDiagrams.length} diagram`);
+  emit(`Bahan dipilih: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi (min. ${minCitations} sitasi), ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
   emit(`Memanggil model ${model} (maks ${maxTokens} token)`);
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
@@ -420,7 +479,7 @@ Aturan wajib:
       messages,
       temperature: 0.15,
       max_tokens: maxTokens,
-    }, { timeout: CHAPTER_TIMEOUT_MS });
+    }, { timeout: CHAPTER_TIMEOUT_MS, maxRetries: 0 });
 
     const choice = response.choices[0];
     let content = cleanChapterOutput(stripThinking(choice?.message.content));
@@ -428,19 +487,21 @@ Aturan wajib:
     let tokensUsed = response.usage?.total_tokens ?? 0;
     emit(`Respons diterima ${Math.round((Date.now() - startedAt) / 1000)}s, ${content.split(/\s+/).length} kata, finish=${finishReason}`);
 
-    // Satu kali continuation kalau terpotong.
-    if (finishReason === "length" && content) {
-      emit("Output terpotong, melanjutkan penulisan...");
+    // Lanjutan bila terpotong — dibatasi budget waktu step (~100 s total).
+    let continuations = 0;
+    while (finishReason === "length" && content && continuations < 2 && Date.now() - startedAt < 55_000) {
+      continuations += 1;
+      emit(`Output terpotong, melanjutkan penulisan (${continuations})...`);
       const cont = await aiClient.chat.completions.create({
         model,
         messages: [
           ...messages,
           { role: "assistant", content },
-          { role: "user", content: "Lanjutkan tepat dari kalimat terakhir tanpa mengulang. Output hanya kelanjutan markdown." },
+          { role: "user", content: "Lanjutkan tepat dari kalimat terakhir tanpa mengulang. Output hanya kelanjutan markdown. Pastikan diakhiri kalimat utuh." },
         ],
         temperature: 0.15,
         max_tokens: Math.round(maxTokens / 2),
-      }, { timeout: CHAPTER_TIMEOUT_MS });
+      }, { timeout: CONTINUATION_TIMEOUT_MS, maxRetries: 0 });
       const extra = cleanChapterOutput(stripThinking(cont.choices[0]?.message.content));
       if (extra) content = `${content}\n${extra}`;
       finishReason = cont.choices[0]?.finish_reason || finishReason;
@@ -449,9 +510,22 @@ Aturan wajib:
 
     if (content.length < 200) {
       emit("Output terlalu pendek, memakai placeholder");
-      return { ...fallbackChapter(input), tokensUsed, model };
+      return { ...fallbackChapter(input, project), tokensUsed, model };
     }
     if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
+
+    // Jaminan: placeholder gambar wajib selalu ada (model kadang lupa). Ditempel
+    // di akhir bab agar exporter tetap menyisipkan gambarnya.
+    const missing = mandatoryPlaceholders.filter((placeholder) => {
+      const title = placeholder.slice("[Gambar: ".length).split(" - ")[0].trim().toLowerCase();
+      return !content.toLowerCase().includes(`[gambar: ${title}`);
+    });
+    if (missing.length) {
+      emit(`${missing.length} placeholder gambar tidak ditulis model, ditambahkan otomatis`);
+      content = `${content.trimEnd()}\n\n${missing.join("\n\n")}\n`;
+    }
+    const citationCount = countDistinctCitations(content);
+    emit(`Sitasi berbeda terdeteksi: ${citationCount}${citationCount < minCitations ? ` (kurang dari target ${minCitations}, akan dicek saat audit)` : ""}`);
 
     return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
   } catch (error: unknown) {
@@ -463,16 +537,163 @@ Aturan wajib:
   }
 }
 
-/** Gabungkan judul + BAB + daftar pustaka menjadi satu markdown final. */
+/** Jumlah sitasi in-text unik (Nama, Tahun) di sebuah markdown. */
+export function countDistinctCitations(markdown: string) {
+  const pattern = /\(([A-Z][A-Za-z'’-]+)(?:\s*(?:&|dan|and)\s*[A-Z][A-Za-z'’-]+|\s+et al\.?)?,?\s*(\d{4}[a-z]?)\)/g;
+  const keys = new Set<string>();
+  for (const match of markdown.matchAll(pattern)) keys.add(`${match[1].toLowerCase()}|${match[2]}`);
+  return keys.size;
+}
+
+// ---------------------------------------------------------------------------
+// AUDIT (pass kedua): model review memeriksa & memperbaiki satu BAB.
+// ---------------------------------------------------------------------------
+
+export interface AuditChapterResult {
+  content: string;
+  changed: boolean;
+  tokensUsed: number;
+  model: string;
+  issues: string[];
+}
+
+/** Cek heuristik lokal (0 token) — dipakai untuk log dan memutuskan perlu audit AI. */
+export function detectChapterIssues(markdown: string, minCitations: number) {
+  const issues: string[] = [];
+  const lines = markdown.split("\n");
+  // Heading tanpa isi: heading diikuti heading/akhir.
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^#{2,4}\s+/.test(lines[i])) continue;
+    let j = i + 1;
+    while (j < lines.length && !lines[j].trim()) j += 1;
+    if (j >= lines.length || /^#{1,4}\s+/.test(lines[j])) issues.push(`heading kosong: "${lines[i].replace(/^#+\s*/, "").slice(0, 60)}"`);
+  }
+  const trimmed = markdown.trimEnd();
+  if (trimmed && !/[.!?:\]|)"”*]$/.test(trimmed)) issues.push("kalimat terakhir terpotong");
+  if (/\[ISI [^\]]*respons AI gagal/i.test(markdown)) issues.push("berisi placeholder fallback");
+  const citations = countDistinctCitations(markdown);
+  if (citations < minCitations) issues.push(`sitasi ${citations} < ${minCitations}`);
+  if (/^#\s+/m.test(markdown)) issues.push("ada heading level-1");
+  return issues;
+}
+
+/**
+ * Audit + perbaiki satu BAB dengan model review. Mengembalikan konten hasil
+ * perbaikan (atau asli bila model gagal/timeout). Dipanggil per step job.
+ */
+export async function auditChapter(project: unknown, input: {
+  content: string;
+  sectionTitle: string;
+  index: number;
+  total: number;
+  mode: ReportMode;
+  onEvent?: (message: string) => void;
+}): Promise<AuditChapterResult> {
+  assertAiConfigured();
+  const compact = compactProject(project);
+  const emit = input.onEvent ?? (() => {});
+  const isRingkas = input.mode === "ringkas";
+  const minCitations = isRingkas ? 2 : Math.min(6, compact.references.length);
+  const issues = detectChapterIssues(input.content, minCitations);
+  const model = AI_MODEL_REVIEW;
+  const placeholders = input.content.match(/\[Gambar:[^\]]+\]/g) || [];
+
+  emit(`Audit "${input.sectionTitle}": ${issues.length ? issues.join("; ") : "tidak ada masalah struktural, cek gaya & sitasi"}`);
+
+  const systemPrompt = `Anda adalah editor/pembimbing laporan akademik Indonesia. Tugas: AUDIT dan PERBAIKI satu bab laporan di bawah ini, lalu keluarkan VERSI FINAL bab tersebut (markdown utuh, bukan daftar perubahan).
+
+Periksa dan perbaiki:
+1. Struktur: heading "## ${input.sectionTitle}" tetap di awal; sub-bagian "### ${input.index + 1}.N Judul" bernomor berurutan; tidak ada heading kosong; tidak ada paragraf/kalimat terputus; tidak ada heading "#".
+2. Kedalaman: paragraf yang dangkal (<3 kalimat) diperkaya dengan penjelasan mekanisme, contoh penerapan pada proyek ini, atau sintesis antar-referensi. Jangan memangkas isi yang sudah baik. ${isRingkas ? "" : "Panjang akhir minimal sama dengan versi awal."}
+3. Sitasi: gaya ${compact.citationStyle || "APA"} konsisten (Nama, Tahun). Hanya referensi dalam daftar "referensi" yang boleh disitasi — ganti sitasi yang tidak ada di daftar dengan referensi yang sesuai atau [butuh referensi: topik]. Target minimal ${minCitations} referensi berbeda.
+4. Tipografi: istilah asing/bahasa Inggris & nama latin ditulis *miring*; tabel markdown valid dengan baris "**Tabel: Judul**" di atasnya; angka & singkatan konsisten.
+5. Placeholder gambar berikut HARUS tetap ada PERSIS tanpa diubah: ${placeholders.length ? placeholders.join(" | ") : "(tidak ada)"}.
+6. Hapus kalimat meta ("berikut adalah", "demikian bab ini"), pengulangan, dan klaim tanpa dasar (ganti dengan placeholder [ISI DATA ...] bila perlu).
+Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
+
+  const userPayload = {
+    laporan: { judul: compact.title || compact.topic, topik: compact.topic, jenis: compact.projectType },
+    posisi: `BAB ${input.index + 1} dari ${input.total}`,
+    masalahTerdeteksi: issues,
+    referensi: compact.references.slice(0, 40).map((reference) => ({ citation: reference.citation, abstract: reference.abstract.slice(0, 500) })),
+    bab: input.content,
+  };
+
+  try {
+    const startedAt = Date.now();
+    const response = await aiClient.chat.completions.create({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: JSON.stringify(userPayload) },
+      ],
+      temperature: 0.1,
+      max_tokens: 6000,
+    }, { timeout: AUDIT_TIMEOUT_MS, maxRetries: 0 });
+    const choice = response.choices[0];
+    let content = cleanChapterOutput(stripThinking(choice?.message.content));
+    const tokensUsed = response.usage?.total_tokens ?? 0;
+    const originalWords = input.content.split(/\s+/).length;
+    const words = content.split(/\s+/).length;
+    emit(`Audit selesai ${Math.round((Date.now() - startedAt) / 1000)}s: ${originalWords} → ${words} kata, finish=${choice?.finish_reason}`);
+
+    // Guard: hasil audit terpotong/menyusut drastis/kehilangan placeholder → pakai asli.
+    const lostPlaceholder = placeholders.some((placeholder) => !content.includes(placeholder));
+    const shrunk = words < originalWords * 0.7;
+    if (!content || choice?.finish_reason === "length" || lostPlaceholder || shrunk) {
+      emit(`Hasil audit ditolak (${!content ? "kosong" : choice?.finish_reason === "length" ? "terpotong" : lostPlaceholder ? "placeholder hilang" : "menyusut"}), versi awal dipertahankan`);
+      return { content: input.content, changed: false, tokensUsed, model, issues };
+    }
+    if (!/^##\s+/m.test(content)) content = `## ${input.sectionTitle}\n\n${content}`;
+    return { content, changed: content !== input.content, tokensUsed, model, issues };
+  } catch (error: unknown) {
+    emit(`Audit gagal (${error instanceof Error ? error.message.slice(0, 120) : "unknown"}), versi awal dipertahankan`);
+    return { content: input.content, changed: false, tokensUsed: 0, model, issues };
+  }
+}
+
+/** Nama belakang pertama + tahun dari string sitasi APA ("Surname, A. (2021). ...") → untuk pencocokan. */
+function citationKey(citation: string) {
+  const surname = (citation.match(/^([A-Za-zÀ-ÿ'’-]+)/) || [])[1] || "";
+  const year = (citation.match(/\((\d{4})[a-z]?\)/) || citation.match(/\b(19|20)\d{2}\b/) || [])[0] || "";
+  return { surname: surname.toLowerCase(), year: year.replace(/[()]/g, "").slice(0, 4) };
+}
+
+/**
+ * Gabungkan judul + BAB + daftar pustaka menjadi satu markdown final.
+ * Daftar pustaka = referensi yang BENAR-BENAR disitasi (urut abjad); referensi
+ * tak terpakai dicatat agar user tahu (bukan dibuang diam-diam).
+ */
 export function assembleReport(project: unknown, chapters: string[]) {
   const compact = compactProject(project);
   const title = compact.title || compact.topic || "Laporan Proyek";
-  const references = compact.references.length
-    ? compact.references.map((reference) => reference.citation || `[Cari jurnal: ${reference.query || reference.purpose || "topik terkait"}]${reference.url ? ` - ${reference.url}` : ""}`).join("\n")
-    : "[Tambahkan referensi/jurnal yang relevan]";
-  const body = `# ${title}\n\n${chapters.join("\n\n")}\n\n## Daftar Pustaka\n${references}\n`;
+  const body = `# ${title}\n\n${chapters.join("\n\n")}`;
+  const lower = body.toLowerCase();
+
+  const cited: string[] = [];
+  const uncited: string[] = [];
+  for (const reference of compact.references) {
+    const entry = reference.citation || `[Cari jurnal: ${reference.query || reference.purpose || "topik terkait"}]${reference.url ? ` - ${reference.url}` : ""}`;
+    const { surname, year } = citationKey(reference.citation);
+    const used = surname.length > 2 && year && lower.includes(surname) && lower.includes(year);
+    (used ? cited : uncited).push(entry);
+  }
+  const collator = new Intl.Collator("id");
+  cited.sort(collator.compare);
+  const bibliography = cited.length
+    ? cited.join("\n\n")
+    : compact.references.length
+      ? [...cited, ...uncited].sort(collator.compare).join("\n\n")
+      : "[Tambahkan referensi/jurnal yang relevan]";
+
+  let output = `${body}\n\n## Daftar Pustaka\n\n${bibliography}\n`;
   const audit = auditCitations(body, compact);
-  return audit.notes.length ? `${body}\n${audit.notes.join("\n")}\n` : body;
+  const notes = [...audit.notes];
+  if (cited.length && uncited.length) {
+    notes.push(`> **Catatan referensi tak terpakai:** ${uncited.length} referensi terverifikasi belum disitasi sehingga tidak dimasukkan ke Daftar Pustaka — ${uncited.slice(0, 4).map((item) => item.slice(0, 60)).join("; ")}${uncited.length > 4 ? "; ..." : ""}. Gunakan revisi "Tambah sitasi" bila ingin memakainya.`);
+  }
+  if (notes.length) output += `\n${notes.join("\n")}\n`;
+  return output;
 }
 
 /**

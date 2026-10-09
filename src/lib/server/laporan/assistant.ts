@@ -11,9 +11,9 @@
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
-import { startImageJob } from "@/lib/server/image-jobs";
+import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
-import { startReportJob, getReportJob, type ReportJob } from "@/lib/report/report-jobs";
+import { startReportJob, getReportJob, extractDiagramArtifacts, type ReportJob, type ReportDiagramArtifact } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
 import {
   appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
@@ -52,7 +52,18 @@ export interface PlanSection {
   purpose: string;
   requiredDiagrams: string[];
 }
-export interface PlanDiagram { id: string; title: string; type: string; purpose: string; sectionId?: string }
+export interface PlanDiagram {
+  id: string;
+  title: string;
+  type: string;
+  purpose: string;
+  sectionId?: string;
+  /** Diisi setelah job membuat diagram lewat engine UML Builder. */
+  status?: "planned" | "approved" | "failed";
+  diagramData?: ReportDiagramArtifact["diagramData"];
+  svg?: string;
+  flowSummary?: string;
+}
 export interface PlanTable { id: string; title: string; purpose: string; columns: string[]; sectionId?: string }
 export interface ReportPlan {
   outline: PlanSection[];
@@ -99,7 +110,20 @@ function normalizePlan(raw: unknown): ReportPlan {
   }).slice(0, 40);
   const diagrams: PlanDiagram[] = asArr(o.diagrams).map((d, i) => {
     const dobj = asObj(d);
-    return { id: asStr(dobj.id, 60) || `diagram-${i + 1}`, title: asStr(dobj.title, 160), type: asStr(dobj.type, 40) || "flowchart", purpose: asStr(dobj.purpose, 400), sectionId: asStr(dobj.sectionId, 60) || undefined };
+    const status: PlanDiagram["status"] = dobj.status === "approved" || dobj.status === "failed" ? dobj.status : "planned";
+    const diagramData = asObj(dobj.diagramData);
+    const hasData = Array.isArray(diagramData.nodes) && diagramData.nodes.length > 0;
+    return {
+      id: asStr(dobj.id, 60) || `diagram-${i + 1}`,
+      title: asStr(dobj.title, 160),
+      type: asStr(dobj.type, 40) || "flowchart",
+      purpose: asStr(dobj.purpose, 400),
+      sectionId: asStr(dobj.sectionId, 60) || undefined,
+      status: hasData ? "approved" : status,
+      diagramData: hasData ? (diagramData as PlanDiagram["diagramData"]) : undefined,
+      svg: typeof dobj.svg === "string" ? dobj.svg : undefined,
+      flowSummary: asStr(dobj.flowSummary, 900) || undefined,
+    };
   }).filter((d) => d.title).slice(0, 20);
   const tables: PlanTable[] = asArr(o.tables).map((t, i) => {
     const tobj = asObj(t);
@@ -138,11 +162,15 @@ function briefComplete(b: ReportBrief) {
 }
 
 /** Payload project yang dimengerti `startReportJob`/`compactProject`. */
-function buildProjectPayload(session: { id: string; brief: ReportBrief; plan: ReportPlan; sources: VerifiedSource[]; materials: SessionMaterial[] }) {
+async function buildProjectPayload(session: { id: string; ownerId: string; brief: ReportBrief; plan: ReportPlan; sources: VerifiedSource[]; materials: SessionMaterial[] }) {
   const b = session.brief;
   const mats = session.materials.length
     ? session.materials.map((m) => ({ id: m.id, kind: m.kind, title: m.title, content: m.content, fileName: m.fileName }))
     : [{ id: "brief", kind: "note", title: "Brief dari percakapan", content: JSON.stringify(b) }];
+  // Gambar ilustrasi (image job) yang sudah jadi → penulis bab wajib menaruh placeholder-nya.
+  const figures = (await listImageJobs(session.ownerId, { sessionId: session.id, limit: 30 }).catch(() => []))
+    .filter((job) => job.status === "done" && job.title)
+    .map((job) => ({ title: job.title, caption: job.title }));
   return {
     reportSessionId: session.id,
     projectType: b.documentType || "report",
@@ -155,7 +183,21 @@ function buildProjectPayload(session: { id: string; brief: ReportBrief; plan: Re
     formatRules: b.formatRules || "",
     sources: mats,
     outline: session.plan.outline.map((s) => ({ id: s.id, title: s.title, purpose: s.purpose, requiredDiagrams: s.requiredDiagrams })),
-    diagrams: session.plan.diagrams.map((d) => ({ id: d.id, title: d.title, type: d.type, purpose: d.purpose, approved: true, status: "planned", caption: d.title, dataSummary: d.purpose })),
+    // Diagram: yang sudah dibuat engine (approved + diagramData) dipakai apa adanya;
+    // sisanya "planned" → job membuatkan lewat engine UML bila tipenya didukung.
+    diagrams: session.plan.diagrams.map((d) => ({
+      id: d.id,
+      title: d.title,
+      type: d.type,
+      purpose: d.purpose,
+      sectionId: d.sectionId,
+      status: d.diagramData ? "approved" : "planned",
+      caption: d.title,
+      diagramData: d.diagramData,
+      svg: d.svg,
+      flowSummary: d.flowSummary,
+    })),
+    figures,
     tables: session.plan.tables.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose, columns: t.columns })),
     references: session.sources.map((s) => ({
       query: s.title,
@@ -182,7 +224,7 @@ ALUR:
 2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram/UML, daftar tabel, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
 3. EXECUTING — hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik.
-5. GAMBAR — bila user minta ilustrasi/gambar (arsitektur sistem, skema, ilustrasi konsep) atau rencana butuh gambar non-UML, panggil generateFigure dengan prompt deskriptif berbahasa Inggris (gaya: diagram teknis bersih, latar putih, tanpa teks panjang). Gambar dibuat di background (±2 menit); beri tahu user bahwa gambar akan muncul di panel "Gambar" dan otomatis masuk ekspor DOCX lewat placeholder [Gambar: Judul - keterangan] di draft. Untuk UML, arahkan ke fitur UML Builder, jangan generateFigure.
+5. GAMBAR — bila user minta ilustrasi/gambar (arsitektur sistem, skema, ilustrasi konsep) atau rencana butuh gambar non-UML, panggil generateFigure dengan prompt deskriptif berbahasa Inggris (gaya: diagram teknis bersih, latar putih, tanpa teks panjang). Gambar dibuat di background (±2 menit); beri tahu user bahwa gambar akan muncul di panel "Gambar" dan otomatis masuk ekspor DOCX lewat placeholder [Gambar: Judul - keterangan] di draft. Diagram UML (flowchart/usecase/activity/sequence) yang ada di rencana DIBUAT OTOMATIS oleh engine UML Builder saat eksekusi dan langsung tertanam di draft — jangan pakai generateFigure untuk UML; user bisa membukanya di UML Builder dari panel "Gambar" untuk diedit.
 
 ATURAN KEJUJURAN (mutlak):
 - Sumber hanya dari hasil findSources (DOI terverifikasi Crossref). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
@@ -402,7 +444,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       if (minSources && state.sources.length < minSources) {
         return { error: `Sumber terverifikasi baru ${state.sources.length}, syarat minimal ${minSources}. Cari lagi dengan findSources atau minta user menurunkan syarat.` };
       }
-      const payload = buildProjectPayload({ id: state.id, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials });
+      const payload = await buildProjectPayload({ id: state.id, ownerId: state.ownerId, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials });
       const job = await startReportJob(payload, state.ownerId, "lengkap");
       state.jobId = job.id;
       state.stage = "executing";
@@ -420,18 +462,23 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       if (idx < 0) return { error: `Bagian "${args.sectionTitle}" tidak ditemukan. Bagian yang ada: ${sections.map((s) => s.title).slice(0, 30).join(" | ")}` };
       const sec = sections[idx];
       const original = lines.slice(sec.start, sec.end).join("\n");
-      const payload = buildProjectPayload({ id: state.id, brief: state.brief, plan: state.plan ?? { outline: [], diagrams: [], tables: [], sourceQueries: [] }, sources: state.sources, materials: state.materials });
+      const payload = await buildProjectPayload({ id: state.id, ownerId: state.ownerId, brief: state.brief, plan: state.plan ?? { outline: [], diagrams: [], tables: [], sourceQueries: [] }, sources: state.sources, materials: state.materials });
       const planSec = state.plan?.outline.find((s) => s.title.toLowerCase() === sec.title.toLowerCase());
+      // Placeholder gambar yang sudah ada di bagian ini harus dipertahankan.
+      const keepPlaceholders = original.match(/\[Gambar:[^\]]+\]/g) || [];
       emit(`Menulis ulang bagian "${sec.title}"…`);
       const out = await generateChapter(payload, {
         index: idx,
         total: sections.length,
-        section: { id: planSec?.id, title: sec.title, purpose: `${planSec?.purpose || ""}\n\nINSTRUKSI REVISI USER: ${instruction}\n\nVERSI SEBELUMNYA (perbaiki, jangan ulang kesalahan):\n${original.slice(0, 6000)}`, requiredDiagrams: planSec?.requiredDiagrams || [] },
+        section: { id: planSec?.id, title: sec.title, purpose: `${planSec?.purpose || ""}\n\nINSTRUKSI REVISI USER: ${instruction}\n\n${keepPlaceholders.length ? `PLACEHOLDER GAMBAR WAJIB DIPERTAHANKAN PERSIS: ${keepPlaceholders.join(" | ")}\n\n` : ""}VERSI SEBELUMNYA (perbaiki, jangan ulang kesalahan):\n${original.slice(0, 6000)}`, requiredDiagrams: planSec?.requiredDiagrams || [] },
         previousSummaries: sections.slice(Math.max(0, idx - 3), idx).map((s) => summarizeChapter(lines.slice(s.start, s.end).join("\n"))),
         mode: "lengkap",
       });
       if (out.source !== "ai") return { error: "AI gagal merevisi; coba lagi." };
-      const next = [...lines.slice(0, sec.start), out.content.trim(), ...lines.slice(sec.end)].join("\n");
+      let revised = out.content.trim();
+      const lost = keepPlaceholders.filter((p) => !revised.includes(p));
+      if (lost.length) revised = `${revised}\n\n${lost.join("\n\n")}`;
+      const next = [...lines.slice(0, sec.start), revised, ...lines.slice(sec.end)].join("\n");
       state.draft = next;
       await persist(state);
       events.push(`Bagian "${sec.title}" direvisi`);
@@ -454,7 +501,14 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       if (state.draft && !state.draft.includes(`[Gambar: ${title}`)) {
         const target = asStr(args.sectionTitle, 200).toLowerCase();
         const { lines, sections } = splitSections(state.draft);
-        const idx = target ? sections.findIndex((s) => s.title.toLowerCase().includes(target) || target.includes(s.title.toLowerCase())) : -1;
+        let idx = target ? sections.findIndex((s) => s.title.toLowerCase().includes(target) || target.includes(s.title.toLowerCase())) : -1;
+        // Tanpa section yang cocok: taruh di bagian level-2 terakhir sebelum Daftar Pustaka
+        // (lebih baik ada di draft daripada hilang).
+        if (idx < 0) {
+          const bodySections = sections.filter((s) => !/daftar pustaka|referensi/i.test(s.title));
+          const last = bodySections[bodySections.length - 1];
+          idx = last ? sections.indexOf(last) : -1;
+        }
         if (idx >= 0) {
           const sec = sections[idx];
           const next = [...lines.slice(0, sec.end), "", placeholder, "", ...lines.slice(sec.end)].join("\n");
@@ -486,6 +540,9 @@ export async function syncJobIntoSession(state: SessionState): Promise<ReportJob
   if (!state.jobId) return null;
   const job = await getReportJob(state.jobId, state.ownerId);
   if (!job) return null;
+  // Diagram yang sudah dibuat engine (di payload job) disalin ke rencana sesi
+  // supaya tampil di panel Gambar & ikut ekspor DOCX, walau job belum selesai.
+  const synced = await syncDiagramArtifacts(state);
   if (job.status === "done" && job.result && state.stage !== "drafted") {
     state.draft = job.result;
     state.stage = "drafted";
@@ -493,8 +550,27 @@ export async function syncJobIntoSession(state: SessionState): Promise<ReportJob
   } else if ((job.status === "failed" || job.status === "cancelled") && state.stage === "executing") {
     state.stage = "planned";
     await persist(state);
+  } else if (synced) {
+    await persist(state);
   }
   return job;
+}
+
+/** Salin artefak diagram dari payload job ke plan.diagrams. Return true bila ada perubahan. */
+async function syncDiagramArtifacts(state: SessionState) {
+  if (!state.jobId || !state.plan) return false;
+  const row = await prisma.reportJob.findFirst({ where: { id: state.jobId, ownerId: state.ownerId }, select: { payload: true } });
+  if (!row) return false;
+  const artifacts = extractDiagramArtifacts(row.payload);
+  if (!artifacts.length) return false;
+  let changed = false;
+  state.plan.diagrams = state.plan.diagrams.map((diagram) => {
+    const artifact = artifacts.find((item) => item.id === diagram.id);
+    if (!artifact || !artifact.diagramData || diagram.svg === artifact.svg) return diagram;
+    changed = true;
+    return { ...diagram, status: "approved", diagramData: artifact.diagramData, svg: artifact.svg, flowSummary: artifact.flowSummary };
+  });
+  return changed;
 }
 
 // ---------------------------------------------------------------------------
