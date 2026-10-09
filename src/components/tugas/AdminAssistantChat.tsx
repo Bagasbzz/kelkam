@@ -9,13 +9,15 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
+import { Bot, Download, Loader2, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
 import Button from "@/components/ui/Button";
+import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import {
   deleteAssistantSession,
   fetchAssistantHistory,
   fetchAssistantSessions,
   sendAssistantMessage,
+  type AssistantAttachment,
   type AssistantSessionSummary,
 } from "@/lib/client/tugas-api";
 
@@ -24,14 +26,17 @@ interface ChatMsg {
   role: "user" | "assistant";
   content: string;
   pending?: boolean;
+  attachments?: AssistantAttachment[];
+  toolsUsed?: string[];
 }
 
 const QUICK_PROMPTS = [
   "Siapa yang belum kumpul di pertemuan terakhir?",
+  "Analisis keterlambatan semua tugas",
   "Rekap nilai semua mahasiswa",
   "Cek kemiripan pengumpulan tugas terbaru",
-  "Deteksi indikasi tulisan AI di tugas terbaru",
-  "Koreksi semua pengumpulan yang belum dinilai di tugas terbaru",
+  "Baca deskripsi tugas terbaru lalu cek kesesuaian semua pengumpulan",
+  "Ekspor semua pengumpulan tugas terbaru ke Word",
 ];
 
 export default function AdminAssistantChat({ courseId, initialPrompt }: { courseId: string; initialPrompt?: string }) {
@@ -115,7 +120,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
       const replyText = r.reply || (r.pendingQuestion ? "" : "(tidak ada jawaban)");
       setMessages((prev) => {
         const next: ChatMsg[] = prev.filter((m) => m.id !== `${tempId}-a`);
-        if (replyText) next.push({ id: `${tempId}-a`, role: "assistant", content: replyText });
+        if (replyText) next.push({ id: `${tempId}-a`, role: "assistant", content: replyText, attachments: r.attachments ?? [], toolsUsed: r.toolsUsed });
         return next;
       });
       void loadSessions();
@@ -178,8 +183,8 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
           {!messages.length && (
             <div className="space-y-2">
               <p className="text-sm text-slate-600">
-                Tanyakan apa saja soal course ini: koreksi pengumpulan, siapa yang belum kumpul, rekap nilai, kemiripan, indikasi AI.
-                Kalau konteks kurang, asisten akan bertanya dulu.
+                Asisten punya akses ke seluruh konteks course: deskripsi tugas, materi (PPTX/PDF), semua mahasiswa & akun, pengumpulan beserta
+                waktu/keterlambatan, catatan & feedback, isi file (termasuk ZIP dan kode), kemiripan, indikasi AI, dan bisa mengekspor hasil ke Word.
               </p>
               <div className="flex flex-wrap gap-2">
                 {QUICK_PROMPTS.map((q) => (
@@ -193,8 +198,28 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
           {messages.map((m) => (
             <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
               {m.role === "assistant" && <Bot className="mt-1 h-4 w-4 shrink-0 text-blue-600" />}
-              <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
-                {m.pending ? <Loader2 className="h-4 w-4 animate-spin text-slate-400" /> : m.content}
+              <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "whitespace-pre-wrap bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
+                {m.pending ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                ) : m.role === "assistant" ? (
+                  <>
+                    <SimpleMarkdown text={m.content} />
+                    {m.attachments?.length ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {m.attachments.map((a) => (
+                          <a key={a.fileId} href={a.url} download className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                            <Download className="h-3.5 w-3.5" /> {a.name} <span className="text-slate-400">({Math.max(1, Math.round(a.size / 1024))} KB)</span>
+                          </a>
+                        ))}
+                      </div>
+                    ) : null}
+                    {m.toolsUsed?.length ? (
+                      <p className="mt-1.5 text-[10px] text-slate-400">tools: {Array.from(new Set(m.toolsUsed)).join(", ")}</p>
+                    ) : null}
+                  </>
+                ) : (
+                  m.content
+                )}
               </div>
               {m.role === "user" && <UserIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
             </div>

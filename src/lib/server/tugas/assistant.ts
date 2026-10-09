@@ -13,12 +13,14 @@ import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
 
-const MAX_STEPS = 8;
+const MAX_STEPS = 14;
 const HISTORY_LIMIT = 12;
-const TOOL_RESULT_MAX_CHARS = 14_000;
+const TOOL_RESULT_MAX_CHARS = 16_000;
 const STEP_TIMEOUT_MS = 40_000;
 // Total anggaran satu giliran; harus < maxDuration route (120 s) + timeout client.
-const TURN_BUDGET_MS = 100_000;
+const TURN_BUDGET_MS = 105_000;
+// Sisa waktu minimum untuk memaksa jawaban akhir (tanpa tool) sebelum budget habis.
+const FINAL_ANSWER_RESERVE_MS = 20_000;
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -32,11 +34,19 @@ export interface AssistantTurnInput {
   deep?: boolean;
 }
 
+export interface AssistantAttachment {
+  fileId: string;
+  name: string;
+  url: string;
+  size: number;
+}
+
 export interface AssistantTurnResult {
   sessionId: string;
   reply: string;
   pendingQuestion: { question: string; options?: string[] } | null;
   toolsUsed: string[];
+  attachments: AssistantAttachment[];
   model: string;
 }
 
@@ -45,18 +55,22 @@ function systemPrompt(courseName: string, memory: Record<string, unknown> | null
     ? `\n\nKONTEKS/RUBRIK DARI ADMIN (wajib dipatuhi):\n${JSON.stringify(memory, null, 1).slice(0, 3000)}`
     : "";
   const sumBlock = summary ? `\n\nRINGKASAN PERCAKAPAN SEBELUMNYA:\n${summary.slice(0, 2000)}` : "";
-  return `Anda adalah Asisten Dosen AI untuk course "${courseName}" di keluhkampus. Pengguna adalah admin/asdos course ini.
+  return `Anda adalah Asisten Dosen AI untuk course "${courseName}" di keluhkampus. Pengguna adalah admin/asdos course ini. Waktu sekarang: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full", timeStyle: "short" })} WIB.
 
-Tugas Anda: membantu mengoreksi pengumpulan, memberi nilai & feedback, melihat siapa yang belum mengumpulkan per pertemuan, merekap nilai, membaca catatan mahasiswa, mendeteksi kemiripan antar-pengumpulan dan indikasi tulisan AI.
+Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
 
 ATURAN:
-1. Selalu ambil data lewat tools — jangan mengarang data. Mulai dari listTugas/listSubmissions bila belum tahu ID.
-2. Hemat token: baca isi pengumpulan secukupnya (getSubmissionContent default 6000 karakter; minta lanjutan hanya jika perlu). Jangan ulangi isi file panjang ke jawaban.
-3. Saat mengoreksi: ikuti kriteria/rubrik dari admin. Jika rubrik/bobot/kriteria lulus belum jelas dan mempengaruhi nilai, panggil askUser SEKALI dengan pertanyaan yang digabung, lalu berhenti.
-4. Sebelum setFeedback untuk banyak mahasiswa sekaligus, pastikan admin sudah memberi perintah eksplisit (mis. "nilai semua"). Untuk 1-3 mahasiswa, langsung lakukan sesuai perintah.
-5. Nilai 0-100 bulat. Huruf otomatis: A>=85, B>=75, C>=65, D>=55, E<55. Feedback singkat, spesifik, sopan, Bahasa Indonesia, ditujukan ke mahasiswa.
-6. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan dengan hati-hati dan sarankan konfirmasi.
-7. Jawaban akhir: ringkas, terstruktur (bullet/tabel markdown kecil), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya.${memBlock}${sumBlock}`;
+1. Selalu ambil data lewat tools — jangan mengarang. Di awal percakapan atau saat belum tahu ID, panggil getCourseContext (1 panggilan = semua tugas + deskripsi + materi).
+2. Sebelum menilai kesesuaian pengumpulan, BACA deskripsi tugas (getTugasDetail) dan, bila relevan, materi pertemuan terkait. Nilai berdasarkan instruksi tugas tersebut.
+3. Untuk tugas kode dalam ZIP: lihat pohon file dari getSubmissionContent, lalu baca file penting secara utuh dengan readSubmissionFile (mis. main.py). Periksa kesesuaian dengan instruksi, kelengkapan, dan kualitas.
+4. Hemat token: baca secukupnya, jangan ulangi isi file panjang ke jawaban. Boleh memanggil beberapa tool sekaligus dalam satu langkah bila independen.
+5. Saat mengoreksi: ikuti rubrik dari admin. Jika rubrik/bobot belum jelas dan mempengaruhi nilai, panggil askUser SEKALI dengan pertanyaan yang digabung, lalu berhenti. Jika admin hanya minta analisis (bukan nilai), jangan bertanya — langsung analisis.
+6. Sebelum setFeedback untuk banyak mahasiswa sekaligus, pastikan admin sudah memberi perintah eksplisit (mis. "nilai semua"). Untuk 1-3 mahasiswa, langsung lakukan sesuai perintah.
+7. Nilai 0-100 bulat. Huruf otomatis: A>=85, B>=75, C>=65, D>=55, E<55. Feedback singkat, spesifik, sopan, Bahasa Indonesia, ditujukan ke mahasiswa.
+8. Keterlambatan: gunakan kolom terlambatMenit/keterlambatan dari tools (zona Asia/Jakarta); sebutkan durasi konkret.
+9. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan hati-hati dan sarankan konfirmasi.
+10. Bila admin minta file Word/dokumen yang bisa diunduh: pakai exportSubmissionDocx (isi pengumpulan/kode) atau exportReportDocx (hasil analisis Anda). Tautan unduh tampil otomatis; cukup sebutkan nama filenya.
+11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya. Jika pekerjaan belum selesai karena batas langkah, laporkan apa yang SUDAH ditemukan dan apa yang tersisa — jangan menjawab kosong.${memBlock}${sumBlock}`;
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -142,7 +156,8 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     });
   }
 
-  const ctx: ToolContext = { courseId: input.courseId, adminId: input.adminId };
+  const attachments: AssistantAttachment[] = [];
+  const ctx: ToolContext = { courseId: input.courseId, adminId: input.adminId, attachments };
   const model = input.deep ? AI_MODEL : AI_MODEL_FAST;
   const toolsUsed: string[] = [];
   const toolLog: Array<{ name: string; args: unknown }> = [];
@@ -150,19 +165,40 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
   let reply = "";
   const startedAt = Date.now();
 
+  /** Paksa model menulis jawaban akhir dari data yang sudah terkumpul (tanpa tool). */
+  const forceFinalAnswer = async (reason: string) => {
+    const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
+    const t = Math.max(Math.min(STEP_TIMEOUT_MS, remaining - 2_000), 8_000);
+    try {
+      const r = await withTimeout(
+        aiClient.chat.completions.create({
+          model,
+          messages: [...messages, { role: "user", content: `[SISTEM] ${reason} Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah ditemukan/dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool.` }],
+          temperature: 0.2,
+          max_tokens: 1600,
+        }, { timeout: t }),
+        t + 2000,
+      );
+      return stripThinking(r.choices[0]?.message?.content);
+    } catch {
+      return "";
+    }
+  };
+
   for (let step = 0; step < MAX_STEPS; step++) {
     const remaining = TURN_BUDGET_MS - (Date.now() - startedAt);
-    if (remaining < 8_000) {
-      reply = `Waktu giliran habis setelah ${toolsUsed.length} langkah tool (${Array.from(new Set(toolsUsed)).join(", ")}). Persempit permintaan (mis. satu pertemuan / beberapa mahasiswa) lalu kirim lagi.`;
+    if (remaining < FINAL_ANSWER_RESERVE_MS) {
+      reply = await forceFinalAnswer("Batas waktu giliran hampir habis.");
       break;
     }
+    const isLastStep = step === MAX_STEPS - 1;
     const stepTimeout = Math.min(STEP_TIMEOUT_MS, remaining - 3_000);
     const completion = await withTimeout(
       aiClient.chat.completions.create({
         model,
         messages,
         tools: TOOL_DEFS,
-        tool_choice: "auto",
+        tool_choice: isLastStep ? "none" : "auto",
         temperature: 0.2,
         max_tokens: 1600,
       }, { timeout: stepTimeout }),
@@ -222,7 +258,10 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
   }
 
   if (!reply && !pendingQuestion) {
-    reply = "Saya sudah menjalankan beberapa langkah tetapi belum sampai kesimpulan. Coba persempit permintaan (mis. sebutkan pertemuan atau nama mahasiswa).";
+    reply = (await forceFinalAnswer("Batas langkah tool tercapai.")) || `Saya sudah menjalankan ${toolsUsed.length} langkah (${Array.from(new Set(toolsUsed)).join(", ")}) tetapi belum sampai kesimpulan. Persempit permintaan (mis. sebutkan pertemuan atau nama mahasiswa) lalu kirim lagi.`;
+  }
+  if (attachments.length && !pendingQuestion) {
+    reply += `\n\nFile siap diunduh: ${attachments.map((a) => `[${a.name}](${a.url})`).join(", ")}`;
   }
 
   // Persist assistant reply + memory/summary
@@ -232,7 +271,7 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
         sessionId: session.id,
         role: "assistant",
         content: pendingQuestion ? `[Pertanyaan ke admin] ${pendingQuestion.question}` : reply,
-        toolCalls: toolLog.length ? (toolLog as unknown as object) : undefined,
+        toolCalls: toolLog.length || attachments.length ? ({ calls: toolLog, attachments } as unknown as object) : undefined,
       },
     }),
     prisma.adminChatSession.update({
@@ -241,5 +280,5 @@ export async function runAssistantTurn(input: AssistantTurnInput): Promise<Assis
     }),
   ]);
 
-  return { sessionId: session.id, reply, pendingQuestion, toolsUsed, model };
+  return { sessionId: session.id, reply, pendingQuestion, toolsUsed, attachments, model };
 }

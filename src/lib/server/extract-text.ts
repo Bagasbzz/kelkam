@@ -193,6 +193,125 @@ export async function extractPdf(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): 
   return { content: text, charCount: text.length, kind: "guide", truncated };
 }
 
+/**
+ * PPTX = ZIP berisi ppt/slides/slideN.xml. Ambil teks <a:t> per slide.
+ * Format .ppt lama (binary) tidak didukung.
+ */
+export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File PPTX tidak valid (format .ppt lama tidak didukung; simpan ulang sebagai .pptx).");
+  const JSZip = (await import("jszip")).default;
+  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const slides = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort((a, b) => Number(/slide(\d+)/i.exec(a)?.[1] ?? 0) - Number(/slide(\d+)/i.exec(b)?.[1] ?? 0));
+  if (!slides.length) throw new ApiRequestError(415, "PPTX tidak berisi slide yang bisa dibaca.");
+
+  const decode = (s: string) =>
+    s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+  const chunks: string[] = [];
+  let total = 0;
+  for (const [i, name] of slides.entries()) {
+    if (total >= maxChars) break;
+    const xml = await withTimeout(zip.files[name].async("string"), 8_000);
+    // Paragraf <a:p> → baris; run <a:t> → teks.
+    const paras = xml.split(/<\/a:p>/).map((p) =>
+      [...p.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map((m) => decode(m[1])).join(""),
+    ).filter((line) => line.trim());
+    // Catatan presenter (opsional)
+    const notesName = `ppt/notesSlides/notesSlide${i + 1}.xml`;
+    let notes = "";
+    if (zip.files[notesName]) {
+      const nx = await withTimeout(zip.files[notesName].async("string"), 5_000);
+      notes = [...nx.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map((m) => decode(m[1])).join(" ").replace(/\s*\d+\s*$/, "").trim();
+    }
+    const block = `[Slide ${i + 1}]\n${paras.join("\n")}${notes ? `\n(Catatan: ${notes})` : ""}`;
+    chunks.push(block);
+    total += block.length;
+  }
+  const { text, truncated } = sanitizeText(chunks.join("\n\n"), maxChars);
+  return { content: text, charCount: text.length, kind: "guide", truncated };
+}
+
+/**
+ * Baca SATU file di dalam ZIP (path persis) — dipakai Admin AI untuk review
+ * kode secara utuh. Mendukung file teks/kode, DOCX, PDF, PPTX di dalam ZIP.
+ */
+export async function readZipEntry(
+  buffer: Buffer,
+  entryPath: string,
+  maxChars = 40_000,
+): Promise<{ path: string; size: number; content: string; truncated: boolean }> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
+  const normalized = entryPath.replace(/\\/g, "/").replace(/^\.?\//, "");
+  if (shouldIgnorePath(normalized)) throw new ApiRequestError(400, "Path tidak diizinkan.");
+  const JSZip = (await import("jszip")).default;
+  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const entry =
+    zip.files[normalized] ??
+    Object.values(zip.files).find((e) => !e.dir && e.name.toLowerCase() === normalized.toLowerCase()) ??
+    Object.values(zip.files).find((e) => !e.dir && e.name.toLowerCase().endsWith(`/${normalized.toLowerCase()}`));
+  if (!entry || entry.dir) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
+  if (declaredUncompressedSize(entry) > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
+
+  const lower = entry.name.toLowerCase();
+  if (/\.(docx|pdf|pptx)$/.test(lower)) {
+    const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+    const inner = lower.endsWith(".docx") ? await extractDocx(buf, maxChars)
+      : lower.endsWith(".pdf") ? await extractPdf(buf, maxChars)
+      : await extractPptx(buf, maxChars);
+    return { path: entry.name, size: buf.length, content: inner.content, truncated: inner.truncated };
+  }
+  const raw = await withTimeout(entry.async("string"), 8_000);
+  const { text, truncated } = sanitizeText(raw, maxChars);
+  return { path: entry.name, size: Buffer.byteLength(raw, "utf8"), content: text, truncated };
+}
+
+/**
+ * Baca BANYAK file di dalam ZIP sekaligus (untuk ekspor DOCX / review utuh).
+ * `paths` kosong → semua file kode/teks + dokumen (dibatasi maxFiles).
+ */
+export async function readZipEntries(
+  buffer: Buffer,
+  options: { paths?: string[]; maxFiles?: number; maxCharsPerFile?: number } = {},
+): Promise<Array<{ path: string; kind: "code" | "doc"; content: string; truncated: boolean }>> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
+  const maxFiles = options.maxFiles ?? 40;
+  const perFile = options.maxCharsPerFile ?? 30_000;
+  const JSZip = (await import("jszip")).default;
+  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const wanted = options.paths?.map((p) => p.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase());
+  const entries = Object.values(zip.files)
+    .filter((e) => !e.dir && !shouldIgnorePath(e.name) && declaredUncompressedSize(e) <= MAX_ZIP_ENTRY_BYTES)
+    .filter((e) => (wanted?.length ? wanted.some((w) => e.name.toLowerCase() === w || e.name.toLowerCase().endsWith(`/${w}`)) : true))
+    .filter((e) => TEXT_EXTENSIONS.test(e.name) || /\.(docx|pdf|pptx)$/i.test(e.name) || /(^|\/)README(\.|$)/i.test(e.name))
+    .sort((a, b) => filePriority(a.name) - filePriority(b.name))
+    .slice(0, maxFiles);
+
+  const out: Array<{ path: string; kind: "code" | "doc"; content: string; truncated: boolean }> = [];
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const lower = entry.name.toLowerCase();
+    try {
+      if (/\.(docx|pdf|pptx)$/.test(lower)) {
+        const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+        const inner = lower.endsWith(".docx") ? await extractDocx(buf, perFile)
+          : lower.endsWith(".pdf") ? await extractPdf(buf, perFile)
+          : await extractPptx(buf, perFile);
+        out.push({ path: entry.name, kind: "doc", content: inner.content, truncated: inner.truncated });
+      } else {
+        const raw = await withTimeout(entry.async("string"), 8_000);
+        totalBytes += Buffer.byteLength(raw, "utf8");
+        if (totalBytes > MAX_ZIP_UNCOMPRESSED_BYTES) break;
+        const { text, truncated } = sanitizeText(raw, perFile);
+        out.push({ path: entry.name, kind: "code", content: text, truncated });
+      }
+    } catch {
+      out.push({ path: entry.name, kind: "doc", content: "[gagal dibaca]", truncated: false });
+    }
+  }
+  return out;
+}
+
 export async function extractZip(
   buffer: Buffer,
   options: ExtractOptions = {},
@@ -270,17 +389,20 @@ export async function extractZip(
     total += block.length;
   }
 
-  // DOCX/PDF di dalam ZIP (umum untuk tugas laporan) — baca maksimal 3.
+  // DOCX/PDF/PPTX di dalam ZIP (umum untuk tugas laporan) — baca maksimal 3.
   const docs = visible
-    .filter((e) => /\.(docx|pdf)$/i.test(e.name))
+    .filter((e) => /\.(docx|pdf|pptx)$/i.test(e.name))
     .slice(0, 3);
   for (const entry of docs) {
     if (total >= maxChars) break;
     try {
       const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+      const budget = Math.min(perFile * 4, maxChars - total);
       const inner = /\.docx$/i.test(entry.name)
-        ? await extractDocx(buf, Math.min(perFile * 4, maxChars - total))
-        : await extractPdf(buf, Math.min(perFile * 4, maxChars - total));
+        ? await extractDocx(buf, budget)
+        : /\.pptx$/i.test(entry.name)
+          ? await extractPptx(buf, budget)
+          : await extractPdf(buf, budget);
       const block = `\n\n[Dokumen: ${entry.name.replace(/[\r\n]/g, "")}]\n${inner.content}`;
       chunks.push(block);
       total += block.length;
@@ -323,6 +445,8 @@ export async function extractTextFromBuffer(
 
   if (lower.endsWith(".docx")) return extractDocx(buffer, maxChars);
   if (lower.endsWith(".pdf")) return extractPdf(buffer, maxChars);
+  if (lower.endsWith(".pptx")) return extractPptx(buffer, maxChars);
+  if (lower.endsWith(".ppt")) throw new ApiRequestError(415, "Format .ppt lama tidak didukung; unggah ulang sebagai .pptx atau PDF.");
   if (lower.endsWith(".zip")) return extractZip(buffer, options);
   if (TEXT_EXTENSIONS.test(lower)) {
     const { text, truncated } = sanitizeText(buffer.toString("utf8"), maxChars);
@@ -335,6 +459,6 @@ export async function extractTextFromBuffer(
 
   throw new ApiRequestError(
     415,
-    "Format belum didukung. Gunakan PDF, DOCX, ZIP, TXT/MD/CSV/JSON, atau file kode.",
+    "Format belum didukung. Gunakan PDF, DOCX, PPTX, ZIP, TXT/MD/CSV/JSON, atau file kode.",
   );
 }

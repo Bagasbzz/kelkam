@@ -11,15 +11,20 @@
  */
 
 import type OpenAI from "openai";
+import fs from "node:fs/promises";
 import { prisma } from "@/lib/db/prisma";
 import { nilaiToHuruf } from "@/lib/server/tugas/serialize";
 import { normalizeNim } from "@/lib/server/tugas/pertemuan";
-import { getSubmissionText, getTugasSubmissionTexts } from "@/lib/server/tugas/submission-text";
+import { getOrExtractFileText, getSubmissionText, getTugasSubmissionTexts } from "@/lib/server/tugas/submission-text";
 import { compareAll, detectAiIndication, textHash } from "@/lib/server/tugas/text-analysis";
+import { extractTextFromBuffer, readZipEntries, readZipEntry } from "@/lib/server/extract-text";
+import { exportDocxForUser, type DocxSection } from "@/lib/server/tugas/export-docx";
 
 export interface ToolContext {
   courseId: string;
   adminId: string;
+  /** Lampiran (file hasil ekspor) yang dikumpulkan selama 1 giliran. */
+  attachments?: Array<{ fileId: string; name: string; url: string; size: number }>;
 }
 
 export type ToolResult = Record<string, unknown>;
@@ -28,6 +33,14 @@ const fmtDate = (d: Date) =>
   d.toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "medium", timeStyle: "short" });
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n[...dipotong, total ${s.length} karakter]` : s);
+
+/** Selisih submittedAt - deadline dalam menit (>0 = terlambat) + label manusiawi. */
+function lateness(submittedAt: Date, deadline: Date) {
+  const menit = Math.round((submittedAt.getTime() - deadline.getTime()) / 60_000);
+  const abs = Math.abs(menit);
+  const label = abs >= 1440 ? `${Math.floor(abs / 1440)} hari ${Math.floor((abs % 1440) / 60)} jam` : abs >= 60 ? `${Math.floor(abs / 60)} jam ${abs % 60} menit` : `${abs} menit`;
+  return { terlambatMenit: menit > 0 ? menit : 0, keterlambatan: menit > 0 ? `terlambat ${label}` : `lebih awal ${label}` };
+}
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -86,11 +99,66 @@ async function listTugas(ctx: ToolContext): Promise<ToolResult> {
       id: t.id,
       pertemuan: t.pertemuan,
       title: t.title,
+      deskripsi: clip(t.description, 400),
       kelas: t.class?.name ?? "semua",
       deadline: fmtDate(t.deadline),
       lewat: t.deadline < new Date(),
       jumlahSubmit: t._count.submissions,
     })),
+  };
+}
+
+async function getTugasDetail(ctx: ToolContext, args: { tugasId?: string; pertemuan?: number; title?: string }): Promise<ToolResult> {
+  const tugases = await resolveTugas(ctx, args);
+  const course = await prisma.course.findUnique({ where: { id: ctx.courseId }, select: { name: true, description: true } });
+  const now = new Date();
+  return {
+    course: { nama: course?.name, deskripsi: course?.description ?? null },
+    tugas: await Promise.all(tugases.map(async (t) => {
+      const agg = await prisma.tugasSubmission.groupBy({ by: ["status"], where: { tugasId: t.id }, _count: { _all: true } });
+      return {
+        id: t.id,
+        pertemuan: t.pertemuan,
+        title: t.title,
+        deskripsiLengkap: t.description,
+        kelas: t.class?.name ?? "semua kelas",
+        classId: t.classId,
+        deadline: fmtDate(t.deadline),
+        deadlineISO: t.deadline.toISOString(),
+        sudahLewat: t.deadline < now,
+        dibuat: fmtDate(t.createdAt),
+        jumlahPerStatus: Object.fromEntries(agg.map((a) => [a.status, a._count._all])),
+      };
+    })),
+  };
+}
+
+/** Bundel konteks course dalam 1 panggilan: deskripsi, kelas, semua tugas (dengan deskripsi), materi, statistik. */
+async function getCourseContext(ctx: ToolContext): Promise<ToolResult> {
+  const [course, classes, tugases, rosterCount, subCount, enrollCount] = await Promise.all([
+    prisma.course.findUnique({ where: { id: ctx.courseId }, select: { name: true, code: true, description: true, createdAt: true } }),
+    prisma.courseClass.findMany({ where: { courseId: ctx.courseId }, select: { id: true, name: true, _count: { select: { mahasiswas: true } } } }),
+    prisma.tugas.findMany({ where: { courseId: ctx.courseId }, orderBy: [{ pertemuan: "asc" }, { deadline: "asc" }], include: { class: { select: { name: true } }, _count: { select: { submissions: true } } } }),
+    prisma.mahasiswa.count({ where: { courseId: ctx.courseId } }),
+    prisma.tugasSubmission.count({ where: { tugas: { courseId: ctx.courseId } } }),
+    prisma.courseEnrollment.count({ where: { courseId: ctx.courseId } }),
+  ]);
+  let materi: Array<{ id: string; nama: string; ukuran: number }> = [];
+  try {
+    const { listCourseMaterials } = await import("@/lib/storage/course-materials");
+    materi = (await listCourseMaterials(ctx.courseId)).map((m) => ({ id: m.id, nama: m.originalName, ukuran: m.size }));
+  } catch { /* opsional */ }
+  const now = new Date();
+  return {
+    course: course ? { nama: course.name, kode: course.code, deskripsi: course.description ?? null } : null,
+    kelas: classes.map((c) => ({ id: c.id, nama: c.name, roster: c._count.mahasiswas })),
+    statistik: { roster: rosterCount, akunTerdaftar: enrollCount, totalTugas: tugases.length, totalSubmission: subCount },
+    tugas: tugases.map((t) => ({
+      id: t.id, pertemuan: t.pertemuan, title: t.title, deskripsi: clip(t.description, 700), kelas: t.class?.name ?? "semua",
+      deadline: fmtDate(t.deadline), sudahLewat: t.deadline < now, jumlahSubmit: t._count.submissions,
+    })),
+    materi,
+    catatan: "Gunakan getTugasDetail untuk deskripsi lengkap tugas, getMaterialContent untuk isi materi (PPTX/PDF).",
   };
 }
 
@@ -113,7 +181,7 @@ async function getCourseOverview(ctx: ToolContext): Promise<ToolResult> {
 
 async function listSubmissions(
   ctx: ToolContext,
-  args: { tugasId?: string; pertemuan?: number; title?: string; classId?: string; onlyUngraded?: boolean; onlyLate?: boolean },
+  args: { tugasId?: string; pertemuan?: number; title?: string; classId?: string; onlyUngraded?: boolean; onlyLate?: boolean; includeNotes?: boolean },
 ): Promise<ToolResult> {
   const tugases = await resolveTugas(ctx, args);
   const out = [];
@@ -128,34 +196,127 @@ async function listSubmissions(
       orderBy: { position: "asc" },
       include: {
         class: { select: { name: true } },
+        user: { select: { email: true } },
         fileUpload: { select: { originalName: true, size: true } },
         analysis: { select: { aiScore: true, simMaxScore: true } },
       },
     });
+    const lateCount = subs.filter((s) => s.submittedAt > t.deadline).length;
     out.push({
       tugasId: t.id,
       title: t.title,
       pertemuan: t.pertemuan,
+      deadline: fmtDate(t.deadline),
       jumlah: subs.length,
+      terlambat: lateCount,
+      tepatWaktu: subs.length - lateCount,
       submissions: subs.map((s) => ({
         id: s.id,
         no: s.position,
         nim: s.nim,
         nama: s.name,
+        email: s.user?.email ?? null,
         kelas: s.class.name,
         status: s.status,
         waktu: fmtDate(s.submittedAt),
+        ...lateness(s.submittedAt, t.deadline),
+        diubah: s.updatedAt ? fmtDate(s.updatedAt) : null,
         file: s.fileUpload?.originalName ?? null,
-        adaCatatanMhs: Boolean(s.note?.trim()),
+        catatanMhs: s.note?.trim() ? (args.includeNotes ? clip(s.note.trim(), 600) : clip(s.note.trim(), 120)) : null,
         nilai: s.nilai,
         huruf: nilaiToHuruf(s.nilai),
-        feedback: s.feedback ? clip(s.feedback, 160) : null,
+        feedback: s.feedback ? clip(s.feedback, args.includeNotes ? 600 : 160) : null,
+        feedbackAt: s.feedbackAt ? fmtDate(s.feedbackAt) : null,
         indikasiAI: s.analysis?.aiScore ?? null,
         kemiripanMaks: s.analysis?.simMaxScore ?? null,
       })),
     });
   }
   return { hasil: out };
+}
+
+/** Analisis keterlambatan: per tugas / per kelas / per mahasiswa. */
+async function analyzeLateness(ctx: ToolContext, args: { tugasId?: string; pertemuan?: number; title?: string; classId?: string }): Promise<ToolResult> {
+  const tugases = args.tugasId || args.pertemuan || args.title
+    ? await resolveTugas(ctx, args)
+    : await prisma.tugas.findMany({ where: { courseId: ctx.courseId }, include: { class: { select: { id: true, name: true } } }, orderBy: [{ pertemuan: "asc" }, { deadline: "asc" }] });
+  const subs = await prisma.tugasSubmission.findMany({
+    where: { tugasId: { in: tugases.map((t) => t.id) }, ...(args.classId ? { classId: args.classId } : {}) },
+    select: { id: true, tugasId: true, nim: true, name: true, submittedAt: true, status: true, class: { select: { name: true } } },
+  });
+  const perMhs = new Map<string, { nim: string; nama: string; kelas: string; total: number; terlambat: number; totalMenitTerlambat: number }>();
+  const perTugas = tugases.map((t) => {
+    const mine = subs.filter((s) => s.tugasId === t.id);
+    const late = mine.filter((s) => s.submittedAt > t.deadline).map((s) => ({ ...s, ...lateness(s.submittedAt, t.deadline) }));
+    for (const s of mine) {
+      const k = normalizeNim(s.nim);
+      const cur = perMhs.get(k) ?? { nim: s.nim, nama: s.name, kelas: s.class.name, total: 0, terlambat: 0, totalMenitTerlambat: 0 };
+      cur.total++;
+      const l = lateness(s.submittedAt, t.deadline);
+      if (l.terlambatMenit > 0) { cur.terlambat++; cur.totalMenitTerlambat += l.terlambatMenit; }
+      perMhs.set(k, cur);
+    }
+    const menit = late.map((l) => l.terlambatMenit);
+    return {
+      tugasId: t.id, pertemuan: t.pertemuan, title: t.title, deadline: fmtDate(t.deadline),
+      kumpul: mine.length, tepatWaktu: mine.length - late.length, terlambat: late.length,
+      rataTerlambatMenit: menit.length ? Math.round(menit.reduce((a, b) => a + b, 0) / menit.length) : 0,
+      paling: late.sort((a, b) => b.terlambatMenit - a.terlambatMenit).slice(0, 10).map((l) => ({ submissionId: l.id, nim: l.nim, nama: l.name, kelas: l.class.name, waktu: fmtDate(l.submittedAt), keterlambatan: l.keterlambatan })),
+    };
+  });
+  const seringTerlambat = [...perMhs.values()].filter((m) => m.terlambat > 0).sort((a, b) => b.terlambat - a.terlambat || b.totalMenitTerlambat - a.totalMenitTerlambat).slice(0, 25);
+  return { perTugas, seringTerlambat, catatan: "Waktu dalam zona Asia/Jakarta. Status LATE ditentukan saat submit; kolom terlambat dihitung ulang dari deadline saat ini." };
+}
+
+/** Daftar mahasiswa: roster + akun user yang terdaftar (enrollment) + pencocokan. */
+async function listStudents(ctx: ToolContext, args: { classId?: string; query?: string }): Promise<ToolResult> {
+  const q = args.query?.trim();
+  const [roster, enrollments, subUsers] = await Promise.all([
+    prisma.mahasiswa.findMany({
+      where: {
+        courseId: ctx.courseId,
+        ...(args.classId ? { classId: args.classId } : {}),
+        ...(q ? { OR: [{ nim: { contains: q, mode: "insensitive" } }, { name: { contains: q, mode: "insensitive" } }, { email: { contains: q, mode: "insensitive" } }] } : {}),
+      },
+      select: { nim: true, name: true, email: true, class: { select: { name: true } } },
+      orderBy: [{ classId: "asc" }, { name: "asc" }],
+    }),
+    prisma.courseEnrollment.findMany({
+      where: { courseId: ctx.courseId },
+      select: { enrolledAt: true, user: { select: { id: true, email: true, name: true } } },
+      orderBy: { enrolledAt: "asc" },
+    }),
+    prisma.tugasSubmission.findMany({
+      where: { tugas: { courseId: ctx.courseId } },
+      select: { userId: true, nim: true, name: true, class: { select: { name: true } }, submittedAt: true },
+      orderBy: { submittedAt: "desc" },
+    }),
+  ]);
+  // userId → identitas yang dipakai saat submit (nim/nama terakhir)
+  const identByUser = new Map<string, { nim: string; nama: string; kelas: string; jumlahSubmit: number; terakhirSubmit: Date }>();
+  for (const s of subUsers) {
+    const cur = identByUser.get(s.userId);
+    if (cur) cur.jumlahSubmit++;
+    else identByUser.set(s.userId, { nim: s.nim, nama: s.name, kelas: s.class.name, jumlahSubmit: 1, terakhirSubmit: s.submittedAt });
+  }
+  const rosterNims = new Set(roster.map((r) => normalizeNim(r.nim)));
+  const akun = enrollments
+    .map((e) => {
+      const ident = identByUser.get(e.user.id);
+      return {
+        userId: e.user.id, email: e.user.email, namaAkun: e.user.name, bergabung: fmtDate(e.enrolledAt),
+        nim: ident?.nim ?? null, namaSubmit: ident?.nama ?? null, kelas: ident?.kelas ?? null,
+        jumlahSubmit: ident?.jumlahSubmit ?? 0, terakhirSubmit: ident ? fmtDate(ident.terakhirSubmit) : null,
+        adaDiRoster: ident ? rosterNims.has(normalizeNim(ident.nim)) : null,
+      };
+    })
+    .filter((a) => !q || [a.email, a.namaAkun, a.nim, a.namaSubmit].some((v) => v?.toLowerCase().includes(q.toLowerCase())));
+  const nimWithAccount = new Set([...identByUser.values()].map((i) => normalizeNim(i.nim)));
+  return {
+    roster: roster.map((r) => ({ nim: r.nim, nama: r.name, email: r.email, kelas: r.class?.name ?? "-", punyaAkunAktif: nimWithAccount.has(normalizeNim(r.nim)) })),
+    akun: akun.slice(0, 300),
+    ringkasan: { roster: roster.length, akunTerdaftar: enrollments.length, akunBelumPernahSubmit: akun.filter((a) => a.jumlahSubmit === 0).length, rosterTanpaAkun: roster.filter((r) => !nimWithAccount.has(normalizeNim(r.nim))).length },
+  };
 }
 
 async function listMissing(
@@ -200,7 +361,7 @@ async function getStudentHistory(ctx: ToolContext, args: { nim?: string; name?: 
       ...(args.name ? { name: { contains: args.name.trim(), mode: "insensitive" } } : {}),
     },
     orderBy: { tugas: { deadline: "asc" } },
-    include: { tugas: { select: { id: true, title: true, pertemuan: true } }, class: { select: { name: true } } },
+    include: { tugas: { select: { id: true, title: true, pertemuan: true, deadline: true } }, class: { select: { name: true } }, user: { select: { email: true } }, fileUpload: { select: { originalName: true } } },
     take: 60,
   });
   const roster = await prisma.mahasiswa.findFirst({
@@ -214,7 +375,9 @@ async function getStudentHistory(ctx: ToolContext, args: { nim?: string; name?: 
   const nilaiList = subs.map((s) => s.nilai).filter((n): n is number => typeof n === "number");
   return {
     roster,
+    akunEmail: subs[0]?.user?.email ?? null,
     totalSubmit: subs.length,
+    totalTerlambat: subs.filter((s) => s.submittedAt > s.tugas.deadline).length,
     rataNilai: nilaiList.length ? Math.round((nilaiList.reduce((a, b) => a + b, 0) / nilaiList.length) * 10) / 10 : null,
     riwayat: subs.map((s) => ({
       submissionId: s.id,
@@ -223,10 +386,14 @@ async function getStudentHistory(ctx: ToolContext, args: { nim?: string; name?: 
       tugas: s.tugas.title,
       kelas: s.class.name,
       status: s.status,
+      waktu: fmtDate(s.submittedAt),
+      ...lateness(s.submittedAt, s.tugas.deadline),
+      file: s.fileUpload?.originalName ?? null,
       nilai: s.nilai,
       huruf: nilaiToHuruf(s.nilai),
-      catatanMhs: s.note ? clip(s.note, 300) : null,
-      feedback: s.feedback ? clip(s.feedback, 300) : null,
+      catatanMhs: s.note ? clip(s.note, 500) : null,
+      feedback: s.feedback ? clip(s.feedback, 500) : null,
+      feedbackAt: s.feedbackAt ? fmtDate(s.feedbackAt) : null,
     })),
   };
 }
@@ -261,6 +428,130 @@ async function getSubmissionContent(
     nilaiSekarang: s.nilai,
     feedbackSekarang: s.feedback,
   };
+}
+
+/** Baca buffer file pengumpulan dari disk (sudah diverifikasi course). */
+async function submissionBuffer(ctx: ToolContext, submissionId: string) {
+  const s = await submissionInCourse(ctx, submissionId);
+  if (!s.fileUploadId) throw new Error("Pengumpulan ini tidak memiliki file.");
+  const file = await prisma.fileUpload.findUnique({ where: { id: s.fileUploadId }, select: { filePath: true, originalName: true } });
+  if (!file) throw new Error("File tidak ditemukan.");
+  const buffer = await fs.readFile(file.filePath);
+  return { s, buffer, originalName: file.originalName };
+}
+
+/** Baca satu file di dalam ZIP pengumpulan secara utuh (mis. main.py). */
+async function readSubmissionFile(ctx: ToolContext, args: { submissionId: string; path: string; maxChars?: number }): Promise<ToolResult> {
+  if (!args.path?.trim()) throw new Error("Berikan path file di dalam ZIP (lihat pohon di getSubmissionContent).");
+  const { s, buffer, originalName } = await submissionBuffer(ctx, args.submissionId);
+  if (!/\.zip$/i.test(originalName) && !(buffer[0] === 0x50 && buffer[1] === 0x4b && !/\.(docx|pptx|xlsx)$/i.test(originalName))) {
+    throw new Error("File pengumpulan bukan ZIP. Gunakan getSubmissionContent.");
+  }
+  const r = await readZipEntry(buffer, args.path, Math.min(Math.max(args.maxChars ?? 20_000, 500), 60_000));
+  return { submissionId: s.id, nim: s.nim, nama: s.name, file: r.path, ukuran: r.size, terpotong: r.truncated, isi: r.content };
+}
+
+/** Isi materi (PPTX/PDF/DOCX) yang diunggah admin. */
+async function getMaterialContent(ctx: ToolContext, args: { materialId: string; maxChars?: number; offset?: number }): Promise<ToolResult> {
+  const { readCourseMaterial } = await import("@/lib/storage/course-materials");
+  const found = await readCourseMaterial(ctx.courseId, args.materialId);
+  if (!found) throw new Error("Materi tidak ditemukan. Gunakan getMaterials untuk melihat daftar.");
+  const { material, buffer } = found;
+  const maxChars = Math.min(Math.max(args.maxChars ?? 8000, 500), 30_000);
+  const offset = Math.max(args.offset ?? 0, 0);
+  let text = "";
+  let error: string | null = null;
+  try {
+    const r = await extractTextFromBuffer(buffer, material.originalName, { maxChars: 80_000 });
+    text = r.content;
+  } catch (err) {
+    error = err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : "Materi tidak bisa dibaca sebagai teks.";
+  }
+  return {
+    materialId: material.id, nama: material.originalName, ukuran: material.size, diunggah: material.uploadedAt,
+    totalKarakter: text.length, offset, isi: text.slice(offset, offset + maxChars), adaLanjutan: offset + maxChars < text.length, error,
+  };
+}
+
+const MAX_EXPORT_SUBMISSIONS = 25;
+
+/**
+ * Ekspor isi pengumpulan ke DOCX yang bisa diunduh admin:
+ * catatan mahasiswa + isi dokumen + seluruh file kode (dari ZIP).
+ */
+async function exportSubmissionDocx(
+  ctx: ToolContext,
+  args: { submissionId?: string; tugasId?: string; pertemuan?: number; title?: string; classId?: string; includeCode?: boolean; includeDocs?: boolean; onlyPaths?: string[]; fileName?: string },
+): Promise<ToolResult> {
+  const includeCode = args.includeCode ?? true;
+  const includeDocs = args.includeDocs ?? true;
+  let targets: string[] = [];
+  let judul = "";
+  if (args.submissionId) {
+    const s = await submissionInCourse(ctx, args.submissionId);
+    targets = [s.id];
+    judul = `${s.tugas.title} — ${s.name} (${s.nim})`;
+  } else {
+    const [t] = await resolveTugas(ctx, args);
+    const subs = await prisma.tugasSubmission.findMany({ where: { tugasId: t.id, ...(args.classId ? { classId: args.classId } : {}) }, select: { id: true }, orderBy: { position: "asc" } });
+    if (subs.length > MAX_EXPORT_SUBMISSIONS) throw new Error(`Terlalu banyak pengumpulan (${subs.length}). Maksimal ${MAX_EXPORT_SUBMISSIONS} per ekspor; filter per kelas atau per mahasiswa.`);
+    targets = subs.map((x) => x.id);
+    judul = `${t.title}${t.pertemuan ? ` (Pertemuan ${t.pertemuan})` : ""} — Kumpulan Pengumpulan`;
+  }
+  if (!targets.length) throw new Error("Tidak ada pengumpulan untuk diekspor.");
+
+  const sections: DocxSection[] = [];
+  for (const id of targets) {
+    const s = await submissionInCourse(ctx, id);
+    const head = `${s.name} (${s.nim}) — ${s.class.name}`;
+    const meta = `Dikumpulkan: ${fmtDate(s.submittedAt)} (${lateness(s.submittedAt, s.tugas.deadline).keterlambatan}) • Status: ${s.status} • Nilai: ${s.nilai ?? "-"}${s.feedback ? `\nFeedback: ${s.feedback}` : ""}`;
+    sections.push({ title: head, content: meta });
+    if (s.note?.trim()) sections.push({ title: `Catatan mahasiswa — ${s.name}`, content: s.note.trim() });
+    if (!s.fileUploadId) continue;
+    const file = await prisma.fileUpload.findUnique({ where: { id: s.fileUploadId }, select: { filePath: true, originalName: true } });
+    if (!file) continue;
+    const isZip = /\.zip$/i.test(file.originalName);
+    if (isZip) {
+      let buffer: Buffer;
+      try { buffer = await fs.readFile(file.filePath); } catch { sections.push({ title: `File — ${file.originalName}`, content: "[file tidak ditemukan di penyimpanan]" }); continue; }
+      const entries = await readZipEntries(buffer, { paths: args.onlyPaths, maxFiles: 40, maxCharsPerFile: 30_000 });
+      for (const e of entries) {
+        if (e.kind === "doc" && !includeDocs) continue;
+        if (e.kind === "code" && !includeCode) continue;
+        sections.push({ title: `${e.kind === "doc" ? "Dokumen" : "Kode"}: ${e.path}${e.truncated ? " (dipotong)" : ""}`, kind: e.kind === "doc" ? "text" : "code", content: e.content });
+      }
+    } else if (includeDocs) {
+      try {
+        const ex = await getOrExtractFileText(s.fileUploadId);
+        if (ex) sections.push({ title: `Dokumen: ${file.originalName}`, kind: ex.kind === "code" ? "code" : "text", content: ex.text });
+      } catch {
+        sections.push({ title: `Dokumen: ${file.originalName}`, content: "[format tidak bisa dibaca sebagai teks]" });
+      }
+    }
+  }
+  const out = await exportDocxForUser(ctx.adminId, args.fileName ?? judul, { title: judul, subtitle: `Diekspor ${fmtDate(new Date())} oleh Asisten Dosen`, sections });
+  ctx.attachments?.push(out);
+  return { ok: true, ...out, jumlahPengumpulan: targets.length, jumlahBagian: sections.length, catatan: "Beritahu admin bahwa file siap diunduh (tautan sudah ditampilkan otomatis di chat)." };
+}
+
+/** Ekspor laporan/teks buatan asisten (markdown sederhana) ke DOCX. */
+async function exportReportDocx(ctx: ToolContext, args: { title: string; markdown: string; fileName?: string }): Promise<ToolResult> {
+  if (!args.title?.trim() || !args.markdown?.trim()) throw new Error("Berikan title dan markdown.");
+  const sections: DocxSection[] = [];
+  let current: DocxSection = { title: "Ringkasan", content: "" };
+  for (const line of args.markdown.replace(/\r/g, "").split("\n")) {
+    const h = /^#{1,3}\s+(.*)$/.exec(line);
+    if (h) {
+      if (current.content.trim()) sections.push(current);
+      current = { title: h[1].trim(), content: "" };
+    } else {
+      current.content += `${line.replace(/^\s*[-*]\s+/, "• ").replace(/\*\*/g, "")}\n`;
+    }
+  }
+  if (current.content.trim()) sections.push(current);
+  const out = await exportDocxForUser(ctx.adminId, args.fileName ?? args.title, { title: args.title.trim(), subtitle: `Dibuat ${fmtDate(new Date())} oleh Asisten Dosen`, sections });
+  ctx.attachments?.push(out);
+  return { ok: true, ...out };
 }
 
 async function setFeedback(
@@ -429,16 +720,24 @@ type ToolFn = (ctx: ToolContext, args: any) => Promise<ToolResult>;
 
 export const TOOL_IMPL: Record<string, ToolFn> = {
   getCourseOverview: (ctx) => getCourseOverview(ctx),
+  getCourseContext: (ctx) => getCourseContext(ctx),
   listTugas: (ctx) => listTugas(ctx),
+  getTugasDetail,
   listSubmissions,
   listMissing,
+  analyzeLateness,
+  listStudents,
   getStudentHistory,
   getSubmissionContent,
+  readSubmissionFile,
   setFeedback,
   rekapNilai,
   compareSimilarity,
   detectAI,
   getMaterials: (ctx) => getMaterials(ctx),
+  getMaterialContent,
+  exportSubmissionDocx,
+  exportReportDocx,
 };
 
 const tugasSelector = {
@@ -448,14 +747,23 @@ const tugasSelector = {
 } as const;
 
 export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
-  { type: "function", function: { name: "getCourseOverview", description: "Ringkasan course: kelas, jumlah roster, jumlah tugas & submission.", parameters: { type: "object", properties: {} } } },
-  { type: "function", function: { name: "listTugas", description: "Daftar semua tugas di course beserta pertemuan, deadline, jumlah submit.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "getCourseOverview", description: "Ringkasan singkat course: kelas, jumlah roster, jumlah tugas & submission.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "getCourseContext", description: "KONTEKS LENGKAP course dalam 1 panggilan: deskripsi course, kelas, SEMUA tugas beserta deskripsi & deadline, daftar materi, statistik. Panggil ini dulu di awal percakapan.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "listTugas", description: "Daftar semua tugas di course beserta pertemuan, deskripsi singkat, deadline, jumlah submit.", parameters: { type: "object", properties: {} } } },
+  {
+    type: "function",
+    function: {
+      name: "getTugasDetail",
+      description: "Deskripsi LENGKAP sebuah tugas (instruksi/soal yang diberikan ke mahasiswa), deadline, kelas, jumlah per status. WAJIB dibaca sebelum menilai kesesuaian pengumpulan.",
+      parameters: { type: "object", properties: { ...tugasSelector } },
+    },
+  },
   {
     type: "function",
     function: {
       name: "listSubmissions",
-      description: "Daftar pengumpulan untuk satu tugas (ringkas: nim, nama, status, nilai, indikasi). Pakai filter onlyUngraded untuk yang belum dinilai.",
-      parameters: { type: "object", properties: { ...tugasSelector, classId: { type: "string" }, onlyUngraded: { type: "boolean" }, onlyLate: { type: "boolean" } } },
+      description: "Daftar pengumpulan satu tugas: nim, nama, email akun, kelas, status, waktu kumpul, keterlambatan (menit & label), file, catatan mahasiswa, nilai, feedback, indikasi. includeNotes=true untuk catatan/feedback lebih panjang.",
+      parameters: { type: "object", properties: { ...tugasSelector, classId: { type: "string" }, onlyUngraded: { type: "boolean" }, onlyLate: { type: "boolean" }, includeNotes: { type: "boolean" } } },
     },
   },
   {
@@ -469,8 +777,24 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
   {
     type: "function",
     function: {
+      name: "analyzeLateness",
+      description: "Analisis keterlambatan: per tugas (tepat waktu vs terlambat, rata-rata, paling telat) dan mahasiswa yang sering terlambat. Tanpa selector → semua tugas.",
+      parameters: { type: "object", properties: { ...tugasSelector, classId: { type: "string" } } },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "listStudents",
+      description: "Semua mahasiswa: roster (nim, nama, email, kelas) + akun user yang bergabung ke course (email, nama akun, nim yang dipakai, jumlah submit, ada di roster atau tidak). query untuk cari nama/nim/email.",
+      parameters: { type: "object", properties: { classId: { type: "string" }, query: { type: "string" } } },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "getStudentHistory",
-      description: "Riwayat satu mahasiswa: semua pengumpulan, catatan mahasiswa, feedback, nilai, rata-rata.",
+      description: "Riwayat satu mahasiswa: semua pengumpulan, waktu & keterlambatan, catatan mahasiswa, feedback dosen, nilai, rata-rata.",
       parameters: { type: "object", properties: { nim: { type: "string" }, name: { type: "string" } } },
     },
   },
@@ -478,8 +802,16 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "getSubmissionContent",
-      description: "Baca isi pengumpulan (catatan + isi file PDF/DOCX/ZIP yang sudah diekstrak). Gunakan offset untuk membaca lanjutan. Default 6000 karakter — minta lebih hanya jika perlu.",
+      description: "Baca isi pengumpulan (catatan + isi file PDF/DOCX/PPTX/ZIP yang sudah diekstrak; ZIP memberi pohon file + cuplikan tiap file kode). Gunakan offset untuk lanjutan. Untuk membaca satu file kode secara UTUH di dalam ZIP gunakan readSubmissionFile.",
       parameters: { type: "object", properties: { submissionId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["submissionId"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "readSubmissionFile",
+      description: "Baca SATU file di dalam ZIP pengumpulan secara utuh (mis. path 'main.py' atau 'src/app.js'; DOCX/PDF/PPTX di dalam ZIP juga bisa). Pakai untuk review kode detail.",
+      parameters: { type: "object", properties: { submissionId: { type: "string" }, path: { type: "string" }, maxChars: { type: "integer" } }, required: ["submissionId", "path"] },
     },
   },
   {
@@ -514,7 +846,31 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: { type: "object", properties: { submissionId: { type: "string" }, ...tugasSelector } },
     },
   },
-  { type: "function", function: { name: "getMaterials", description: "Daftar materi (PPT/PDF) yang diunggah admin untuk course.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "getMaterials", description: "Daftar materi pertemuan (PPTX/PDF) yang diunggah admin untuk course.", parameters: { type: "object", properties: {} } } },
+  {
+    type: "function",
+    function: {
+      name: "getMaterialContent",
+      description: "Baca isi materi pertemuan (PPTX per slide / PDF / DOCX). Gunakan untuk memahami apa yang diajarkan sebelum menilai tugas terkait. offset untuk lanjutan.",
+      parameters: { type: "object", properties: { materialId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["materialId"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "exportSubmissionDocx",
+      description: "Buat file DOCX yang bisa diunduh admin berisi isi pengumpulan: catatan mahasiswa, isi dokumen (Word/PDF), dan SEMUA file kode dari ZIP (ekstrak otomatis). Satu submission (submissionId) atau semua pengumpulan satu tugas (maks 25). onlyPaths untuk memilih file tertentu di ZIP.",
+      parameters: { type: "object", properties: { submissionId: { type: "string" }, ...tugasSelector, classId: { type: "string" }, includeCode: { type: "boolean" }, includeDocs: { type: "boolean" }, onlyPaths: { type: "array", items: { type: "string" } }, fileName: { type: "string" } } },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "exportReportDocx",
+      description: "Simpan laporan/analisis yang Anda tulis (markdown: heading #, bullet -, paragraf) menjadi DOCX yang bisa diunduh admin. Pakai saat admin minta hasil review/rekap dalam bentuk Word.",
+      parameters: { type: "object", properties: { title: { type: "string" }, markdown: { type: "string" }, fileName: { type: "string" } }, required: ["title", "markdown"] },
+    },
+  },
   {
     type: "function",
     function: {

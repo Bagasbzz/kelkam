@@ -408,11 +408,19 @@ export function deleteMahasiswa(courseId: string, mahasiswaId: string) {
 // Admin AI Assistant (chat tool-calling)
 // ---------------------------------------------------------------------------
 
+export interface AssistantAttachment {
+  fileId: string;
+  name: string;
+  url: string;
+  size: number;
+}
+
 export interface AssistantTurn {
   sessionId: string;
   reply: string;
   pendingQuestion: { question: string; options?: string[] } | null;
   toolsUsed: string[];
+  attachments?: AssistantAttachment[];
   model: string;
 }
 
