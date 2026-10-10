@@ -108,6 +108,11 @@ const MIN_STEP_BUDGET_MS = 25_000;
 const MAX_CONSECUTIVE_ERRORS = 3;
 const EVENT_LIMIT = 300;
 const TOOL_RESULT_MAX_CHARS = 14_000;
+/** Model dengan thinking butuh ruang token; di bawah ini jawaban sering terpotong jadi kosong. */
+const STEP_MIN_MAX_TOKENS = 4_000;
+const FINAL_ANSWER_MAX_TOKENS = 4_000;
+/** Berapa kali respons kosong/terpotong ditoleransi sebelum dipaksa menyimpulkan. */
+const MAX_EMPTY_REPLIES = 3;
 /** Jika total konteks melebihi ini, tool result lama dipangkas. */
 const CONTEXT_SOFT_LIMIT_CHARS = 260_000;
 const COMPACT_KEEP_LAST = 8;
@@ -398,6 +403,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   const attachments = asArr(row0.attachments) as AgentAttachment[];
   let stepCount = row0.stepCount;
   let consecutiveErrors = 0;
+  let emptyReplies = 0;
   let model = row0.model;
   /** model → epoch ms saat kuota diperkirakan pulih (hanya untuk segmen ini). */
   const availableAt = new Map<string, number>();
@@ -456,25 +462,24 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   /** Paksa model menulis jawaban akhir dari data yang sudah terkumpul. */
   const forceFinalAnswer = async (reason: string) => {
     emit("Menyusun jawaban akhir dari data yang sudah terkumpul…");
-    try {
-      const system = await driver.systemPrompt(ref);
-      const r = await withTimeout(
-        aiClient.chat.completions.create({
-          model,
-          messages: [
-            { role: "system", content: system },
-            ...compactMessages(messages, true),
-            { role: "user", content: `[SISTEM] ${reason} Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool.` },
-          ],
-          temperature: 0.2,
-          max_tokens: driver.maxTokens ?? 1800,
-        }, { timeout: 60_000, maxRetries: 0 }),
-        62_000,
-      );
-      return stripThinking(r.choices[0]?.message?.content);
-    } catch {
-      return "";
+    const system = await driver.systemPrompt(ref).catch(() => "");
+    const base: Msg[] = [
+      { role: "system", content: system },
+      ...compactMessages(messages, true),
+      { role: "user", content: `[SISTEM] ${reason} Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool. Langsung tulis jawabannya tanpa berpikir panjang.` },
+    ];
+    // Model cepat sering menghabiskan token untuk berpikir → kalau kosong, coba model utama.
+    for (const m of [model, alternateModel(model)]) {
+      try {
+        const r = await withTimeout(
+          aiClient.chat.completions.create({ model: m, messages: base, temperature: 0.2, max_tokens: FINAL_ANSWER_MAX_TOKENS }, { timeout: 80_000, maxRetries: 0 }),
+          82_000,
+        );
+        const text = stripThinking(r.choices[0]?.message?.content);
+        if (text) return text;
+      } catch { /* coba model berikutnya */ }
     }
+    return "";
   };
 
   try {
@@ -512,7 +517,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
             tools: driver.tools,
             tool_choice: isLast ? "none" : "auto",
             temperature: driver.temperature ?? 0.2,
-            max_tokens: driver.maxTokens ?? 1800,
+            max_tokens: Math.max(driver.maxTokens ?? 1800, STEP_MIN_MAX_TOKENS),
           }, { timeout, maxRetries: 0 }), // retry SDK tidur mengikuti retry-after → bisa makan seluruh segmen
           timeout + 2_000,
         );
@@ -558,10 +563,21 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       const msg = completion.choices[0]?.message;
       if (!msg) { consecutiveErrors += 1; continue; }
       const calls = msg.tool_calls ?? [];
+      const truncated = completion.choices[0]?.finish_reason === "length";
 
       // 5. Jawaban akhir.
       if (!calls.length) {
         let reply = stripThinking(msg.content);
+        // Respons kosong/terpotong (model berpikir sampai habis token) bukan kesimpulan → dorong lanjut.
+        if ((!reply || truncated) && emptyReplies < MAX_EMPTY_REPLIES) {
+          emptyReplies += 1;
+          emit("Jawaban belum lengkap, melanjutkan pekerjaan…", "warn");
+          if (reply) messages.push({ role: "assistant", content: reply });
+          messages.push({ role: "user", content: "[SISTEM] Respons sebelumnya kosong atau terpotong. Lanjutkan pekerjaan: panggil tool berikutnya yang dibutuhkan, atau bila data sudah cukup tulis kesimpulan ringkas langsung tanpa berpikir panjang." });
+          stepCount += 1;
+          await persistStep();
+          continue;
+        }
         if (!reply) reply = await forceFinalAnswer("Jawaban kosong.");
         if (!reply) reply = `Saya sudah mengerjakan ${toolsUsed.length} langkah tetapi belum sampai kesimpulan. Ketik "lanjut" atau persempit permintaan.`;
         if (attachments.length) reply += `\n\nFile siap diunduh: ${attachments.map((a) => `[${a.name}](${a.url})`).join(", ")}`;

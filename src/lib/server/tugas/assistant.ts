@@ -79,7 +79,9 @@ ATURAN:
 9. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan hati-hati dan sarankan konfirmasi.
 10. Bila admin minta file Word/dokumen yang bisa diunduh: pakai exportSubmissionDocx (isi pengumpulan/kode) atau exportReportDocx (hasil analisis Anda). Tautan unduh tampil otomatis; cukup sebutkan nama filenya.
 11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya.
-12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.${fileBlock}${memBlock}${sumBlock}`;
+12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.
+13. SAAT MEMERIKSA BANYAK MAHASISWA: kerjakan satu mahasiswa sampai tuntas (baca file → nilai/analisis) sebelum pindah ke berikutnya. Setiap kali satu mahasiswa selesai, tulis catatan 1-2 kalimat hasilnya di pesan assistant (bersamaan dengan tool call berikutnya) agar hasil tidak hilang saat hasil tool lama dipangkas. Setelah semua selesai, SEGERA tulis jawaban akhir berupa tabel rekap — jangan terus memanggil tool.
+14. Jawaban akhir tidak boleh kosong. Jika Anda sudah berhenti memanggil tool, Anda WAJIB menulis kesimpulan dari data yang ada.${fileBlock}${memBlock}${sumBlock}`;
 }
 
 /** Verifikasi kepemilikan lampiran; hasilnya disimpan di meta run. */
