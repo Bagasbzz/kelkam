@@ -442,7 +442,7 @@ export interface AssistantMessage {
  */
 export async function openAssistantRunStream(
   courseId: string,
-  input: { message: string; sessionId?: string | null; answerTo?: string | null; deep?: boolean },
+  input: { message: string; sessionId?: string | null; answerTo?: string | null; deep?: boolean; attachments?: Array<{ fileId: string; name: string }> },
   signal?: AbortSignal,
 ): Promise<Response> {
   return authenticatedFetch(`/api/tugas/courses/${courseId}/assistant`, {

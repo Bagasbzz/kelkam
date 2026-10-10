@@ -12,6 +12,7 @@ import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
+import { readUpload } from "@/lib/storage/upload";
 import {
   appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
   type AgentDriver, type AgentRunPublic, type AgentToolContext,
@@ -20,6 +21,9 @@ import {
 const MAX_STEPS = 80;
 const HISTORY_LIMIT = 12;
 const RUN_KIND = "tugas" as const;
+/** Gambar lampiran dikirim inline ke model vision; di atas ini ditolak agar konteks tidak membengkak. */
+const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024;
+const IMAGE_MIME = /^image\/(png|jpe?g|webp|gif)$/i;
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -31,6 +35,17 @@ export interface AssistantTurnInput {
   /** Jawaban admin untuk pertanyaan askUser sebelumnya (opsional). */
   answerTo?: string | null;
   deep?: boolean;
+  /** Lampiran admin (fileId dari /api/files/upload). */
+  attachments?: Array<{ fileId: string; name?: string }>;
+}
+
+/** Lampiran yang sudah diverifikasi milik admin; disimpan di meta run. */
+export interface UserAttachmentMeta {
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  isImage: boolean;
 }
 
 export interface AssistantAttachment {
@@ -40,14 +55,17 @@ export interface AssistantAttachment {
   size: number;
 }
 
-function systemPrompt(courseName: string, memory: Record<string, unknown> | null, summary: string | null) {
+function systemPrompt(courseName: string, memory: Record<string, unknown> | null, summary: string | null, userFiles: UserAttachmentMeta[] = []) {
   const memBlock = memory && Object.keys(memory).length
     ? `\n\nKONTEKS/RUBRIK DARI ADMIN (wajib dipatuhi):\n${JSON.stringify(memory, null, 1).slice(0, 3000)}`
     : "";
   const sumBlock = summary ? `\n\nRINGKASAN PERCAKAPAN SEBELUMNYA:\n${summary.slice(0, 2000)}` : "";
+  const fileBlock = userFiles.length
+    ? `\n\nLAMPIRAN DARI ADMIN (patokan/contoh/materi tambahan — prioritaskan ini):\n${userFiles.map((f) => `- ${f.name} (${f.isImage ? "gambar, sudah terlihat di pesan" : `dokumen, baca dengan getAttachmentContent fileId=${f.fileId}`})`).join("\n")}`
+    : "";
   return `Anda adalah Asisten Dosen AI untuk course "${courseName}" di keluhkampus. Pengguna adalah admin/asdos course ini. Waktu sekarang: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full", timeStyle: "short" })} WIB.
 
-Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
+Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), lampiran yang dikirim admin di chat (getAttachmentContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
 
 ATURAN:
 1. Selalu ambil data lewat tools — jangan mengarang. Di awal percakapan atau saat belum tahu ID, panggil getCourseContext (1 panggilan = semua tugas + deskripsi + materi).
@@ -61,7 +79,32 @@ ATURAN:
 9. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan hati-hati dan sarankan konfirmasi.
 10. Bila admin minta file Word/dokumen yang bisa diunduh: pakai exportSubmissionDocx (isi pengumpulan/kode) atau exportReportDocx (hasil analisis Anda). Tautan unduh tampil otomatis; cukup sebutkan nama filenya.
 11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya.
-12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.${memBlock}${sumBlock}`;
+12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.${fileBlock}${memBlock}${sumBlock}`;
+}
+
+/** Verifikasi kepemilikan lampiran; hasilnya disimpan di meta run. */
+async function resolveAttachments(adminId: string, input: Array<{ fileId: string; name?: string }>): Promise<UserAttachmentMeta[]> {
+  if (!input.length) return [];
+  const ids = Array.from(new Set(input.map((a) => a.fileId))).slice(0, 5);
+  const rows = await prisma.fileUpload.findMany({ where: { id: { in: ids }, ownerId: adminId }, select: { id: true, originalName: true, mime: true, size: true } });
+  return rows.map((r) => ({ fileId: r.id, name: r.originalName, mime: r.mime, size: r.size, isImage: IMAGE_MIME.test(r.mime) }));
+}
+
+/** Pesan user terakhir: teks + gambar inline (base64) supaya model vision bisa melihatnya. */
+async function buildUserMessage(adminId: string, text: string, files: UserAttachmentMeta[]): Promise<Msg> {
+  const images = files.filter((f) => f.isImage && f.size <= MAX_INLINE_IMAGE_BYTES);
+  const docs = files.filter((f) => !f.isImage);
+  const note = files.length
+    ? `\n\n[Lampiran: ${files.map((f) => f.name).join(", ")}${docs.length ? " — dokumen bisa dibaca dengan getAttachmentContent" : ""}]`
+    : "";
+  if (!images.length) return { role: "user", content: `${text}${note}` };
+  const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: "text", text: `${text}${note}` }];
+  for (const img of images) {
+    const buf = await readUpload(img.fileId, adminId);
+    if (!buf) continue;
+    parts.push({ type: "image_url", image_url: { url: `data:${img.mime};base64,${buf.toString("base64")}`, detail: "auto" } });
+  }
+  return { role: "user", content: parts };
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -112,14 +155,17 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
     });
   }
 
+  const files = await resolveAttachments(input.adminId, input.attachments ?? []);
+  const storedMessage = files.length ? `${input.message}\n\n[Lampiran: ${files.map((f) => f.name).join(", ")}]` : input.message;
+
   // Lanjutkan run yang dijeda/antre (mis. user ketik "lanjut" setelah sinyal putus).
   const active = await findActiveAgentRun(input.adminId, RUN_KIND, session.id);
   if (active) {
     if (active.status === "running") return { runId: active.id, sessionId: session.id, resumed: true };
     if (active.status === "paused") await controlAgentRun(active.id, input.adminId, "resume");
-    if (!isContinueKeyword(input.message)) {
-      await appendUserMessage(active.id, input.adminId, input.message);
-      await prisma.adminChatMessage.create({ data: { sessionId: session.id, role: "user", content: input.message } });
+    if (!isContinueKeyword(input.message) || files.length) {
+      await appendUserMessage(active.id, input.adminId, storedMessage);
+      await prisma.adminChatMessage.create({ data: { sessionId: session.id, role: "user", content: storedMessage } });
     }
     return { runId: active.id, sessionId: session.id, resumed: true };
   }
@@ -131,9 +177,13 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
     const key = `jawaban_${Object.keys(memory).filter((k) => k.startsWith("jawaban_")).length + 1}`;
     memory[key] = { pertanyaan: input.answerTo.slice(0, 400), jawaban: input.message.slice(0, 1200) };
   }
+  // Lampiran diingat di sesi agar run berikutnya masih bisa membacanya.
+  const prevFiles = Array.isArray(memory.lampiran) ? (memory.lampiran as UserAttachmentMeta[]) : [];
+  const sessionFiles = [...prevFiles.filter((p) => !files.some((f) => f.fileId === p.fileId)), ...files].slice(-10);
+  if (sessionFiles.length) memory.lampiran = sessionFiles;
 
   // Simpan pesan user
-  await prisma.adminChatMessage.create({ data: { sessionId: session.id, role: "user", content: input.message } });
+  await prisma.adminChatMessage.create({ data: { sessionId: session.id, role: "user", content: storedMessage } });
 
   // Riwayat: ambil terbaru, pangkas, ringkas yang lama kalau perlu.
   const all = await prisma.adminChatMessage.findMany({
@@ -150,6 +200,8 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
   }
 
   const messages: Msg[] = recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content }));
+  // Pesan terakhir diganti versi dengan gambar inline (bila ada).
+  if (messages.length) messages[messages.length - 1] = await buildUserMessage(input.adminId, input.message, files);
   if (input.answerTo) {
     messages.splice(messages.length - 1, 0, {
       role: "assistant",
@@ -167,10 +219,11 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
     ownerId: input.adminId,
     kind: RUN_KIND,
     sessionId: session.id,
-    model: input.deep ? AI_MODEL : AI_MODEL_FAST,
+    // Lampiran gambar butuh model yang mendukung vision; model cepat tidak bisa membaca gambar.
+    model: input.deep || files.some((f) => f.isImage) ? AI_MODEL : AI_MODEL_FAST,
     messages,
     maxSteps: MAX_STEPS,
-    meta: { courseId: input.courseId, courseName: course.name },
+    meta: { courseId: input.courseId, courseName: course.name, userFiles: sessionFiles },
   });
   return { runId: run.id, sessionId: session.id, resumed: false };
 }
@@ -196,6 +249,7 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
     case "detectAI": return "Memeriksa indikasi teks buatan AI…";
     case "getMaterials": return "Mengambil daftar materi pertemuan…";
     case "getMaterialContent": return "Membaca isi materi (PPTX/PDF)…";
+    case "getAttachmentContent": return "Membaca lampiran dari admin…";
     case "exportSubmissionDocx":
     case "exportReportDocx": return "Menyusun dokumen Word…";
     case "askUser": return "Menyiapkan pertanyaan untuk admin…";
@@ -213,12 +267,14 @@ export const tugasAgentDriver: AgentDriver = {
   async systemPrompt(run) {
     const session = await prisma.adminChatSession.findFirst({ where: { id: run.sessionId, userId: run.ownerId }, select: { memory: true, summary: true } });
     const courseName = String(run.meta.courseName ?? "");
-    return systemPrompt(courseName, (session?.memory as Record<string, unknown> | null) ?? null, session?.summary ?? null);
+    const userFiles = Array.isArray(run.meta.userFiles) ? (run.meta.userFiles as UserAttachmentMeta[]) : [];
+    return systemPrompt(courseName, (session?.memory as Record<string, unknown> | null) ?? null, session?.summary ?? null, userFiles);
   },
   async runTool(name, args, ctx: AgentToolContext) {
     const impl = TOOL_IMPL[name];
     if (!impl) return { error: `Tool ${name} tidak dikenal.` };
-    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments };
+    const userFiles = Array.isArray(ctx.run.meta.userFiles) ? (ctx.run.meta.userFiles as UserAttachmentMeta[]) : [];
+    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments, userFileIds: userFiles.map((f) => f.fileId) };
     return impl(toolCtx, args as never);
   },
   async onFinish(run: AgentRunPublic) {

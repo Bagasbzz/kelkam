@@ -10,12 +10,13 @@
 
 import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Download, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
+import { Bot, Download, MessageSquarePlus, Paperclip, Send, Sparkles, Trash2, User as UserIcon, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import AgentRunProgress from "@/components/ui/AgentRunProgress";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
+import { MAX_FILE_BYTES, MAX_FILE_LABEL } from "@/lib/file-limits";
 import {
   assistantActiveRunUrl,
   assistantRunUrl,
@@ -23,6 +24,7 @@ import {
   fetchAssistantHistory,
   fetchAssistantSessions,
   openAssistantRunStream,
+  uploadSubmissionFile,
   type AssistantAttachment,
   type AssistantSessionSummary,
 } from "@/lib/client/tugas-api";
@@ -34,6 +36,18 @@ interface ChatMsg {
   pending?: boolean;
   attachments?: AssistantAttachment[];
 }
+
+interface PendingFile {
+  fileId: string;
+  name: string;
+  size: number;
+  isImage: boolean;
+  /** Object URL untuk preview gambar; di-revoke saat dihapus. */
+  previewUrl?: string;
+}
+
+const MAX_ATTACHMENTS = 5;
+const ACCEPT_ATTACHMENTS = ".pdf,.docx,.pptx,.zip,.txt,.md,.csv,.json,.py,.js,.ts,.java,.php,.c,.cpp,.sql,image/png,image/jpeg,image/webp,image/gif";
 
 const QUICK_PROMPTS = [
   "Siapa yang belum kumpul di pertemuan terakhir?",
@@ -61,6 +75,9 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
   const [lastBeatAt, setLastBeatAt] = useState(0);
   const [runBusy, setRunBusy] = useState(false);
   const runAbortRef = useRef<AbortController | null>(null);
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => () => runAbortRef.current?.abort(), []);
 
@@ -188,11 +205,48 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
 
   async function send(text: string, answerTo?: string) {
     const message = text.trim();
-    if (!message || busy) return;
+    if (!message || busy || uploading) return;
+    const attached = files;
     setInput("");
-    setMessages((prev) => [...prev, { id: `tmp-${Date.now()}`, role: "user", content: message }]);
+    setFiles([]);
+    const shown = attached.length ? `${message}\n\n[Lampiran: ${attached.map((f) => f.name).join(", ")}]` : message;
+    setMessages((prev) => [...prev, { id: `tmp-${Date.now()}`, role: "user", content: shown }]);
     const sid = sessionId;
-    await followAgentRun(sid, () => openAssistantRunStream(courseId, { message, sessionId: sid, answerTo: answerTo ?? null, deep }, runAbortRef.current?.signal));
+    await followAgentRun(sid, () => openAssistantRunStream(courseId, {
+      message, sessionId: sid, answerTo: answerTo ?? null, deep,
+      attachments: attached.map((f) => ({ fileId: f.fileId, name: f.name })),
+    }, runAbortRef.current?.signal));
+    attached.forEach((f) => f.previewUrl && URL.revokeObjectURL(f.previewUrl));
+  }
+
+  async function addFiles(list: FileList | null) {
+    if (!list?.length) return;
+    const picked = Array.from(list).slice(0, MAX_ATTACHMENTS - files.length);
+    if (!picked.length) { setError(`Maksimal ${MAX_ATTACHMENTS} lampiran per pesan.`); return; }
+    const tooBig = picked.find((f) => f.size > MAX_FILE_BYTES);
+    if (tooBig) { setError(`"${tooBig.name}" melebihi ${MAX_FILE_LABEL}.`); return; }
+    setUploading(true);
+    setError(null);
+    try {
+      for (const f of picked) {
+        const r = await uploadSubmissionFile(f);
+        const isImage = /^image\//.test(f.type);
+        setFiles((prev) => prev.some((p) => p.fileId === r.fileId) ? prev : [...prev, { fileId: r.fileId, name: f.name, size: f.size, isImage, previewUrl: isImage ? URL.createObjectURL(f) : undefined }]);
+      }
+    } catch (err) {
+      setError(getErrorMessage(err, "Gagal mengunggah lampiran."));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function removeFile(fileId: string) {
+    setFiles((prev) => {
+      const target = prev.find((f) => f.fileId === fileId);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((f) => f.fileId !== fileId);
+    });
   }
 
   async function pauseRun() {
@@ -259,6 +313,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
               <p className="text-sm text-slate-600">
                 Asisten punya akses ke seluruh konteks course: deskripsi tugas, materi (PPTX/PDF), semua mahasiswa & akun, pengumpulan beserta
                 waktu/keterlambatan, catatan & feedback, isi file (termasuk ZIP dan kode), kemiripan, indikasi AI, dan bisa mengekspor hasil ke Word.
+                Lampirkan rubrik, contoh jawaban, materi, atau gambar lewat ikon klip (atau tempel gambar langsung) agar dipakai sebagai patokan.
               </p>
               <div className="flex flex-wrap gap-2">
                 {QUICK_PROMPTS.map((q) => (
@@ -317,32 +372,68 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
         </div>
 
         <form
-          className="flex items-end gap-2 border-t border-slate-100 p-3"
+          className="border-t border-slate-100 p-3"
           onSubmit={(e) => {
             e.preventDefault();
             if (pendingQuestion) answerQuestion(input);
             else void send(input);
           }}
+          onPaste={(e) => {
+            const items = Array.from(e.clipboardData?.files ?? []);
+            if (items.length) { e.preventDefault(); const dt = new DataTransfer(); items.forEach((f) => dt.items.add(f)); void addFiles(dt.files); }
+          }}
         >
-          <textarea
-            className="min-h-[44px] flex-1 resize-y rounded-xl border border-slate-300 p-2 text-sm text-slate-900"
-            rows={2}
-            maxLength={6000}
-            placeholder={pendingQuestion ? "Jawab pertanyaan asisten..." : "Contoh: nilai semua pengumpulan pertemuan 3, kriteria: ada ERD, relasi benar, penjelasan jelas"}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                if (pendingQuestion) answerQuestion(input);
-                else void send(input);
-              }
-            }}
-            disabled={busy}
-          />
-          <Button type="submit" size="md" icon={Send} isLoading={busy} disabled={busy || !input.trim()}>
-            Kirim
-          </Button>
+          {files.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {files.map((f) => (
+                <span key={f.fileId} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700">
+                  {f.previewUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={f.previewUrl} alt="" className="h-6 w-6 rounded object-cover" />
+                  ) : (
+                    <Paperclip className="h-3.5 w-3.5 text-slate-400" />
+                  )}
+                  <span className="max-w-[180px] truncate" title={f.name}>{f.name}</span>
+                  <span className="text-slate-400">({Math.max(1, Math.round(f.size / 1024))} KB)</span>
+                  <button type="button" aria-label={`Hapus ${f.name}`} className="text-slate-400 hover:text-red-600" onClick={() => removeFile(f.fileId)} disabled={busy}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <input ref={fileInputRef} type="file" multiple accept={ACCEPT_ATTACHMENTS} className="hidden" onChange={(e) => void addFiles(e.target.files)} />
+            <button
+              type="button"
+              aria-label="Lampirkan file"
+              title="Lampirkan rubrik, contoh, materi, atau gambar (PDF/DOCX/PPTX/ZIP/gambar)"
+              className="inline-flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-slate-300 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading || files.length >= MAX_ATTACHMENTS}
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <textarea
+              className="min-h-[44px] flex-1 resize-y rounded-xl border border-slate-300 p-2 text-sm text-slate-900"
+              rows={2}
+              maxLength={6000}
+              placeholder={pendingQuestion ? "Jawab pertanyaan asisten..." : "Contoh: nilai semua pengumpulan pertemuan 3 sesuai rubrik terlampir"}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  if (pendingQuestion) answerQuestion(input);
+                  else void send(input);
+                }
+              }}
+              disabled={busy}
+            />
+            <Button type="submit" size="md" icon={Send} isLoading={busy || uploading} disabled={busy || uploading || !input.trim()}>
+              Kirim
+            </Button>
+          </div>
         </form>
       </section>
     </div>

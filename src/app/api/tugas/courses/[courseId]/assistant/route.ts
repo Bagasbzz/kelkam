@@ -27,6 +27,8 @@ const BodySchema = z.object({
   sessionId: z.string().min(1).nullable().optional(),
   answerTo: z.string().max(2000).nullable().optional(),
   deep: z.boolean().optional(),
+  /** fileId hasil /api/files/upload milik admin ini (rubrik, contoh, materi, gambar). */
+  attachments: z.array(z.object({ fileId: z.string().min(1).max(64), name: z.string().max(200).optional() })).max(5).optional(),
 });
 
 export async function POST(req: Request, context: { params: Promise<{ courseId: string }> }) {
@@ -50,6 +52,7 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
       message: parsed.data.message,
       answerTo: parsed.data.answerTo ?? null,
       deep: parsed.data.deep ?? false,
+      attachments: parsed.data.attachments ?? [],
     });
 
     const res = streamAgentRun(runId, admin.id);

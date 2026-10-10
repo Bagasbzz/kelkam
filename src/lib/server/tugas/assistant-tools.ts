@@ -25,6 +25,8 @@ export interface ToolContext {
   adminId: string;
   /** Lampiran (file hasil ekspor) yang dikumpulkan selama 1 giliran. */
   attachments?: Array<{ fileId: string; name: string; url: string; size: number }>;
+  /** fileId lampiran yang dikirim admin di chat (hanya ini yang boleh dibaca getAttachmentContent). */
+  userFileIds?: string[];
 }
 
 export type ToolResult = Record<string, unknown>;
@@ -475,6 +477,29 @@ async function getMaterialContent(ctx: ToolContext, args: { materialId: string; 
 
 const MAX_EXPORT_SUBMISSIONS = 25;
 
+/** Isi dokumen lampiran yang dikirim admin di chat (PDF/DOCX/PPTX/ZIP/teks). Gambar tidak lewat sini. */
+async function getAttachmentContent(ctx: ToolContext, args: { fileId: string; maxChars?: number; offset?: number }): Promise<ToolResult> {
+  if (!args.fileId || !ctx.userFileIds?.includes(args.fileId)) throw new Error("Lampiran tidak ditemukan di percakapan ini.");
+  const file = await prisma.fileUpload.findFirst({ where: { id: args.fileId, ownerId: ctx.adminId }, select: { id: true, originalName: true, mime: true, size: true } });
+  if (!file) throw new Error("Lampiran tidak ditemukan.");
+  if (/^image\//i.test(file.mime)) return { fileId: file.id, nama: file.originalName, isi: "", error: "Lampiran berupa gambar; isinya sudah terlihat langsung di pesan admin." };
+  const maxChars = Math.min(Math.max(args.maxChars ?? 8000, 500), 30_000);
+  const offset = Math.max(args.offset ?? 0, 0);
+  let text = "";
+  let error: string | null = null;
+  try {
+    const ex = await getOrExtractFileText(file.id);
+    text = ex?.text ?? "";
+    if (!ex) error = "File tidak bisa dibaca.";
+  } catch (err) {
+    error = err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : "Lampiran tidak bisa dibaca sebagai teks.";
+  }
+  return {
+    fileId: file.id, nama: file.originalName, ukuran: file.size,
+    totalKarakter: text.length, offset, isi: text.slice(offset, offset + maxChars), adaLanjutan: offset + maxChars < text.length, error,
+  };
+}
+
 /**
  * Ekspor isi pengumpulan ke DOCX yang bisa diunduh admin:
  * catatan mahasiswa + isi dokumen + seluruh file kode (dari ZIP).
@@ -736,6 +761,7 @@ export const TOOL_IMPL: Record<string, ToolFn> = {
   detectAI,
   getMaterials: (ctx) => getMaterials(ctx),
   getMaterialContent,
+  getAttachmentContent,
   exportSubmissionDocx,
   exportReportDocx,
 };
@@ -853,6 +879,14 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: "getMaterialContent",
       description: "Baca isi materi pertemuan (PPTX per slide / PDF / DOCX). Gunakan untuk memahami apa yang diajarkan sebelum menilai tugas terkait. offset untuk lanjutan.",
       parameters: { type: "object", properties: { materialId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["materialId"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getAttachmentContent",
+      description: "Baca isi dokumen yang DILAMPIRKAN ADMIN di chat (rubrik, contoh jawaban, materi tambahan; PDF/DOCX/PPTX/ZIP/teks). fileId ada di daftar LAMPIRAN DARI ADMIN. offset untuk lanjutan.",
+      parameters: { type: "object", properties: { fileId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["fileId"] },
     },
   },
   {
