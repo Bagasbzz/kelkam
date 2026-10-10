@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -41,7 +42,7 @@ export default function TugasDetailPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat tugas.");
+        setError(getErrorMessage(err, "Gagal memuat tugas."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

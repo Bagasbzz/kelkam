@@ -54,6 +54,9 @@ import { enforceRateLimit } from "@/lib/server/request-guards";
  */
 const PROTECTED_API_PREFIXES = [
   "/api/admin/",
+  "/api/ai/",
+  "/api/fix-format",
+  "/api/template",
   "/api/report-jobs/",
   "/api/laporan/",
   "/api/context/extract",
@@ -94,6 +97,9 @@ const PROTECTED_PAGE_PREFIXES = [
  * Duplikasi ini disengaja — proxy.js jalan di Edge runtime yang tidak bisa
  * import dari kode yg pakai Prisma/argon2 (Node-only modules).
  */
+if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
+  throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+}
 const JWT_SECRET = new TextEncoder().encode(
   process.env.AUTH_JWT_SECRET || "keluhkampus-dev-secret-change-me-in-production"
 );

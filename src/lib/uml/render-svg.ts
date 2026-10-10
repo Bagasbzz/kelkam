@@ -58,7 +58,8 @@ function renderNode(node: DiagramNode): string {
       shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`;
       break;
     case "end":
-      shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="${BORDER}" ${stroke}/>`;
+      shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`
+        + `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(Math.max(8, width / 2 - 5))}" ry="${num(Math.max(8, height / 2 - 5))}" fill="none" stroke="${BORDER}" stroke-width="1.2"/>`;
       break;
     case "process":
     case "system":
@@ -111,14 +112,13 @@ function renderNode(node: DiagramNode): string {
   } else if (type === "lifeline") {
     textY = y + 23 - totalTextHeight / 2;
   }
-  // Teks di node "end" (lingkaran hitam) sengaja tidak digambar agar tidak tertutup.
-  const showText = type !== "end" || lines.join("").trim().length > 0;
+  const showText = lines.join("").trim().length > 0;
   const cx = x + width / 2;
   const tspans = lines
     .map((line, i) => `<tspan x="${num(cx)}" dy="${i === 0 ? 0 : LINE_HEIGHT}">${esc(line)}</tspan>`)
     .join("");
   const text = showText
-    ? `<text x="${num(cx)}" y="${num(textY)}" text-anchor="middle" dominant-baseline="${baseline}" font-size="13" font-weight="${type === "actor" ? 600 : 500}" fill="${type === "end" ? "white" : BORDER}" font-family="${FONT}">${tspans}</text>`
+    ? `<text x="${num(cx)}" y="${num(textY)}" text-anchor="middle" dominant-baseline="${baseline}" font-size="13" font-weight="${type === "actor" ? 600 : 500}" fill="${BORDER}" font-family="${FONT}">${tspans}</text>`
     : "";
   return `<g>${shape}${text}</g>`;
 }
@@ -159,7 +159,6 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
     labelX = (fx + tx) / 2;
     labelY = (fy + ty) / 2 - 12;
   } else {
-    const dir = edge.direction;
     const fromBottom = exitPoint(from, "bottom");
     const toTop = exitPoint(to, "top");
     const fromRight = exitPoint(from, "right");
@@ -171,8 +170,15 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
     const x2 = snap(toTop.x);
     const y2 = snap(toTop.y);
     const toX = to.x + (to.offsetX || 0);
+    const upwardOrLoop = y2 <= y1 + 24;
+    const horizontalDelta = (toX + to.width / 2) - (from.x + (from.offsetX || 0) + from.width / 2);
+    let dir = edge.direction;
+    if (!upwardOrLoop && (dir === "right" || dir === "left")) {
+      if (Math.abs(horizontalDelta) < from.width / 2 + 24) dir = undefined;
+      else dir = horizontalDelta > 0 ? "right" : "left";
+    }
 
-    if (dir === "right") {
+    if (dir === "right" && !upwardOrLoop) {
       const sx = snap(fromRight.x);
       const sy = snap(fromRight.y);
       const useTop = toX < sx;
@@ -182,7 +188,7 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
       path = `M ${sx},${sy} H ${bendX} V ${ey} H ${ex}`;
       labelX = (sx + bendX) / 2;
       labelY = sy - 12;
-    } else if (dir === "left") {
+    } else if (dir === "left" && !upwardOrLoop) {
       const sx = snap(fromLeft.x);
       const sy = snap(fromLeft.y);
       const useTop = toX + to.width > sx;
@@ -192,13 +198,16 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
       path = `M ${sx},${sy} H ${bendX} V ${ey} H ${ex}`;
       labelX = (sx + bendX) / 2;
       labelY = sy - 12;
-    } else if (y2 <= y1 + 24) {
-      const gap = Math.abs(x2 - x1);
-      const routeX = snap(Math.max(x1, x2) + Math.max(92, Math.min(148, gap / 2 + 48)));
+    } else if (upwardOrLoop) {
+      const goLeft = horizontalDelta < 0;
+      const edgeX = goLeft
+        ? Math.min(from.x + (from.offsetX || 0), toX)
+        : Math.max(from.x + (from.offsetX || 0) + from.width, toX + to.width);
+      const routeX = snap(goLeft ? edgeX - 56 : edgeX + 56);
       const departureY = snap(y1 + 28);
       const approachY = snap(y2 - 24);
       path = `M ${x1},${y1} V ${departureY} H ${routeX} V ${approachY} H ${x2} V ${y2}`;
-      labelX = routeX + 8;
+      labelX = goLeft ? routeX - 8 : routeX + 8;
       labelY = (departureY + approachY) / 2;
     } else if (Math.abs(x1 - x2) <= 8) {
       path = `M ${x1},${y1} V ${y2}`;

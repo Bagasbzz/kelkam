@@ -8,6 +8,7 @@
  * - Toggle "Review mendalam" → model besar (lebih mahal; default model cepat).
  */
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Download, MessageSquarePlus, Send, Sparkles, Trash2, User as UserIcon } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -104,7 +105,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
         return;
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat sesi.");
+      setError(getErrorMessage(err, "Gagal memuat sesi."));
     } finally {
       setBusy(false);
     }
@@ -124,7 +125,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
       if (sessionId === id) newSession();
       await loadSessions();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus sesi.");
+      setError(getErrorMessage(err, "Gagal menghapus sesi."));
     }
   }
 
@@ -180,7 +181,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
     } catch (err) {
       if (controller.signal.aborted) return;
       setMessages((prev) => prev.filter((m) => m.id !== placeholderId));
-      setError(err instanceof Error ? err.message : "Asisten gagal merespons.");
+      setError(getErrorMessage(err, "Asisten gagal merespons."));
     } finally {
       if (runAbortRef.current === controller) { setBusy(false); setRun(null); setRunEvents([]); }
     }
@@ -198,12 +199,12 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
   async function pauseRun() {
     if (!run) return;
     setRunBusy(true);
-    try { await controlRun(assistantRunUrl(courseId), run.id, "pause"); } catch (err) { setError(err instanceof Error ? err.message : "Gagal menjeda."); } finally { setRunBusy(false); }
+    try { await controlRun(assistantRunUrl(courseId), run.id, "pause"); } catch (err) { setError(getErrorMessage(err, "Gagal menjeda.")); } finally { setRunBusy(false); }
   }
   async function cancelRun() {
     if (!run) return;
     setRunBusy(true);
-    try { await controlRun(assistantRunUrl(courseId), run.id, "cancel"); } catch (err) { setError(err instanceof Error ? err.message : "Gagal menghentikan."); } finally { setRunBusy(false); }
+    try { await controlRun(assistantRunUrl(courseId), run.id, "cancel"); } catch (err) { setError(getErrorMessage(err, "Gagal menghentikan.")); } finally { setRunBusy(false); }
   }
 
   function answerQuestion(answer: string) {

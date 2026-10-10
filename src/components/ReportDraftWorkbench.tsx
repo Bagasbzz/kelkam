@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ResearchBrief, ReportSectionBrief } from "@/lib/types/research-project";
 import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
@@ -437,7 +438,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       setJob(data.job as ReportJob);
       await pollJob(data.job.id);
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Gagal generate draft");
+      setError(getErrorMessage(error, "Gagal generate draft"));
     } finally {
       setLoading(false);
     }
@@ -477,7 +478,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       setRevisionStage("Revisi selesai dirapikan");
       setFeedback(revisionTarget ? `Bagian ${revisionTarget} berhasil direvisi.` : "Draft berhasil direvisi.");
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Gagal merevisi draft.");
+      setError(getErrorMessage(error, "Gagal merevisi draft."));
     } finally {
       window.setTimeout(() => setIsRevising(false), 400);
     }
@@ -496,7 +497,7 @@ export default function ReportDraftWorkbench({ brief }: { brief?: Partial<Resear
       });
       setFeedback("DOCX berhasil diexport.");
     } catch (error: unknown) {
-      setError(error instanceof Error ? error.message : "Gagal export DOCX.");
+      setError(getErrorMessage(error, "Gagal export DOCX."));
     } finally {
       setIsExporting(false);
     }

@@ -26,7 +26,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
-import { getCurrentUser } from "@/lib/server/auth";
+import { requireAdmin } from "@/lib/server/auth";
 
 /** Identitas pembeda untuk rate limiter publik. Pakai IP, bukan user. */
 function clientKey(req: Request) {
@@ -77,18 +77,16 @@ export async function POST(req: Request) {
   }
 }
 
-/**
- * Admin-only: list semua entry waitlist (untuk monitoring).
- * Wajib login (siapa pun yang login bisa akses — TODO: tambah role-based).
- */
+/** Admin-only: list semua entry waitlist (untuk monitoring). */
 export async function GET() {
-  const user = await getCurrentUser();
-  if (!user) {
-    return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  try {
+    await requireAdmin();
+    const items = await prisma.waitlist.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 500,
+    });
+    return NextResponse.json({ success: true, data: items }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    return publicErrorResponse(error, "Gagal memuat waitlist.");
   }
-  const items = await prisma.waitlist.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 500,
-  });
-  return NextResponse.json({ success: true, data: items }, { headers: { "Cache-Control": "private, no-store" } });
 }

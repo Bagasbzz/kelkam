@@ -161,7 +161,6 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
           <div className="rounded-lg bg-slate-900 p-3 font-mono text-[11px] text-slate-200">
             <div className="mb-2 flex items-center justify-between text-[10px] font-black uppercase text-slate-400">
               <span>Log proses</span>
-              <span>{job.tokensUsed ? `${job.tokensUsed.toLocaleString("id-ID")} token` : ""}</span>
             </div>
             <div className="max-h-56 space-y-0.5 overflow-y-auto">
               {job.log.length === 0 && <div className="text-slate-500">Menunggu event...</div>}

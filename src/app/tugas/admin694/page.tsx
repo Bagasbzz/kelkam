@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -95,7 +96,7 @@ export default function TugasAdminIndex() {
       });
       router.push(`/tugas/${course.token}/admin`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal bikin mata kuliah.");
+      setError(getErrorMessage(err, "Gagal bikin mata kuliah."));
     } finally {
       setSubmitting(false);
     }

@@ -453,6 +453,11 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
         actors: connectedActors.length ? connectedActors : [actors[0].id],
       };
     });
+    // Aktor yang tidak punya use case: sambungkan ke use case pertama supaya tidak ada aktor "menggantung".
+    const usedActorIds = new Set(usecases.flatMap((u) => u.actors));
+    for (const actor of actors) {
+      if (!usedActorIds.has(actor.id) && usecases[0]) usecases[0].actors.push(actor.id);
+    }
     const nodes: DiagramNode[] = [
       ...actors.map((a, i) => ({ id: a.id, type: "actor" as const, text: a.name, lines: wrapText(a.name, 14), x: a.side === "right" ? 850 : 150, y: 160 + i * 140, width: 60, height: 80, side: a.side || "left", pinned: true })),
       ...usecases.map((u, i) => ({ id: u.id, type: "usecase" as const, text: u.text, lines: wrapText(u.text, 18), x: 430, y: 140 + i * 120, width: 190, height: 76, pinned: true })),
@@ -879,7 +884,7 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
       const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
       const left = remainingMs();
       if (!isTimeout || left < MIN_STEP_MS) throw error;
-      emit({ type: "status", phase: "fallback", text: `${AI_MODEL} terlalu lama. Beralih ke ${AI_MODEL_FAST}…` });
+      emit({ type: "status", phase: "fallback", text: "AI utama terlalu lama. Beralih ke jalur cepat…" });
       return callModel(AI_MODEL_FAST, Math.min(35_000, left));
     }
   };
@@ -1007,10 +1012,12 @@ export function errorToResult(error: unknown): PipelineResult {
     };
   }
   const providerStatus = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : null;
-  const detail = error instanceof Error ? error.message.replace(/\s+/g, " ").slice(0, 200) : "";
+  if (providerStatus === 429) {
+    return { status: 503, payload: { success: false, error: "Layanan AI sedang penuh. Coba lagi beberapa saat." } };
+  }
   return {
     status: 500,
-    payload: { success: false, error: `Gagal menghasilkan diagram${providerStatus ? ` (AI ${providerStatus})` : ""}${detail ? `: ${detail}` : "."} Coba lagi atau gunakan mode tanya dulu.` },
+    payload: { success: false, error: "Gagal menghasilkan diagram. Coba lagi atau gunakan mode tanya dulu." },
   };
 }
 

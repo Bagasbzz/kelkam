@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useState } from "react";
 import {
   AlertCircle,
@@ -97,7 +98,7 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
       onChanged?.(res.submission);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan catatan.");
+      setError(getErrorMessage(err, "Gagal menyimpan catatan."));
     } finally {
       setBusy(false);
     }
@@ -111,7 +112,7 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
       onChanged?.(res.submission);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus catatan.");
+      setError(getErrorMessage(err, "Gagal menghapus catatan."));
     } finally {
       setBusy(false);
     }
@@ -125,7 +126,7 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
       await onDeleted?.();
       setDeleteOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus pengumpulan.");
+      setError(getErrorMessage(err, "Gagal menghapus pengumpulan."));
     } finally {
       setBusy(false);
     }

@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import {
   AlertCircle,
@@ -259,7 +260,7 @@ export default function SubmissionForm({
           // Tampilkan error asli kalau verifikasi ulang juga gagal.
         }
       }
-      setError(err instanceof Error ? err.message : "Gagal mengirim.");
+      setError(getErrorMessage(err, "Gagal mengirim."));
     } finally {
       setBusy(false);
     }

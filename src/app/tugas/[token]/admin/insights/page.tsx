@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -73,7 +74,7 @@ export default function CourseInsightsPage() {
       setMetrics(r.metrics);
       setAiInsights(r.aiInsights);
     } catch (err) {
-      setInsightsError(err instanceof Error ? err.message : "Gagal generate.");
+      setInsightsError(getErrorMessage(err, "Gagal generate."));
     } finally {
       setInsightsLoading(false);
     }

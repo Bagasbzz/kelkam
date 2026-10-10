@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import { Loader2, UserX } from "lucide-react";
 import Card from "@/components/ui/Card";
@@ -16,7 +17,7 @@ export default function MissingSubmittersCard({ tugasId }: { tugasId: string }) 
     let cancelled = false;
     fetchMissingSubmitters(tugasId)
       .then((d) => !cancelled && setData(d))
-      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : "Gagal memuat."));
+      .catch((err) => !cancelled && setError(getErrorMessage(err, "Gagal memuat.")));
     return () => { cancelled = true; };
   }, [tugasId]);
 

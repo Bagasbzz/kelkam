@@ -49,8 +49,7 @@ const isDevelopment = process.env.NODE_ENV !== "production";
  */
 const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL || "https://keluhkampus.my.id";
 
-/** Origin AI providers — boleh di-fetch langsung dari browser (mis. proxy). */
-const aiOrigins = ["https://api.openai.com", "https://api.groq.com"];
+// Semua panggilan AI lewat server; browser tidak boleh menghubungi provider AI langsung.
 
 // ---------------------------------------------------------------------------
 // CSP
@@ -68,7 +67,7 @@ const contentSecurityPolicy = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
   "font-src 'self' data:",
-  `connect-src 'self' ${siteOrigin} ${aiOrigins.join(" ")}${isDevelopment ? " ws: wss:" : ""}`,
+  `connect-src 'self' ${siteOrigin}${isDevelopment ? " ws: wss:" : ""}`,
   "worker-src 'self' blob:",
   "object-src 'none'",
   "base-uri 'self'",

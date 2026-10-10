@@ -1,12 +1,12 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useState } from "react";
 import { Bot, FileSearch, Type, Copy, Check } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Textarea from "@/components/ui/Textarea";
 import { authenticatedFetch } from "@/components/AuthProvider";
-import { getErrorMessage } from "@/lib/errors";
 
 export default function AIToolsPage() {
   const [activeTab, setActiveTab] = useState<"checker" | "rewriter">("checker");

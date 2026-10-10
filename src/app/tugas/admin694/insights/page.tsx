@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, BarChart3, Loader2, RefreshCw, ShieldCheck } from "lucide-react";
@@ -40,7 +41,7 @@ export default function AdminInsightsPage() {
       setCourses(r.courses);
       setGlobalInsight(r.globalInsight);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal generate.");
+      setError(getErrorMessage(err, "Gagal generate."));
     } finally {
       setLoading(false);
     }

@@ -25,6 +25,7 @@
 
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import { LogIn, LogOut, UserRound, X } from "lucide-react";
 import { subscribeLoginModal, useAuth } from "@/components/AuthProvider";
@@ -95,7 +96,7 @@ export default function AuthMenu() {
       if (!json?.success) return { ok: false as const, error: json?.error || "Pendaftaran gagal." };
       return { ok: true as const };
     } catch (error) {
-      return { ok: false as const, error: error instanceof Error ? error.message : "Pendaftaran gagal." };
+      return { ok: false as const, error: getErrorMessage(error, "Pendaftaran gagal.") };
     }
   }
 

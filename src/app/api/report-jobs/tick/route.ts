@@ -5,8 +5,9 @@
  * berjalan walau tab user ditutup. Setiap panggilan mengerjakan maks 1 BAB
  * untuk maks `REPORT_TICK_JOBS` job yang sedang tidak di-poll.
  *
- * Auth: header `x-cron-secret` atau query `?secret=` harus sama dengan env
- * `REPORT_CRON_SECRET`. Kalau env kosong → endpoint nonaktif (404).
+ * Auth: header `x-cron-secret` harus sama dengan env `REPORT_CRON_SECRET`
+ * (query string sengaja tidak diterima agar secret tidak masuk access log).
+ * Kalau env kosong → endpoint nonaktif (404).
  *
  * Contoh cron tiap menit:
  *   curl -s -X POST -H "x-cron-secret: $SECRET" https://host/api/report-jobs/tick
@@ -32,8 +33,7 @@ async function handle(req: Request) {
   const expected = process.env.REPORT_CRON_SECRET || "";
   if (expected.length < 16) return NextResponse.json({ success: false }, { status: 404 });
 
-  const url = new URL(req.url);
-  const provided = req.headers.get("x-cron-secret") || url.searchParams.get("secret");
+  const provided = req.headers.get("x-cron-secret");
   if (!secretMatches(provided, expected)) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }

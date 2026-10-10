@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useState } from "react";
 import {
   AlertCircle,
@@ -69,7 +70,7 @@ export default function MahasiswaBulkImport({
       setExisting(updated.mahasiswas);
       onImported?.(res.inserted);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import gagal.");
+      setError(getErrorMessage(err, "Import gagal."));
     } finally {
       setBusy(false);
     }

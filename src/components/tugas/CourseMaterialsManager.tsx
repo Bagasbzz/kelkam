@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import { Download, FileText, Loader2, Trash2, Upload } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -28,7 +29,7 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
       setMaterials(result.materials);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat materi.");
+      setError(getErrorMessage(err, "Gagal memuat materi."));
     } finally {
       setLoading(false);
     }
@@ -47,7 +48,7 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
       setMaterials((current) => [material, ...current]);
       if (inputRef.current) inputRef.current.value = "";
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal mengunggah materi.");
+      setError(getErrorMessage(err, "Gagal mengunggah materi."));
     } finally {
       setBusy(false);
     }
@@ -61,7 +62,7 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
       await deleteCourseMaterial(courseId, material.id);
       setMaterials((current) => current.filter((item) => item.id !== material.id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus materi.");
+      setError(getErrorMessage(err, "Gagal menghapus materi."));
     } finally {
       setBusy(false);
     }

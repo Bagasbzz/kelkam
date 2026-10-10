@@ -1,9 +1,9 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import ReferenceCard, { ReferenceItem } from "./ReferenceCard";
 import { authenticatedFetch } from "@/components/AuthProvider";
-import { getErrorMessage } from "@/lib/errors";
 
 const STORAGE_KEY = "reference_search_results";
 

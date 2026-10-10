@@ -57,9 +57,12 @@ import { ApiRequestError } from "@/lib/server/request-guards";
  * dev kalau lupa set env var. Di production, process.env.AUTH_JWT_SECRET WAJIB
  * di-set (akan di-cek oleh middleware setup di cPanel).
  */
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.AUTH_JWT_SECRET || "keluhkampus-dev-secret-change-me-in-production"
-);
+const DEV_JWT_SECRET = "keluhkampus-dev-secret-change-me-in-production";
+if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
+  // Tanpa secret kuat, semua cookie session bisa dipalsukan. Lebih baik gagal start.
+  throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+}
+const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_JWT_SECRET || DEV_JWT_SECRET);
 
 /** Nama cookie session. Bisa di-override via env (berguna untuk multi-app). */
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "keluhkampus_session";

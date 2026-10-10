@@ -63,13 +63,12 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
     if (error instanceof Error && /timeout/i.test(error.message)) {
       return NextResponse.json({ success: false, error: "AI terlalu lama merespons. Coba persempit permintaan." }, { status: 504 });
     }
-    console.error("API tugas assistant POST failed:", error);
-    // Endpoint khusus admin: tampilkan penyebab (status provider / kode Prisma) agar bisa didiagnosis.
-    const detail = describeAssistantError(error);
-    return publicErrorResponse(error, `Asisten gagal memproses permintaan.${detail ? ` (${detail})` : ""}`);
+    console.error("API tugas assistant POST failed:", error, describeAssistantError(error));
+    return publicErrorResponse(error, "Asisten gagal memproses permintaan. Coba lagi beberapa saat.");
   }
 }
 
+/** Detail teknis hanya untuk log server. */
 function describeAssistantError(error: unknown): string {
   if (!(error instanceof Error)) return "";
   const e = error as Error & { status?: number; code?: string };

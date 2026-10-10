@@ -1,10 +1,10 @@
 ﻿"use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import type { ResearchBrief } from "@/lib/types/research-project";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import type { ReferenceItem } from "./ReferenceCard";
-import { getErrorMessage } from "@/lib/errors";
 
 interface SearchPlanGroup {
   queries: string[];

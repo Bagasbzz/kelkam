@@ -7,6 +7,7 @@
 "use client";
 
 import { authenticatedFetch } from "@/components/AuthProvider";
+import { getErrorMessage } from "@/lib/errors";
 
 export type AgentRunStatus = "queued" | "running" | "paused" | "waiting_user" | "done" | "failed" | "cancelled";
 export interface AgentEvent { t: string; text: string; level?: "info" | "warn" | "error" | "tool" }
@@ -16,7 +17,6 @@ export interface AgentRunPublic {
   kind: "laporan" | "tugas";
   sessionId: string;
   status: AgentRunStatus;
-  model: string;
   stepCount: number;
   maxSteps: number;
   events: AgentEvent[];
@@ -50,8 +50,8 @@ export function isRunLive(status: AgentRunStatus) { return RUN_LIVE.includes(sta
 /** Baca satu respons NDJSON sampai `result`/`error`/EOF. */
 export async function readRunStream(res: Response, obs: RunObserver, signal?: AbortSignal): Promise<{ run: AgentRunPublic | null; continue: boolean; error: string | null }> {
   if (!res.ok || !res.body) {
-    let msg = `HTTP ${res.status}`;
-    try { const j = await res.json(); if (j?.error) msg = String(j.error); } catch { /* bukan JSON */ }
+    let msg = getErrorMessage(new Error(`HTTP ${res.status}`), "Server tidak merespons dengan benar.");
+    try { const j = await res.json(); if (j?.error) msg = getErrorMessage(new Error(String(j.error)), msg); } catch { /* bukan JSON */ }
     return { run: null, continue: false, error: msg };
   }
   const reader = res.body.getReader();
@@ -86,7 +86,7 @@ export async function readRunStream(res: Response, obs: RunObserver, signal?: Ab
     }
     if (buf.trim()) handle(buf);
   } catch (err) {
-    if (!signal?.aborted) error = err instanceof Error ? err.message : "Koneksi terputus.";
+    if (!signal?.aborted) error = getErrorMessage(err, "Koneksi terputus. Menyambung ulang…");
   } finally {
     try { reader.releaseLock(); } catch { /* ignore */ }
   }
@@ -111,10 +111,16 @@ export async function followRun(opts: {
   const getRunId = () => (typeof opts.runId === "function" ? opts.runId() : opts.runId);
   let failures = 0;
   let last: AgentRunPublic | null = null;
-  let res = await opts.first();
+  const NET_FAIL = "Koneksi ke server terputus. Mencoba menyambung ulang…";
+  // Fetch awal/reconnect bisa melempar TypeError("Failed to fetch"); anggap sebagai
+  // kegagalan sementara agar masuk loop retry, bukan bocor ke UI mentah-mentah.
+  let res: Response | null = null;
+  try { res = await opts.first(); } catch (err) { if (opts.signal?.aborted) return null; void err; }
 
   while (true) {
-    const out = await readRunStream(res, opts.observer, opts.signal);
+    const out = res
+      ? await readRunStream(res, opts.observer, opts.signal)
+      : { run: null, continue: false, error: NET_FAIL };
     if (out.run) last = out.run;
     if (opts.signal?.aborted) return last;
 
@@ -131,12 +137,18 @@ export async function followRun(opts: {
     const runId = getRunId();
     if (!runId) throw new Error(out.error || "Run tidak dimulai.");
     // Sambung ulang.
-    res = await authenticatedFetch(opts.continueUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ runId, action: "continue" }),
-      signal: opts.signal,
-    });
+    try {
+      res = await authenticatedFetch(opts.continueUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId, action: "continue" }),
+        signal: opts.signal,
+      });
+    } catch (err) {
+      if (opts.signal?.aborted) return last;
+      void err;
+      res = null;
+    }
   }
 }
 

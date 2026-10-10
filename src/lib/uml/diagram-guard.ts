@@ -357,6 +357,19 @@ export function validateDiagramData(
     edgePairs.add(pair);
   });
 
+  if (diagramType === "usecase") {
+    const connected = new Set<string>();
+    edges.forEach((edge) => { connected.add(edge.fromId); connected.add(edge.toId); });
+    nodes.forEach((node) => {
+      if (node.type === "actor" && !connected.has(node.id)) {
+        errors.push(`Aktor "${node.text}" belum terhubung ke use case mana pun.`);
+      }
+      if (node.type === "usecase" && !connected.has(node.id)) {
+        errors.push(`Use case "${node.text}" belum terhubung ke aktor mana pun.`);
+      }
+    });
+  }
+
   if (diagramType !== "sequence") {
     const collisionPadding = diagramType === "usecase" ? 10 : 16;
     for (let leftIndex = 0; leftIndex < nodes.length; leftIndex += 1) {
@@ -379,113 +392,169 @@ export function validateDiagramData(
   return { ok: errors.length === 0, errors, warnings };
 }
 
-function layoutFlowchart(nodes: DiagramNode[], edges: DiagramEdge[]) {
+// Geometri lane harus sama dengan DiagramCanvas (laneStartX=20, laneWidth=420).
+const LANE_START_X = 20;
+const LANE_WIDTH = 420;
+const LANE_PAD = 18;
+const FLOW_TOP_Y = 110;
+const ROW_GAP = 70;
+const SIBLING_GAP = 36;
+
+type FlowNode = DiagramNode & { pinned: boolean; offsetX: number; offsetY: number };
+
+/**
+ * Layout untuk flowchart & activity: layer dihitung dengan longest-path (back-edge diabaikan),
+ * node ditempatkan di tengah lane masing-masing (atau kolom cabang jika tanpa lane),
+ * node se-layer dalam lane yang sama dijajarkan tanpa saling tumpang tindih,
+ * lalu dilakukan collision pass terakhir.
+ */
+function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: string[]): FlowNode[] {
+  if (!nodes.length) return [];
+  const nodeMap = new Map<string, FlowNode>(nodes.map((node) => [node.id, { ...node, pinned: true, offsetX: 0, offsetY: 0 }]));
   const nextById = new Map<string, DiagramEdge[]>();
-  const incoming = new Set(edges.map((edge) => edge.toId));
+  const incoming = new Set<string>();
   edges.forEach((edge) => {
+    if (!nodeMap.has(edge.fromId) || !nodeMap.has(edge.toId) || edge.fromId === edge.toId) return;
     const list = nextById.get(edge.fromId) || [];
     list.push(edge);
     nextById.set(edge.fromId, list);
+    incoming.add(edge.toId);
   });
 
   const roots = nodes.filter((node) => !incoming.has(node.id));
   const startNode = roots.find((node) => node.type === "start") || roots[0] || nodes[0];
-  const nodeMap = new Map(nodes.map((node) => [node.id, { ...node, pinned: true, offsetX: 0, offsetY: 0 }]));
-  const visited = new Set<string>();
-  const queue: Array<{ id: string; depth: number; column: number }> = [{ id: startNode.id, depth: 0, column: 0 }];
 
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current || visited.has(current.id)) continue;
-    visited.add(current.id);
-    const node = nodeMap.get(current.id);
-    if (!node) continue;
+  // 1) Deteksi back-edge via DFS agar loop tidak merusak perhitungan layer.
+  const backEdges = new Set<string>();
+  const state = new Map<string, 0 | 1 | 2>();
+  const dfs = (id: string) => {
+    state.set(id, 1);
+    for (const edge of nextById.get(id) || []) {
+      const st = state.get(edge.toId) || 0;
+      if (st === 1) backEdges.add(edge.id);
+      else if (st === 0) dfs(edge.toId);
+    }
+    state.set(id, 2);
+  };
+  dfs(startNode.id);
+  nodes.forEach((node) => { if (!state.get(node.id)) dfs(node.id); });
 
-    node.x = 520 + current.column * 280 - node.width / 2;
-    node.y = 100 + current.depth * 152;
-
-    const outgoing = (nextById.get(current.id) || []).sort((a, b) => {
-      const rank = (edge: DiagramEdge) => {
-        const label = edge.label?.toLowerCase();
-        if (label === "ya" || label === "yes") return 0;
-        if (label === "tidak" || label === "no") return 1;
-        return 2;
-      };
-      return rank(a) - rank(b);
-    });
-
-    outgoing.forEach((edge, index) => {
-      const label = edge.label?.toLowerCase();
-      const shift = label === "ya" || label === "yes"
-        ? 1
-        : label === "tidak" || label === "no"
-          ? -1
-          : index - Math.floor(outgoing.length / 2);
-      queue.push({ id: edge.toId, depth: current.depth + 1, column: current.column + shift });
-    });
+  // 2) Layer = longest path dari root (forward edge saja).
+  const layer = new Map<string, number>();
+  const bias = new Map<string, number>();
+  nodes.forEach((node) => { layer.set(node.id, 0); bias.set(node.id, 0); });
+  const rankLabel = (label?: string) => {
+    const l = (label || "").toLowerCase();
+    if (l === "ya" || l === "yes") return 0;
+    if (l === "tidak" || l === "no") return 1;
+    return 2;
+  };
+  for (let pass = 0; pass < nodes.length + 1; pass += 1) {
+    let changed = false;
+    for (const node of nodes) {
+      const current = layer.get(node.id) || 0;
+      const outgoing = (nextById.get(node.id) || []).filter((edge) => !backEdges.has(edge.id)).sort((a, b) => rankLabel(a.label) - rankLabel(b.label));
+      outgoing.forEach((edge, index) => {
+        if ((layer.get(edge.toId) || 0) < current + 1) { layer.set(edge.toId, current + 1); changed = true; }
+        // Bias kolom: Ya ke kanan, Tidak ke kiri, sisanya menyebar di tengah.
+        const label = (edge.label || "").toLowerCase();
+        const shift = label === "ya" || label === "yes" ? 1 : label === "tidak" || label === "no" ? -1 : index - Math.floor(outgoing.length / 2);
+        const parentBias = bias.get(node.id) || 0;
+        if (outgoing.length > 1 || shift !== 0) bias.set(edge.toId, Math.max(-1, Math.min(1, parentBias + shift)));
+        else if (!bias.has(edge.toId) || bias.get(edge.toId) === 0) bias.set(edge.toId, parentBias);
+      });
+    }
+    if (!changed) break;
   }
 
-  return Array.from(nodeMap.values());
-}
-
-function layoutActivity(nodes: DiagramNode[], edges: DiagramEdge[], lanes: string[]) {
-  const laneNames = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
-  const nodeMap = new Map(nodes.map((node) => [node.id, { ...node, pinned: true, offsetX: 0, offsetY: 0 }]));
-  const nextById = new Map<string, DiagramEdge[]>();
-  const incoming = new Set(edges.map((edge) => edge.toId));
-  edges.forEach((edge) => {
-    const list = nextById.get(edge.fromId) || [];
-    list.push(edge);
-    nextById.set(edge.fromId, list);
+  // 3) Tinggi tiap baris = node tertinggi di layer tersebut.
+  const maxLayer = Math.max(...Array.from(layer.values()));
+  const rowHeight = new Array<number>(maxLayer + 1).fill(60);
+  nodes.forEach((node) => {
+    const l = layer.get(node.id) || 0;
+    rowHeight[l] = Math.max(rowHeight[l], node.height);
   });
+  const rowY: number[] = [];
+  let cursorY = FLOW_TOP_Y;
+  for (let l = 0; l <= maxLayer; l += 1) {
+    rowY[l] = cursorY;
+    cursorY += rowHeight[l] + ROW_GAP;
+  }
 
-  const roots = nodes.filter((node) => !incoming.has(node.id));
-  const startNode = roots.find((node) => node.type === "start") || roots[0] || nodes[0];
-  const queue: Array<{ id: string; depth: number; bias: number }> = [{ id: startNode.id, depth: 0, bias: 0 }];
-  const placed = new Set<string>();
-  const stacks = new Map<string, number>();
-
+  const hasLanes = laneNames.length > 0;
   const laneIndex = (lane?: string) => {
     const index = laneNames.indexOf(lane || laneNames[0]);
     return index >= 0 ? index : 0;
   };
+  const groupCenterX = (node: FlowNode) => {
+    if (hasLanes) return LANE_START_X + laneIndex(node.lane) * LANE_WIDTH + LANE_WIDTH / 2;
+    return 520 + (bias.get(node.id) || 0) * 280;
+  };
 
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current || placed.has(current.id)) continue;
-    placed.add(current.id);
-    const node = nodeMap.get(current.id);
-    if (!node) continue;
-
-    const currentLane = laneIndex(node.lane);
-    const key = `${current.depth}:${currentLane}:${Math.max(-2, Math.min(2, current.bias))}`;
-    const stack = stacks.get(key) || 0;
-    stacks.set(key, stack + 1);
-
-    const laneCenter = 230 + currentLane * 420;
-    const branchShift = Math.max(-120, Math.min(120, current.bias * 110));
-    node.x = laneCenter + branchShift - node.width / 2;
-    node.y = 110 + current.depth * 150 + stack * 28;
-
-    const outgoing = (nextById.get(current.id) || []).sort((a, b) => {
-      const labelA = a.label?.toLowerCase();
-      const labelB = b.label?.toLowerCase();
-      const rank = (label?: string) => label === "ya" || label === "yes" ? 0 : label === "tidak" || label === "no" ? 1 : 2;
-      return rank(labelA) - rank(labelB);
-    });
-
-    outgoing.forEach((edge, index) => {
-      const label = edge.label?.toLowerCase();
-      const nextBias = label === "ya" || label === "yes"
-        ? current.bias + 1
-        : label === "tidak" || label === "no"
-          ? current.bias - 1
-          : current.bias + index - Math.floor(outgoing.length / 2);
-      queue.push({ id: edge.toId, depth: current.depth + 1, bias: Math.max(-1, Math.min(1, nextBias)) });
-    });
+  // 4) Kelompokkan per (lane/kolom, layer) lalu jajarkan horizontal; jika tidak muat, tumpuk vertikal.
+  const groups = new Map<string, FlowNode[]>();
+  for (const node of nodeMap.values()) {
+    const key = `${hasLanes ? laneIndex(node.lane) : bias.get(node.id) || 0}:${layer.get(node.id) || 0}`;
+    const list = groups.get(key) || [];
+    list.push(node);
+    groups.set(key, list);
+  }
+  const laneSlotWidth = LANE_WIDTH - LANE_PAD * 2;
+  for (const list of groups.values()) {
+    list.sort((a, b) => (bias.get(a.id) || 0) - (bias.get(b.id) || 0));
+    const first = list[0];
+    const l = layer.get(first.id) || 0;
+    const centerX = groupCenterX(first);
+    const totalWidth = list.reduce((sum, node) => sum + node.width, 0) + SIBLING_GAP * (list.length - 1);
+    const fitsHorizontally = !hasLanes || totalWidth <= laneSlotWidth;
+    if (fitsHorizontally) {
+      let x = centerX - totalWidth / 2;
+      for (const node of list) {
+        node.x = x;
+        node.y = rowY[l] + (rowHeight[l] - node.height) / 2;
+        x += node.width + SIBLING_GAP;
+      }
+    } else {
+      let y = rowY[l];
+      for (const node of list) {
+        node.x = centerX - node.width / 2;
+        node.y = y;
+        y += node.height + 24;
+      }
+    }
+    if (hasLanes) {
+      // Jaga node tetap di dalam kotak lane-nya.
+      const laneLeft = LANE_START_X + laneIndex(first.lane) * LANE_WIDTH + LANE_PAD;
+      const laneRight = laneLeft + laneSlotWidth;
+      for (const node of list) {
+        node.x = Math.max(laneLeft, Math.min(laneRight - node.width, node.x));
+      }
+    }
   }
 
-  return Array.from(nodeMap.values());
+  // 5) Collision pass: geser ke bawah node yang masih bertumpuk (urut dari atas).
+  const ordered = Array.from(nodeMap.values()).sort((a, b) => a.y - b.y || a.x - b.x);
+  for (let i = 0; i < ordered.length; i += 1) {
+    for (let j = 0; j < i; j += 1) {
+      const a = ordered[j];
+      const b = ordered[i];
+      const overlapX = a.x < b.x + b.width + 16 && b.x < a.x + a.width + 16;
+      const overlapY = a.y < b.y + b.height + 16 && b.y < a.y + a.height + 16;
+      if (overlapX && overlapY) b.y = a.y + a.height + 40;
+    }
+  }
+
+  return Array.from(nodeMap.values()).map((node) => ({ ...node, x: Math.round(node.x), y: Math.round(node.y) }));
+}
+
+function layoutFlowchart(nodes: DiagramNode[], edges: DiagramEdge[], lanes: string[] = []) {
+  const laneNames = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
+  return layoutFlow(nodes, edges, laneNames);
+}
+
+function layoutActivity(nodes: DiagramNode[], edges: DiagramEdge[], lanes: string[]) {
+  const laneNames = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
+  return layoutFlow(nodes, edges, laneNames);
 }
 
 function layoutUseCase(nodes: DiagramNode[], edges: DiagramEdge[]) {
@@ -549,7 +618,7 @@ export function autoLayoutDiagram(
   diagramType: SupportedDiagramType,
   lanes: string[] = [],
 ) {
-  if (diagramType === "flowchart") return layoutFlowchart(nodes, edges);
+  if (diagramType === "flowchart") return layoutFlowchart(nodes, edges, lanes);
   if (diagramType === "activity") return layoutActivity(nodes, edges, lanes);
   if (diagramType === "usecase") return layoutUseCase(nodes, edges);
   if (diagramType === "sequence") return layoutSequence(nodes);

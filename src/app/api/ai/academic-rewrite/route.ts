@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
 import { sendToAI } from "@/lib/ai/client";
-import { getErrorMessage } from "@/lib/errors";
+import { publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+
+const MAX_TEXT_CHARS = 20_000;
 
 export async function POST(req: Request) {
   try {
-    const { text } = await req.json();
+    const body = await readJsonBody<{ text?: unknown }>(req, 128 * 1024);
+    const text = typeof body.text === "string" ? body.text.trim().slice(0, MAX_TEXT_CHARS) : "";
 
     if (!text) {
       return NextResponse.json({ success: false, error: "Teks tidak boleh kosong" }, { status: 400 });
@@ -36,9 +39,6 @@ Tuliskan hasilnya langsung dalam bahasa akademik yang formal.`;
     });
   } catch (error: unknown) {
     console.error("API /api/ai/academic-rewrite Error:", error);
-    return NextResponse.json(
-      { success: false, error: getErrorMessage(error, "Terjadi kesalahan internal pada server") },
-      { status: 500 }
-    );
+    return publicErrorResponse(error, "Layanan AI sedang bermasalah. Coba lagi beberapa saat.");
   }
 }

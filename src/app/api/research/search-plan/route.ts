@@ -1,6 +1,6 @@
+import { getErrorMessage } from "@/lib/errors";
 import { NextResponse } from "next/server";
 import { sendToAIForPurpose, assertAiConfigured } from "@/lib/ai/client";
-import { getErrorMessage } from "@/lib/errors";
 import { publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 
 type JsonRecord = Record<string, unknown>;

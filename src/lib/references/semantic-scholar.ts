@@ -1,6 +1,6 @@
+import { getErrorMessage } from "@/lib/errors";
 import { ProviderPaper, SearchOptions } from "./types";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
-import { getErrorMessage } from "@/lib/errors";
 
 const SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1/paper/search";
 

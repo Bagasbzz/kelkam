@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Copy, KeyRound, Loader2, RefreshCw, Search, ShieldCheck } from "lucide-react";
@@ -60,7 +61,7 @@ export default function AdminUsersPage() {
       setTotal(data.total);
       setPageSize(data.pageSize);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat daftar user.");
+      setError(getErrorMessage(err, "Gagal memuat daftar user."));
     } finally {
       setLoading(false);
     }
@@ -94,7 +95,7 @@ export default function AdminUsersPage() {
       setTarget(null);
       void load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal mengganti sandi.");
+      setError(getErrorMessage(err, "Gagal mengganti sandi."));
     } finally {
       setSubmitting(false);
     }

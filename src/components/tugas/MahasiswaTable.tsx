@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Search, Trash2, Users } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -38,7 +39,7 @@ export default function MahasiswaTable({
       const r = await fetchMahasiswas(courseId, search);
       setRows(r.mahasiswas);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat.");
+      setError(getErrorMessage(err, "Gagal memuat."));
     } finally {
       setLoading(false);
     }
@@ -62,7 +63,7 @@ export default function MahasiswaTable({
       setRows((r) => r.filter((x) => x.id !== id));
       onChanged?.();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Gagal hapus.");
+      alert(getErrorMessage(err, "Gagal hapus."));
     } finally {
       setBusyId(null);
     }

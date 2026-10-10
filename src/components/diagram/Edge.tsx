@@ -123,7 +123,6 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
     labelX = (fx + tx) / 2;
     labelY = (fy + ty) / 2 - 12;
   } else {
-    const dir = edge.direction;
     const fromBottom = getExitPoint(fromNode, 'bottom');
     const toTop = getExitPoint(toNode, 'top');
     const fromRight = getExitPoint(fromNode, 'right');
@@ -137,8 +136,18 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
     const y2 = snap(toTop.y);
 
     const upwardOrLoop = y2 <= y1 + 24;
+    // Route samping (Ya/Tidak) hanya dipakai jika target benar-benar di samping; jika target
+    // berada di bawah (kolom hampir sama) gunakan jalur vertikal agar garis tidak berputar.
+    const toCenterX = toNode.x + (toNode.offsetX || 0) + toNode.width / 2;
+    const fromCenterX = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
+    const horizontalDelta = toCenterX - fromCenterX;
+    let dir = edge.direction;
+    if (!upwardOrLoop && (dir === 'right' || dir === 'left')) {
+      if (Math.abs(horizontalDelta) < fromNode.width / 2 + 24) dir = undefined;
+      else dir = horizontalDelta > 0 ? 'right' : 'left';
+    }
 
-    if (dir === 'right') {
+    if (dir === 'right' && !upwardOrLoop) {
       const startX = snap(fromRight.x);
       const startY = snap(fromRight.y);
       const endX = snap((toNode.x + (toNode.offsetX || 0)) < startX ? toTop.x : toLeft.x);
@@ -148,7 +157,7 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
       pathData = `M ${startX},${startY} H ${bendX} V ${endY} H ${endX}`;
       labelX = (startX + bendX) / 2;
       labelY = startY - 12;
-    } else if (dir === 'left') {
+    } else if (dir === 'left' && !upwardOrLoop) {
       const startX = snap(fromLeft.x);
       const startY = snap(fromLeft.y);
       const endX = snap((toNode.x + (toNode.offsetX || 0) + toNode.width) > startX ? toTop.x : toRight.x);
@@ -159,13 +168,15 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
       labelX = (startX + bendX) / 2;
       labelY = startY - 12;
     } else if (upwardOrLoop) {
-      const horizontalGap = Math.abs(x2 - x1);
-      const routeX = snap(Math.max(x1, x2) + Math.max(92, Math.min(148, horizontalGap / 2 + 48)));
+      // Loop balik: lewat sisi kiri jika target di kiri, selain itu sisi kanan; masuk dari atas target.
+      const goLeft = horizontalDelta < 0;
+      const fromEdgeX = goLeft ? Math.min(fromNode.x + (fromNode.offsetX || 0), toNode.x + (toNode.offsetX || 0)) : Math.max(fromNode.x + (fromNode.offsetX || 0) + fromNode.width, toNode.x + (toNode.offsetX || 0) + toNode.width);
+      const routeX = snap(goLeft ? fromEdgeX - 56 : fromEdgeX + 56);
       const departureY = snap(y1 + 28);
       const approachY = snap(y2 - 24);
 
       pathData = `M ${x1},${y1} V ${departureY} H ${routeX} V ${approachY} H ${x2} V ${y2}`;
-      labelX = routeX + 8;
+      labelX = goLeft ? routeX - 8 : routeX + 8;
       labelY = (departureY + approachY) / 2;
     } else if (Math.abs(x1 - x2) <= 8) {
       pathData = `M ${x1},${y1} V ${y2}`;

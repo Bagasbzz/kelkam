@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -255,7 +256,7 @@ export default function StudioPage() {
       setError("");
       if (success) setNotice(success);
     } catch (mutationError) {
-      setError(mutationError instanceof Error ? mutationError.message : "Perubahan gagal diterapkan.");
+      setError(getErrorMessage(mutationError, "Perubahan gagal diterapkan."));
     }
   }, [project, replaceActiveProject]);
 
@@ -334,7 +335,7 @@ export default function StudioPage() {
         setSourceDraft((current) => ({ ...current, title: file.name, content, fileName: file.name, provenance: "Dibaca lokal dari browser" }));
         setNotice("File teks dibaca lokal. Login dibutuhkan untuk ekstraksi PDF/DOCX/ZIP yang aman.");
       } else {
-        setError(extractError instanceof Error ? extractError.message : "File gagal diekstrak.");
+        setError(getErrorMessage(extractError, "File gagal diekstrak."));
       }
     } finally {
       setExtractingFile(false);
@@ -379,7 +380,7 @@ export default function StudioPage() {
       );
       setDeepFindings(Array.isArray(body.data.findings) ? body.data.findings : []);
     } catch (scanError) {
-      setError(scanError instanceof Error ? scanError.message : "Pencarian dengan AI gagal. Pertanyaan dasar tetap tersedia.");
+      setError(getErrorMessage(scanError, "Pencarian dengan AI gagal. Pertanyaan dasar tetap tersedia."));
     } finally {
       setDeepScanning(false);
     }
@@ -420,7 +421,7 @@ export default function StudioPage() {
       }));
       router.push("/uml-builder");
     } catch (umlError) {
-      setError(umlError instanceof Error ? umlError.message : "UML Builder gagal dibuka.");
+      setError(getErrorMessage(umlError, "UML Builder gagal dibuka."));
     }
   };
 

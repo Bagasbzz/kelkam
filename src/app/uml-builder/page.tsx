@@ -1,5 +1,6 @@
 'use client';
 
+import { getErrorMessage } from "@/lib/errors";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
@@ -166,6 +167,12 @@ function normalizeApiEdges(value: unknown): DiagramEdge[] {
   });
 }
 
+/** Buang edge yang ujungnya tidak ada di daftar node (sisa dari proyek lain / stream yang terpotong). */
+function dropOrphanEdges(nodes: DiagramNode[], edges: DiagramEdge[]): DiagramEdge[] {
+  const ids = new Set(nodes.map((n) => n.id));
+  return edges.filter((e) => ids.has(e.fromId) && ids.has(e.toId));
+}
+
 function normalizeApiNodes(
   value: unknown,
   diagramType: DiagramType,
@@ -180,13 +187,17 @@ function normalizeApiNodes(
     const rawType = typeof node.type === 'string' ? node.type as NodeType : 'process';
     const type = supportedNodeTypes.has(rawType) ? rawType : 'process';
     const text = typeof node.text === 'string' ? node.text.trim().slice(0, 120) : '';
-    const lines = wrapText(text, charsPerLine);
+    const lines = type === 'start' || type === 'end' ? [text || (type === 'start' ? 'Mulai' : 'Selesai')] : wrapText(text, charsPerLine);
     let height = 60;
     let width = 120;
 
     if (type === 'actor') {
       height = 80;
       width = 60;
+    } else if (type === 'start' || type === 'end') {
+      // Terminator: ukuran tetap, jangan membesar mengikuti panjang teks.
+      width = 110;
+      height = 56;
     } else if (type === 'fork' || type === 'join') {
       height = 10;
       width = 120;
@@ -275,6 +286,8 @@ export default function UMLBuilder() {
   const [diagramMeta, setDiagramMeta] = useState<DiagramMeta>({ lanes: [] });
   const [isStorageHydrated, setIsStorageHydrated] = useState(false);
   const loadedPrefillRef = useRef(false);
+  const diagramTypeRef = useRef<DiagramType>(diagramType);
+  diagramTypeRef.current = diagramType;
   const aiNeedsAnswers = aiClarificationQuestions.some((_, index) => !(aiClarificationAnswers[index] || '').trim());
 
   // Stopwatch selama AI jalan, supaya user tahu waktu berjalan dan bukan hang.
@@ -352,6 +365,8 @@ export default function UMLBuilder() {
     const dt = diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence';
     const snapshotBeforeAi = { nodes, edges, meta: diagramMeta };
     let partialShown = false;
+    // Jika user pindah tipe diagram saat stream berjalan, hasil AI tidak boleh ditulis ke tipe lain.
+    const stillSameType = () => diagramTypeRef.current === dt;
     try {
       const existingSummary = nodes.length > 0 ? {
         nodeCount: nodes.length,
@@ -379,9 +394,10 @@ export default function UMLBuilder() {
           return;
         }
         if (event.type === 'partial' && event.data) {
+          if (!stillSameType()) return;
           // Gambar langsung apa yang sudah ditulis AI, sebelum spec selesai.
           const partialNodes = normalizeApiNodes(event.data.nodes, diagramType, wrapText);
-          const partialEdges = normalizeApiEdges(event.data.edges);
+          const partialEdges = dropOrphanEdges(partialNodes, normalizeApiEdges(event.data.edges));
           if (!partialNodes.length) return;
           if (!partialShown) { saveToHistory(); partialShown = true; setIsAiModalOpen(false); }
           setAiPartialCount(event.count);
@@ -392,6 +408,10 @@ export default function UMLBuilder() {
         }
       });
       const resOk = resStatus >= 200 && resStatus < 300;
+      if (!stillSameType()) {
+        showToast('Tipe diagram diganti saat AI berjalan; hasil AI diabaikan.');
+        return;
+      }
       const restoreSnapshot = () => {
         if (!partialShown) return;
         setNodes(snapshotBeforeAi.nodes);
@@ -429,7 +449,7 @@ export default function UMLBuilder() {
         setAiStatusText('');
         const returnedLanes = stringList(generatedData.lanes).length ? stringList(generatedData.lanes) : stringList(data.spec?.lanes);
         const generatedNodes = normalizeApiNodes(generatedData.nodes, diagramType, wrapText);
-        const nextEdges = normalizeApiEdges(generatedData.edges);
+        const nextEdges = dropOrphanEdges(generatedNodes, normalizeApiEdges(generatedData.edges));
         const renderValidation = validateDiagramData(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
         if (!renderValidation.ok) {
           restoreSnapshot();
@@ -454,6 +474,7 @@ export default function UMLBuilder() {
         showToast(data.error || 'Gagal membuat diagram.');
       }
     } catch (error) {
+      if (!stillSameType()) return;
       if (partialShown) {
         setNodes(snapshotBeforeAi.nodes);
         setEdges(snapshotBeforeAi.edges);
@@ -746,7 +767,18 @@ export default function UMLBuilder() {
       if (savedData) {
         try {
           const parsed = JSON.parse(savedData);
-          if (parsed.projects) setProjects(parsed.projects);
+          if (parsed.projects && typeof parsed.projects === 'object') {
+            // Bersihkan edge yatim dari penyimpanan lama agar tidak muncul garis nyasar.
+            const cleaned = { ...parsed.projects } as Record<string, { nodes?: DiagramNode[]; edges?: DiagramEdge[] }>;
+            for (const key of Object.keys(cleaned)) {
+              const p = cleaned[key];
+              if (!p) continue;
+              const ns = Array.isArray(p.nodes) ? p.nodes : [];
+              cleaned[key] = { nodes: ns, edges: dropOrphanEdges(ns, Array.isArray(p.edges) ? p.edges : []) };
+            }
+            parsed.projects = cleaned;
+            setProjects(parsed.projects);
+          }
           if (!loadedPrefillRef.current && parsed.activeType) setDiagramType(parsed.activeType);
           if (parsed.zoomLevel) setZoomLevel(parsed.zoomLevel);
           const active = parsed.projects[parsed.activeType || 'flowchart'];
@@ -773,15 +805,19 @@ export default function UMLBuilder() {
 
   const handleSwitchDiagram = useCallback((newType: DiagramType) => {
     const target = projects[newType] || { nodes: [], edges: [] };
+    const targetNodes = target.nodes || [];
+    const targetEdges = dropOrphanEdges(targetNodes, target.edges || []);
     setProjects((prev) => ({ ...prev, [diagramType]: { nodes, edges } }));
     setHistory([]);
     setRedoStack([]);
     setParentId('');
-    setNodes(target.nodes);
-    setEdges(target.edges);
+    setNodes(targetNodes);
+    setEdges(targetEdges);
     setDiagramType(newType);
     setSelectedNodeId(null);
-    setDiagramMeta((prev) => ({ ...prev, lanes: Array.from(new Set((target.nodes || []).map((node) => node.lane).filter(Boolean))) as string[] }));
+    setAiWarnings([]);
+    setAiError('');
+    setDiagramMeta((prev) => ({ ...prev, title: undefined, lanes: Array.from(new Set(targetNodes.map((node) => node.lane).filter(Boolean))) as string[] }));
   }, [diagramType, edges, nodes, projects]);
 
   const handleApproveToReport = useCallback(() => {
@@ -850,7 +886,7 @@ export default function UMLBuilder() {
         showToast('Diagram disetujui dan tersimpan ke Studio.');
         return;
       } catch (error) {
-        showToast(error instanceof Error ? error.message : 'Diagram belum memenuhi syarat Studio.');
+        showToast(getErrorMessage(error, 'Diagram belum memenuhi syarat Studio.'));
         return;
       }
     }
@@ -1166,10 +1202,15 @@ export default function UMLBuilder() {
     const newEdges = [...edges];
 
     if (diagramType === 'usecase') {
-      if (newNodeType === 'usecase' && selectedActorIds.length > 0) {
-        selectedActorIds.forEach(actorId => {
+      if (newNodeType === 'usecase') {
+        // Use case harus punya aktor: pakai pilihan user, jika kosong sambungkan ke aktor pertama.
+        const actorIds = selectedActorIds.length > 0
+          ? selectedActorIds
+          : nodes.filter((n) => n.type === 'actor').slice(0, 1).map((n) => n.id);
+        actorIds.forEach(actorId => {
           newEdges.push({ id: `edge-${Date.now()}-${actorId}`, fromId: actorId, toId: newNodeId, dashed: isDashed });
         });
+        if (!actorIds.length) showToast('Tambahkan aktor dulu, lalu hubungkan ke use case ini.');
         setSelectedActorIds([]);
       }
     } else if (parentNode) {
@@ -1201,7 +1242,7 @@ export default function UMLBuilder() {
     setNewNodeText('');
     setParentId(newNodeId);
     setBranchType('main');
-  }, [saveToHistory, parentId, nodes, diagramType, branchType, isDashed, newNodeText, newNodeType, nodeSide, selectedActorIds, wrapText, edges]);
+  }, [saveToHistory, parentId, nodes, diagramType, branchType, isDashed, newNodeText, newNodeType, nodeSide, selectedActorIds, wrapText, edges, showToast]);
 
   const propertiesPanelContent = selectedNodeId ? (
     <>

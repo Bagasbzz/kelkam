@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -80,7 +81,7 @@ export default function CourseAdminDashboard() {
       });
       setCounts(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
+      setError(getErrorMessage(err, "Gagal memuat mata kuliah."));
     } finally {
       setLoading(false);
     }
@@ -98,7 +99,7 @@ export default function CourseAdminDashboard() {
       await deleteTugas(t.id);
       await loadAll();
     } catch (err) {
-      setDeleteError(err instanceof Error ? err.message : "Gagal hapus tugas.");
+      setDeleteError(getErrorMessage(err, "Gagal hapus tugas."));
     }
   }
 
@@ -111,7 +112,7 @@ export default function CourseAdminDashboard() {
       setCourse(result.course);
       setEditingCourse(false);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Gagal menyimpan mata kuliah.");
+      setEditError(getErrorMessage(err, "Gagal menyimpan mata kuliah."));
     } finally {
       setSaving(false);
     }
@@ -126,7 +127,7 @@ export default function CourseAdminDashboard() {
       setCourse({ ...course, classes: course.classes.map((item) => item.id === editingClassId ? result.class : item) });
       setEditingClassId(null);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Gagal menyimpan kelas.");
+      setEditError(getErrorMessage(err, "Gagal menyimpan kelas."));
     } finally {
       setSaving(false);
     }

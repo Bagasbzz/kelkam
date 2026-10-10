@@ -419,7 +419,6 @@ export interface AssistantTurn {
   pendingQuestion: { question: string; options?: string[] } | null;
   toolsUsed: string[];
   attachments?: AssistantAttachment[];
-  model: string;
 }
 
 export interface AssistantSessionSummary {

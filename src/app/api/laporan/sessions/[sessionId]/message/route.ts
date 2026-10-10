@@ -47,8 +47,6 @@ export async function POST(req: Request, context: { params: Promise<{ sessionId:
       return NextResponse.json({ success: false, error: "AI terlalu lama merespons. Coba kirim pesan yang lebih singkat." }, { status: 504 });
     }
     console.error("laporan assistant POST failed:", error);
-    const e = error as Error & { status?: number };
-    const detail = error instanceof Error ? `${typeof e.status === "number" ? `AI ${e.status}: ` : ""}${error.message.slice(0, 200)}` : "";
-    return publicErrorResponse(error, `Asisten gagal memproses permintaan.${detail ? ` (${detail})` : ""}`);
+    return publicErrorResponse(error, "Asisten gagal memproses permintaan. Coba lagi beberapa saat.");
   }
 }

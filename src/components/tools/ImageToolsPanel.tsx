@@ -14,6 +14,7 @@
 
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useState } from "react";
 import { FileDropzone, FileListPreview } from "@/components/ui/FileDropzone";
 import { ToolPanelShell, RunButton, ResultBanner, type ToolDescriptor } from "./ToolPanelShell";
@@ -114,7 +115,7 @@ export function ImageToolsPanel() {
         }
       }
     } catch (err) {
-      setResult({ tone: "warn", message: err instanceof Error ? err.message : "Gagal." });
+      setResult({ tone: "warn", message: getErrorMessage(err, "Gagal.") });
     } finally {
       setBusy(false);
     }

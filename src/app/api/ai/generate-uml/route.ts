@@ -11,13 +11,15 @@ import {
   type GenerateUmlRequest,
   type UmlStreamEvent,
 } from "@/lib/uml/pipeline";
+import { readJsonBody } from "@/lib/server/request-guards";
 
 export const maxDuration = 120;
 
 export async function POST(req: Request) {
-  const rawBody: unknown = await req.json().catch(() => null);
+  // Body dibatasi 512 KB: deskripsi alur + konteks spec cukup, payload besar = indikasi penyalahgunaan.
+  const rawBody: unknown = await readJsonBody<unknown>(req, 512 * 1024).catch(() => null);
   if (!isRecord(rawBody)) {
-    return NextResponse.json({ success: false, error: "Payload JSON tidak valid." }, { status: 400 });
+    return NextResponse.json({ success: false, error: "Payload JSON tidak valid atau terlalu besar." }, { status: 400 });
   }
   const body = rawBody as GenerateUmlRequest;
   const wantsStream = new URL(req.url).searchParams.get("stream") === "1";

@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { toPublicErrorMessage } from "@/lib/errors";
 
 export type AgentKind = "laporan" | "tugas";
 export type AgentRunStatus = "queued" | "running" | "paused" | "waiting_user" | "done" | "failed" | "cancelled";
@@ -56,7 +57,6 @@ export interface AgentRunPublic {
   kind: AgentKind;
   sessionId: string;
   status: AgentRunStatus;
-  model: string;
   stepCount: number;
   maxSteps: number;
   events: AgentEvent[];
@@ -164,7 +164,6 @@ function toPublic(row: Row): AgentRunPublic {
     kind: row.kind as AgentKind,
     sessionId: row.sessionId,
     status: row.status as AgentRunStatus,
-    model: row.model,
     stepCount: row.stepCount,
     maxSteps: row.maxSteps,
     events: asArr(row.events) as AgentEvent[],
@@ -499,7 +498,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
 
       // 4. Panggil model.
       const isLast = stepCount === row0.maxSteps - 1;
-      emit(`Berpikir (langkah ${stepCount + 1}, ${model})…`);
+      emit(`Berpikir (langkah ${stepCount + 1})…`);
       messages = compactMessages(messages);
       let completion: OpenAI.Chat.Completions.ChatCompletion;
       try {
@@ -519,6 +518,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         consecutiveErrors = 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[agent-run ${runId}] AI error:`, msg.slice(0, 300));
         // Rate limit bukan kegagalan: ganti model, tunggu sesuai "reset after" bila masih muat di segmen.
         const waitMs = rateLimitWaitMs(err);
         if (waitMs !== null) {
@@ -526,7 +526,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           const next = alternateModel(model);
           const nextWait = Math.max(0, (availableAt.get(next) ?? 0) - Date.now());
           if (nextWait === 0) {
-            emit(`Kuota model ${model} penuh (reset ±${Math.ceil(waitMs / 1000)}s) — beralih ke ${next}…`, "warn");
+            emit(`Kuota AI penuh (reset ±${Math.ceil(waitMs / 1000)}s) — beralih ke jalur cadangan…`, "warn");
             model = next;
             await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
             continue;
@@ -537,7 +537,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           model = waitMs <= nextWait ? model : next;
           await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
           if (wait <= Math.min(left, RATE_LIMIT_MAX_WAIT_MS)) {
-            emit(`Kuota semua model penuh — menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut dengan ${model}…`, "warn");
+            emit(`Kuota AI penuh — menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut…`, "warn");
             await sleep(wait);
           } else {
             return release("queued", `Kuota AI sedang dibatasi (±${Math.ceil(wait / 1000)}s) — dilanjutkan otomatis setelah pulih…`);
@@ -545,11 +545,11 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           continue;
         }
         consecutiveErrors += 1;
-        emit(`Model gagal merespons (${msg.slice(0, 120)}) — percobaan ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`, "warn");
+        emit(`AI belum merespons — percobaan ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`, "warn");
         if (/context|token|length|too large|maximum/i.test(msg)) messages = compactMessages(messages, true);
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-          const reply = (await forceFinalAnswer("Model berulang kali gagal.")) || "";
-          return finish({ status: reply ? "done" : "failed", reply: reply || null, error: reply ? null : `AI gagal ${MAX_CONSECUTIVE_ERRORS}x: ${msg.slice(0, 200)}` });
+          const reply = (await forceFinalAnswer("AI berulang kali gagal.")) || "";
+          return finish({ status: reply ? "done" : "failed", reply: reply || null, error: reply ? null : toPublicErrorMessage(err, "Layanan AI sedang bermasalah. Coba lagi beberapa saat.") });
         }
         continue;
       }
@@ -593,8 +593,11 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         try {
           result = await driver.runTool(name, args, { run: ref, emit: (text) => emit(text), attachments });
         } catch (err) {
-          result = { error: err instanceof Error ? err.message : "Tool gagal." };
-          emit(`${name} gagal: ${(err instanceof Error ? err.message : "").slice(0, 160)}`, "warn");
+          // Pesan mentah hanya untuk konteks model (bukan user); log + event publik disaring.
+          const raw = err instanceof Error ? err.message : "Tool gagal.";
+          console.warn(`[agent-run ${runId}] tool ${name} gagal:`, raw.slice(0, 300));
+          result = { error: raw.slice(0, 400) };
+          emit(`${name} gagal: ${toPublicErrorMessage(err, "terjadi gangguan")}`, "warn");
         }
         const secs = Math.round((Date.now() - t0) / 1000);
         if (secs >= 3) emit(`${name} selesai (${secs}s)`);
@@ -610,11 +613,11 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       }
     }
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Kesalahan tak terduga.";
-    console.error(`[agent-run ${runId}] loop error:`, message);
-    emit(`Kesalahan: ${message.slice(0, 200)} — run disimpan, bisa dilanjutkan.`, "error");
+    console.error(`[agent-run ${runId}] loop error:`, err instanceof Error ? err.message : err);
+    const message = toPublicErrorMessage(err, "Terjadi kesalahan tak terduga.");
+    emit(`${message} — run disimpan, bisa dilanjutkan.`, "error");
     await flushing;
-    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { status: "queued", lockToken: null, error: message.slice(0, 500), events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue } });
+    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { status: "queued", lockToken: null, error: message.slice(0, 300), events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue } });
     return (await getAgentRun(runId, ref.ownerId)) as AgentRunPublic;
   } finally {
     clearInterval(heartbeat);

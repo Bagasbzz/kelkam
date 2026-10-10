@@ -1,10 +1,10 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import { useAuth, authenticatedFetch } from "@/components/AuthProvider";
 import type { ResearchBrief } from "@/lib/types/research-project";
 import { useCurrentProjectId } from "@/lib/client/use-current-project";
-import { getErrorMessage } from "@/lib/errors";
 
 interface NoveltyCandidate {
   id: string;

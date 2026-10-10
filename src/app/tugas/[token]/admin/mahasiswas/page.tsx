@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -37,7 +38,7 @@ export default function MahasiswaPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
+        setError(getErrorMessage(err, "Gagal memuat mata kuliah."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

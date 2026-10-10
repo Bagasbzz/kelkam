@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
+import { toPublicErrorMessage } from "@/lib/errors";
 
 export const maxDuration = 60;
 
@@ -64,7 +65,7 @@ function getArray(value: unknown, limit: number): unknown[] {
 }
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Gagal merevisi laporan.";
+  return toPublicErrorMessage(error, "Gagal merevisi laporan.");
 }
 
 async function readJsonBody(req: Request): Promise<unknown> {

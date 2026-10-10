@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useState } from "react";
 import { CheckCircle2 } from "lucide-react";
 import Button from "@/components/ui/Button";
@@ -36,7 +37,7 @@ export default function WaitlistForm() {
       setEmail("");
     } catch (err: unknown) {
       setStatus("error");
-      setErrorMessage(err instanceof Error ? err.message : "Terjadi kesalahan. Coba lagi.");
+      setErrorMessage(getErrorMessage(err, "Terjadi kesalahan. Coba lagi."));
     }
   };
 

@@ -41,16 +41,28 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
           />
         );
       case 'end':
+        // Terminator akhir: oval putih dengan cincin ganda agar label tetap terbaca.
         return (
-          <ellipse
-            cx={curX + width / 2}
-            cy={curY + height / 2}
-            rx={width / 2}
-            ry={height / 2}
-            fill="#1e293b"
-            stroke={borderColor}
-            strokeWidth={borderWidth}
-          />
+          <g>
+            <ellipse
+              cx={curX + width / 2}
+              cy={curY + height / 2}
+              rx={width / 2}
+              ry={height / 2}
+              fill="white"
+              stroke={borderColor}
+              strokeWidth={borderWidth}
+            />
+            <ellipse
+              cx={curX + width / 2}
+              cy={curY + height / 2}
+              rx={Math.max(8, width / 2 - 5)}
+              ry={Math.max(8, height / 2 - 5)}
+              fill="none"
+              stroke={borderColor}
+              strokeWidth={1.2}
+            />
+          </g>
         );
       case 'process':
         return (

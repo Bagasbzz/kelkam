@@ -1,5 +1,6 @@
 ﻿"use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import React, { useState } from "react";
 import { authenticatedFetch } from "@/components/AuthProvider";
 
@@ -72,7 +73,7 @@ export default function ReferenceCard({
         setExtractStatus("Gagal: " + (j?.error || "Unknown"));
       }
     } catch (error) {
-      setExtractStatus("Network error: " + (error instanceof Error ? error.message : "unknown"));
+      setExtractStatus("Network error: " + (getErrorMessage(error, "unknown")));
     } finally {
       setExtracting(false);
       setTimeout(() => setExtractStatus(null), 4000);

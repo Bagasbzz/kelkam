@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
-import { getErrorMessage } from "@/lib/errors";
+import { publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 
 export const maxDuration = 60;
+
+const MAX_FIELD_CHARS = 40_000;
+const str = (v: unknown, max = MAX_FIELD_CHARS) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 
 export async function POST(req: Request) {
   try {
     assertAiConfigured();
 
-    const { topic, dataType, rawData, actionType, previousResult } = await req.json();
+    const body = await readJsonBody<Record<string, unknown>>(req, 256 * 1024);
+    const topic = str(body.topic, 500);
+    const dataType = str(body.dataType, 40);
+    const rawData = str(body.rawData);
+    const actionType = str(body.actionType, 40);
+    const previousResult = str(body.previousResult);
 
     if (!topic || (!rawData && !previousResult)) {
       return NextResponse.json({ success: false, error: "Data tidak lengkap." }, { status: 400 });
@@ -88,9 +96,6 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
         { status: 504 }
       );
     }
-    return NextResponse.json(
-      { success: false, error: getErrorMessage(error, "Gagal menghasilkan laporan, silakan coba lagi.") },
-      { status: 500 }
-    );
+    return publicErrorResponse(error, "Gagal menghasilkan laporan, silakan coba lagi.");
   }
 }

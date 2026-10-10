@@ -31,6 +31,7 @@
 
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 // ---------------------------------------------------------------------------
@@ -134,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(json.user);
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Login gagal." };
+      return { ok: false, error: getErrorMessage(error, "Login gagal.") };
     }
   }, []);
 
@@ -154,7 +155,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(json.user);
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : "Pendaftaran gagal." };
+      return { ok: false, error: getErrorMessage(error, "Pendaftaran gagal.") };
     }
   }, []);
 

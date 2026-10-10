@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
@@ -33,7 +34,7 @@ export default function EditTugasPage() {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat tugas.");
+        setError(getErrorMessage(err, "Gagal memuat tugas."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

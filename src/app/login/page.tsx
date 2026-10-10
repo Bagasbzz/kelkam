@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -102,7 +103,7 @@ function LoginPageInner() {
       if (!json?.success) return { ok: false as const, error: json?.error || "Pendaftaran gagal." };
       return { ok: true as const };
     } catch (err) {
-      return { ok: false as const, error: err instanceof Error ? err.message : "Pendaftaran gagal." };
+      return { ok: false as const, error: getErrorMessage(err, "Pendaftaran gagal.") };
     }
   }
 

@@ -88,7 +88,8 @@ Berikan 3-4 insight level platform untuk super admin. Bahasa Indonesia, bullet (
     try {
       globalInsight = await sendToAIForPurpose(prompt, undefined, "fast");
     } catch (err) {
-      globalInsight = `_(AI belum tersedia: ${err instanceof Error ? err.message : "unknown"}_)`;
+      console.warn("admin insights AI failed:", err);
+      globalInsight = "_(Insight AI belum tersedia saat ini. Coba lagi beberapa saat.)_";
     }
 
     return NextResponse.json({ success: true, courses: summary, globalInsight });

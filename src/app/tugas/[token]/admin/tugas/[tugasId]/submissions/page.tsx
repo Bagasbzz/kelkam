@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -55,7 +56,7 @@ export default function AdminSubmissionsPage() {
           setForbidden(true);
           return;
         }
-        setError(err instanceof Error ? err.message : "Gagal memuat pengumpulan.");
+        setError(getErrorMessage(err, "Gagal memuat pengumpulan."));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

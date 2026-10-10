@@ -13,12 +13,14 @@ export async function POST(req: Request) {
     }
 
     const buffer = await generateSmartThesisTemplate(body);
+    // Nama file hanya dari karakter aman (anti header injection).
+    const safeName = String(body.studentName).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "mahasiswa";
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="template-skripsi-${body.studentName.replace(/\s+/g, '-').toLowerCase()}.docx"`,
+        "Content-Disposition": `attachment; filename="template-skripsi-${safeName}.docx"`,
       },
     });
   } catch (error) {

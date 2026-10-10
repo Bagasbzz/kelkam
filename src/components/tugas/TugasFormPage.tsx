@@ -1,5 +1,6 @@
 "use client";
 
+import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2 } from "lucide-react";
@@ -68,7 +69,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Gagal memuat mata kuliah.");
+        setError(getErrorMessage(err, "Gagal memuat mata kuliah."));
       })
       .finally(() => {
         if (!cancelled) setLoadingCourse(false);
@@ -169,7 +170,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       }
       router.push(`/tugas/${token}/admin`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menyimpan.");
+      setError(getErrorMessage(err, "Gagal menyimpan."));
     } finally {
       setSubmitting(false);
     }

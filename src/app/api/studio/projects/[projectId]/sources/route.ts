@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
+import { publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 
 export async function POST(req: Request, { params }: { params: Promise<{ projectId: string }> }) {
   const auth = await authenticateRequestFromCookie();
@@ -35,7 +36,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ project
   }
 
   try {
-    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    const body = await readJsonBody<Record<string, unknown> | null>(req, 3 * 1024 * 1024).catch(() => null);
     if (!body || typeof body !== "object") {
       return NextResponse.json({ success: false, error: "Payload tidak valid." }, { status: 400 });
     }
@@ -77,10 +78,4 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
   // deleteMany (bukan delete) — idempotent, return count=0 kalau sudah tidak ada.
   await prisma.studioSource.deleteMany({ where: { id: sourceId, projectId, ownerId: auth.user.id } });
   return NextResponse.json({ success: true });
-}
-
-/** Re-export helper kalau route file lain butuh. */
-function publicErrorResponse(error: unknown, fallback: string) {
-  const message = error instanceof Error ? error.message : fallback;
-  return NextResponse.json({ success: false, error: message }, { status: 500 });
 }

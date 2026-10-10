@@ -141,8 +141,8 @@ export async function POST(
           "fast",
         );
       } catch (err) {
-        const msg = err instanceof Error ? err.message : "AI parse gagal.";
-        return NextResponse.json({ success: false, error: msg }, { status: 502 });
+        console.warn("mahasiswa AI parse failed:", err);
+        return NextResponse.json({ success: false, error: "AI gagal membaca daftar mahasiswa. Coba lagi atau rapikan formatnya." }, { status: 502 });
       }
       // Strip markdown fences kalau ada.
       aiRaw = aiRaw.trim().replace(/^```(?:json)?/i, "").replace(/```$/, "").trim();
