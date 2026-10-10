@@ -545,10 +545,10 @@ export default function LaporanPage() {
 
               {detail && tab === "gambar" && (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-500">Minta di chat, mis. “buatkan gambar arsitektur sistem untuk BAB III”. Gambar dibuat di background (±2 menit) dan otomatis masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code> di draft. Diagram UML dari rencana dibuat otomatis oleh engine UML Builder saat eksekusi.</p>
+                  <p className="text-[11px] text-slate-500">Diagram (UML & konsep/arsitektur) dan ilustrasi dari rencana dibuat otomatis saat eksekusi dan masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code>. Ilustrasi tambahan bisa diminta di chat, mis. “buatkan ilustrasi proses X untuk BAB III”.</p>
                   {(detail.plan?.diagrams ?? []).length > 0 && (
                     <div className="space-y-2">
-                      <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram UML ({detail.plan!.diagrams.length})</div>
+                      <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan!.diagrams.length})</div>
                       {detail.plan!.diagrams.map((d) => (
                         <div key={d.id} className="rounded-xl border border-slate-100 p-2 text-xs">
                           <div className="flex items-center gap-2">
@@ -562,7 +562,7 @@ export default function LaporanPage() {
                           )}
                           <div className="mt-1 flex items-center justify-between gap-2">
                             <span className="text-[10px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
-                            {(d.diagramData || !jobActive) && (
+                            {((d.diagramData?.nodes?.length ?? 0) > 0 || (!jobActive && !d.svg)) && (
                               <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3 w-3" /> Buka di UML Builder</button>
                             )}
                           </div>

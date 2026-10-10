@@ -41,6 +41,8 @@ import {
 } from "@/lib/report/generate-report";
 import { generateUmlForReport, isUmlDiagramType } from "@/lib/uml/pipeline";
 import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
+import { generateConceptForReport, isConceptDiagramType } from "@/lib/uml/render-concept";
+import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 
 // ---------------------------------------------------------------------------
@@ -355,27 +357,44 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
     { t: new Date().toISOString(), level: "info", msg: `Job dibuat: ${outline.length} bagian, mode ${mode}, ${sourceCount} sumber, ${compact.references.length} referensi, ${compact.diagrams.length} diagram` },
   ];
 
-  // Diagram UML yang bisa dibuat engine (flowchart/usecase/activity/sequence) jadi
-  // step tersendiri SEBELUM bab, supaya penulis bab sudah tahu isi diagramnya.
-  const umlDiagrams = compact.diagrams.filter((diagram) => isUmlDiagramType(diagram.type) && !diagram.approved && diagram.title);
-  const skipped = compact.diagrams.length - umlDiagrams.length;
+  // Semua diagram terencana jadi step SEBELUM bab, supaya penulis bab sudah tahu isinya:
+  // UML (flowchart/usecase/activity/sequence) → engine UML Builder;
+  // non-UML (arsitektur/ERD/kelas/peta konsep) → renderer vektor konsep.
+  const plannedDiagrams = compact.diagrams.filter((diagram) => !diagram.approved && diagram.title && (isUmlDiagramType(diagram.type) || isConceptDiagramType(diagram.type)));
+  const umlCount = plannedDiagrams.filter((diagram) => isUmlDiagramType(diagram.type)).length;
+  const skipped = compact.diagrams.length - plannedDiagrams.length;
   if (skipped > 0) {
-    log.push({ t: new Date().toISOString(), level: "info", msg: `${skipped} diagram bertipe non-UML/sudah approved → tidak dibuat engine (tetap jadi placeholder)` });
+    log.push({ t: new Date().toISOString(), level: "info", msg: `${skipped} diagram sudah approved/tipe tak dikenal → tidak dibuat ulang` });
+  }
+  // Ilustrasi (gambar AI) dijalankan paralel di background; tidak memblokir bab.
+  const illustrations = compact.figures.filter((figure) => figure.prompt && !figure.done);
+  if (illustrations.length) {
+    const sessionId = isRecord(safeProject) && typeof safeProject.reportSessionId === "string" ? safeProject.reportSessionId : undefined;
+    let started = 0;
+    for (const figure of illustrations) {
+      try {
+        await startImageJob({ ownerId, prompt: `${figure.prompt}\n\nStyle: clean technical illustration for an academic report, white background, flat vector look, high contrast, minimal text, no watermark.`, title: figure.title, sessionId });
+        started += 1;
+      } catch (error) {
+        log.push({ t: new Date().toISOString(), level: "warn", msg: `Ilustrasi "${figure.title}" tidak dimulai: ${error instanceof Error ? error.message.slice(0, 120) : "gagal"}` });
+      }
+    }
+    if (started) log.push({ t: new Date().toISOString(), level: "info", msg: `${started} ilustrasi dibuat di background (±2 menit/gambar)` });
   }
   const withAudit = mode === "lengkap";
 
   type StepSeed = { sectionId: string | null; title: string };
   const seeds: StepSeed[] = [
-    ...umlDiagrams.map((diagram, i) => ({ sectionId: `${DIAGRAM_PREFIX}${diagram.id || `diagram-${i + 1}`}`, title: `Diagram: ${diagram.title}` })),
+    ...plannedDiagrams.map((diagram, i) => ({ sectionId: `${DIAGRAM_PREFIX}${diagram.id || `diagram-${i + 1}`}`, title: `Diagram: ${diagram.title}` })),
     ...outline.map((section, index) => ({ sectionId: section.id ?? `section-${index + 1}`, title: section.title || `Bagian ${index + 1}` })),
   ];
   if (withAudit) {
-    const chapterStart = umlDiagrams.length;
+    const chapterStart = plannedDiagrams.length;
     outline.forEach((section, index) => {
       seeds.push({ sectionId: `${AUDIT_PREFIX}${chapterStart + index}`, title: `Audit: ${section.title || `Bagian ${index + 1}`}` });
     });
   }
-  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlDiagrams.length} diagram UML → ${outline.length} bab → ${withAudit ? `${outline.length} audit` : "tanpa audit (mode ringkas)"}` });
+  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit` : "tanpa audit (mode ringkas)"}` });
 
   const row = await prisma.reportJob.create({
     data: {
@@ -745,39 +764,82 @@ async function runDiagramStep(
   const target = diagrams.find((diagram) => diagram.id === diagramId);
   if (!target) throw new Error(`Diagram ${diagramId} tidak ada di payload`);
   const diagramType = String(target.type || "");
-  if (!isUmlDiagramType(diagramType)) throw new Error(`Tipe ${diagramType} tidak didukung engine UML`);
-
   const compact = compactProject(project);
   const sectionTitle = compact.outline.find((section) => section.id && section.id === target.sectionId)?.title;
-  const result = await generateUmlForReport({
-    diagramType,
-    title: String(target.title || diagramId),
-    purpose: String(target.purpose || target.caption || ""),
-    reportContext: {
-      reportTitle: compact.title,
-      topic: compact.topic,
-      projectType: compact.projectType,
-      section: sectionTitle,
-      materials: compact.sources.slice(0, 4).map((source) => `${source.title}: ${source.content.slice(0, 500)}`),
-    },
-    budgetMs: 80_000,
-    onStatus: emit,
-  });
-
+  const reportContext = {
+    reportTitle: compact.title,
+    topic: compact.topic,
+    projectType: compact.projectType,
+    section: sectionTitle,
+    materials: compact.sources.slice(0, 4).map((source) => `${source.title}: ${source.content.slice(0, 500)}`),
+  };
   const stepStarted = step.startedAt?.getTime() ?? Date.now();
-  if (!result.ok || !result.data) {
-    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error: result.error } : diagram));
+
+  const persistFailure = async (error: string) => {
+    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error } : diagram));
     await prisma.reportJob.update({
       where: { id: row.id },
       data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
     });
     await prisma.reportJobStep.update({
       where: { id: step.id },
-      data: { status: "fallback", error: (result.error || "gagal").slice(0, 300), finishedAt: new Date() },
+      data: { status: "fallback", error: error.slice(0, 300), finishedAt: new Date() },
     });
-    emit(`Diagram "${target.title}" tidak jadi dibuat: ${result.error || "gagal"} → bab tetap memakai placeholder`);
+    emit(`Diagram "${target.title}" tidak jadi dibuat: ${error} → bab menjelaskan secara naratif tanpa gambar`);
+  };
+  const persistArtifact = async (artifact: ReportDiagramArtifact, summary: string, output: Record<string, unknown>, doneMsg: string) => {
+    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, ...artifact } : diagram));
+    await prisma.reportJob.update({
+      where: { id: row.id },
+      data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
+    });
+    await prisma.reportJobStep.update({
+      where: { id: step.id },
+      data: { status: "done", output: JSON.stringify(output), summary: summary.slice(0, 400), finishedAt: new Date() },
+    });
+    emit(doneMsg);
+  };
+
+  // Non-UML (arsitektur/ERD/kelas/peta konsep) → renderer vektor konsep.
+  if (!isUmlDiagramType(diagramType)) {
+    if (!isConceptDiagramType(diagramType)) throw new Error(`Tipe ${diagramType} tidak dikenal`);
+    const result = await generateConceptForReport({
+      diagramType,
+      title: String(target.title || diagramId),
+      purpose: String(target.purpose || target.caption || ""),
+      reportContext,
+      budgetMs: 70_000,
+      onStatus: emit,
+    });
+    if (!result.ok || !result.spec || !result.svg) { await persistFailure(result.error || "gagal"); return; }
+    const artifact: ReportDiagramArtifact = {
+      id: diagramId,
+      title: String(target.title || result.spec.title),
+      type: diagramType,
+      purpose: String(target.purpose || ""),
+      sectionId: typeof target.sectionId === "string" ? target.sectionId : undefined,
+      status: "approved",
+      caption: String(target.caption || target.title || ""),
+      // Diagram konsep tidak bisa dibuka di UML Builder (bukan nodes/edges) → diagramData berisi spec agar status approved terbaca.
+      diagramData: { nodes: [], edges: [], meta: { title: result.spec.title, lanes: [], diagramType }, concept: result.spec } as ReportDiagramArtifact["diagramData"],
+      svg: result.svg,
+      flowSummary: result.summary,
+    };
+    await persistArtifact(artifact, result.summary || "", { id: diagramId, groups: result.spec.groups.length, relations: result.spec.relations.length },
+      `Diagram "${artifact.title}" selesai: ${result.spec.groups.length} komponen, ${result.spec.relations.length} relasi, ${Math.round((Date.now() - stepStarted) / 1000)}s`);
     return;
   }
+
+  const result = await generateUmlForReport({
+    diagramType,
+    title: String(target.title || diagramId),
+    purpose: String(target.purpose || target.caption || ""),
+    reportContext,
+    budgetMs: 80_000,
+    onStatus: emit,
+  });
+
+  if (!result.ok || !result.data) { await persistFailure(result.error || "gagal"); return; }
 
   const data = result.data;
   const svg = diagramToSvg({ nodes: data.nodes, edges: data.edges, lanes: data.lanes, title: data.title });
@@ -794,21 +856,8 @@ async function runDiagramStep(
     svg,
     flowSummary,
   };
-  const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, ...artifact } : diagram));
-  await prisma.reportJob.update({
-    where: { id: row.id },
-    data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
-  });
-  await prisma.reportJobStep.update({
-    where: { id: step.id },
-    data: {
-      status: "done",
-      output: JSON.stringify({ id: diagramId, nodes: data.nodes.length, edges: data.edges.length, warnings: result.warnings }),
-      summary: flowSummary.slice(0, 400),
-      finishedAt: new Date(),
-    },
-  });
-  emit(`Diagram "${artifact.title}" selesai: ${data.nodes.length} elemen, ${data.edges.length} relasi${result.warnings.length ? `, ${result.warnings.length} peringatan` : ""}, ${Math.round((Date.now() - stepStarted) / 1000)}s`);
+  await persistArtifact(artifact, flowSummary, { id: diagramId, nodes: data.nodes.length, edges: data.edges.length, warnings: result.warnings },
+    `Diagram "${artifact.title}" selesai: ${data.nodes.length} elemen, ${data.edges.length} relasi${result.warnings.length ? `, ${result.warnings.length} peringatan` : ""}, ${Math.round((Date.now() - stepStarted) / 1000)}s`);
 }
 
 // ---------------------------------------------------------------------------
@@ -858,6 +907,39 @@ async function runAuditStep(
   });
 }
 
+/**
+ * Placeholder `[Gambar: Judul - caption]` yang tidak punya sumber gambar (diagram
+ * tidak dibuat / ilustrasi gagal) diganti catatan eksplisit agar tidak lolos
+ * diam-diam ke DOCX. Ilustrasi yang masih diproses dibiarkan (eksport akan
+ * mengambilnya bila sudah jadi).
+ */
+async function annotateMissingFigures(markdown: string, payload: unknown, ownerId: string) {
+  const available = new Set<string>();
+  for (const diagram of payloadDiagrams(payload)) {
+    if (diagram.status === "approved" && typeof diagram.svg === "string") available.add(String(diagram.title || "").trim().toLowerCase());
+  }
+  const sessionId = isRecord(payload) && typeof payload.reportSessionId === "string" ? payload.reportSessionId : undefined;
+  const pending = new Set<string>();
+  if (sessionId) {
+    const jobs = await listImageJobs(ownerId, { sessionId, limit: 40 }).catch(() => []);
+    for (const job of jobs) {
+      const key = (job.title || "").trim().toLowerCase();
+      if (!key) continue;
+      if (job.status === "done") available.add(key);
+      else if (job.status !== "failed") pending.add(key);
+    }
+  }
+  const missing: string[] = [];
+  const result = markdown.replace(/^\[Gambar:\s*(.+?)\]\s*$/gim, (line, inner: string) => {
+    const title = inner.split(" - ")[0].trim();
+    const key = title.toLowerCase();
+    if (available.has(key) || pending.has(key)) return line;
+    missing.push(title);
+    return `> **Catatan gambar:** "${title}" belum tersedia (diagram/ilustrasi gagal dibuat). Minta lewat chat untuk membuat ulang, atau sisipkan gambar manual.`;
+  });
+  return { result, missing };
+}
+
 async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]): Promise<ReportJob> {
   // Bab final = output audit (bila ada & berhasil) atau output bab.
   const auditByTarget = new Map<number, string>();
@@ -887,14 +969,19 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
   const fallbackCount = chapterSteps.filter((step) => step.status === "fallback").length;
   const diagramsDone = extractDiagramArtifacts(row.payload).length;
   const auditedCount = auditByTarget.size;
-  const result = assembleReport(row.payload, chapters);
+  const assembled = assembleReport(row.payload, chapters);
+  // Placeholder gambar yang tidak punya sumber (diagram gagal / ilustrasi belum jadi) tidak boleh lolos diam-diam.
+  const { result, missing } = await annotateMissingFigures(assembled, row.payload, ownerId);
   const totalWords = countWords(result);
   const totalTokens = row.steps.reduce((acc, step) => acc + step.tokensUsed, 0);
+  if (missing.length) {
+    await appendLog(row.id, log, "warn", `${missing.length} gambar tidak tersedia & diberi catatan di laporan: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "; …" : ""}`);
+  }
   await appendLog(
     row.id,
     log,
     fallbackCount ? "warn" : "info",
-    `Laporan dirakit: ${chapters.length} bab, ${diagramsDone} diagram UML, ${auditedCount} bab diaudit, ±${totalWords} kata, ${totalTokens} token${fallbackCount ? `, ${fallbackCount} bab placeholder` : ""}`,
+    `Laporan dirakit: ${chapters.length} bab, ${diagramsDone} diagram, ${auditedCount} bab diaudit, ±${totalWords} kata, ${totalTokens} token${fallbackCount ? `, ${fallbackCount} bab placeholder` : ""}`,
     {
       status: "done",
       progress: 100,

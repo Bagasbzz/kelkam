@@ -114,11 +114,21 @@ const wrapText = (text: string, max = 20) => {
   return lines.slice(0, 5);
 };
 
+/** Lebar wrap per tipe node: terminator (elips) & decision (belah ketupat) butuh baris lebih pendek. */
+const wrapWidthFor = (type: string) => (type === "start" || type === "end" ? 14 : type === "decision" ? 16 : 20);
+
 const nodeSize = (type: string, text: string) => {
-  if (type === "start" || type === "end") return { width: 80, height: 60 };
-  if (type === "decision") return { width: 180, height: 118 };
-  const lines = wrapText(text, 20);
-  return { width: Math.max(150, Math.min(260, Math.max(...lines.map((l) => l.length), 1) * 9 + 48)), height: Math.max(64, lines.length * 22 + 38) };
+  const lines = wrapText(text, wrapWidthFor(type));
+  const longest = Math.max(...lines.map((l) => l.length), 1);
+  if (type === "start" || type === "end") {
+    // Elips: teks harus muat di dalam area ~70% lebar, jadi beri margin ekstra.
+    return { width: Math.max(96, Math.min(220, longest * 8.5 + 44)), height: Math.max(56, lines.length * 20 + 28) };
+  }
+  if (type === "decision") {
+    // Belah ketupat: area teks efektif ≈ setengah bounding box → ukuran 2x teks.
+    return { width: Math.max(180, Math.min(300, longest * 8.5 * 1.6 + 40)), height: Math.max(118, lines.length * 20 * 1.8 + 40) };
+  }
+  return { width: Math.max(150, Math.min(260, longest * 9 + 48)), height: Math.max(64, lines.length * 22 + 38) };
 };
 
 function inferDomainPrompt(prompt: string, reportContext: unknown) {
@@ -471,7 +481,8 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
     { id: "process", type: diagramType === "activity" ? "activity" : "process", text: spec.title || "Jalankan proses utama", next: "end" },
     { id: "end", type: "end", text: "Selesai" },
   ];
-  const lanes = spec.lanes?.length ? spec.lanes.slice(0, 5) : [];
+  // Satu lane saja tidak memberi informasi (semua node di satu kolom tinggi) → pakai layout kolom cabang.
+  const lanes = spec.lanes && spec.lanes.length > 1 ? spec.lanes.slice(0, 5) : [];
   const normalizedSteps: CompactStep[] = steps.slice(0, 16).map((step, index) => ({
     ...step,
     id: cleanId(step.id, `s${index + 1}`),
@@ -529,7 +540,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
       id: step.id,
       type,
       text: step.text,
-      lines: wrapText(step.text, type === "decision" ? 16 : 20),
+      lines: wrapText(step.text, wrapWidthFor(type)),
       x: laneX(step.lane) - size.width / 2,
       y,
       width: size.width,

@@ -65,10 +65,13 @@ export interface PlanDiagram {
   flowSummary?: string;
 }
 export interface PlanTable { id: string; title: string; purpose: string; columns: string[]; sectionId?: string }
+/** Ilustrasi (gambar AI, bukan diagram): dibuat otomatis oleh job via image job. */
+export interface PlanFigure { id: string; title: string; caption: string; prompt: string; sectionId?: string }
 export interface ReportPlan {
   outline: PlanSection[];
   diagrams: PlanDiagram[];
   tables: PlanTable[];
+  figures: PlanFigure[];
   sourceQueries: string[];
   rationale?: string;
 }
@@ -129,7 +132,12 @@ function normalizePlan(raw: unknown): ReportPlan {
     const tobj = asObj(t);
     return { id: asStr(tobj.id, 60) || `tabel-${i + 1}`, title: asStr(tobj.title, 160), purpose: asStr(tobj.purpose, 400), columns: strList(tobj.columns, 10), sectionId: asStr(tobj.sectionId, 60) || undefined };
   }).filter((t) => t.title).slice(0, 20);
-  return { outline, diagrams, tables, sourceQueries: strList(o.sourceQueries, 8), rationale: asStr(o.rationale, 800) || undefined };
+  const figures: PlanFigure[] = asArr(o.figures).map((f, i) => {
+    const fo = asObj(f);
+    const title = asStr(fo.title, 160);
+    return { id: asStr(fo.id, 60) || `gambar-${i + 1}`, title, caption: asStr(fo.caption, 300) || title, prompt: asStr(fo.prompt, 1500), sectionId: asStr(fo.sectionId, 60) || undefined };
+  }).filter((f) => f.title && f.prompt.length >= 8).slice(0, 8);
+  return { outline, diagrams, tables, figures, sourceQueries: strList(o.sourceQueries, 8), rationale: asStr(o.rationale, 800) || undefined };
 }
 
 function mergeBrief(prev: ReportBrief, patch: unknown): ReportBrief {
@@ -167,10 +175,21 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
   const mats = session.materials.length
     ? session.materials.map((m) => ({ id: m.id, kind: m.kind, title: m.title, content: m.content, fileName: m.fileName }))
     : [{ id: "brief", kind: "note", title: "Brief dari percakapan", content: JSON.stringify(b) }];
-  // Gambar ilustrasi (image job) yang sudah jadi → penulis bab wajib menaruh placeholder-nya.
-  const figures = (await listImageJobs(session.ownerId, { sessionId: session.id, limit: 30 }).catch(() => []))
-    .filter((job) => job.status === "done" && job.title)
-    .map((job) => ({ title: job.title, caption: job.title }));
+  // Ilustrasi: gabungan rencana (prompt → job membuatkan) + image job yang sudah jadi (done, judul harus persis di placeholder).
+  const imageJobs = await listImageJobs(session.ownerId, { sessionId: session.id, limit: 30 }).catch(() => []);
+  const doneTitles = new Map(imageJobs.filter((job) => job.status === "done" && job.title).map((job) => [job.title!.trim().toLowerCase(), job.title!]));
+  const activeTitles = new Set(imageJobs.filter((job) => job.status !== "failed" && job.title).map((job) => job.title!.trim().toLowerCase()));
+  const planned = (session.plan.figures || []).map((f) => ({
+    title: f.title,
+    caption: f.caption || f.title,
+    sectionId: f.sectionId,
+    // Jangan mulai ulang job gambar yang sudah ada (selesai/berjalan).
+    prompt: activeTitles.has(f.title.trim().toLowerCase()) ? undefined : f.prompt,
+    done: doneTitles.has(f.title.trim().toLowerCase()),
+  }));
+  const plannedKeys = new Set(planned.map((f) => f.title.trim().toLowerCase()));
+  const extraDone = Array.from(doneTitles.entries()).filter(([key]) => !plannedKeys.has(key)).map(([, title]) => ({ title, caption: title, sectionId: undefined, prompt: undefined, done: true }));
+  const figures = [...planned, ...extraDone];
   return {
     reportSessionId: session.id,
     projectType: b.documentType || "report",
@@ -198,7 +217,7 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
       flowSummary: d.flowSummary,
     })),
     figures,
-    tables: session.plan.tables.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose, columns: t.columns })),
+    tables: session.plan.tables.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose, columns: t.columns, sectionId: t.sectionId })),
     references: session.sources.map((s) => ({
       query: s.title,
       purpose: s.venue,
@@ -221,10 +240,14 @@ function systemPrompt(state: { stage: string; brief: ReportBrief; plan: ReportPl
 
 ALUR:
 1. INTAKE — ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru → panggil updateBrief.
-2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram/UML, daftar tabel, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
+2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
 3. EXECUTING — hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik.
-5. GAMBAR — bila user minta ilustrasi/gambar (arsitektur sistem, skema, ilustrasi konsep) atau rencana butuh gambar non-UML, panggil generateFigure dengan prompt deskriptif berbahasa Inggris (gaya: diagram teknis bersih, latar putih, tanpa teks panjang). Gambar dibuat di background (±2 menit); beri tahu user bahwa gambar akan muncul di panel "Gambar" dan otomatis masuk ekspor DOCX lewat placeholder [Gambar: Judul - keterangan] di draft. Diagram UML (flowchart/usecase/activity/sequence) yang ada di rencana DIBUAT OTOMATIS oleh engine UML Builder saat eksekusi dan langsung tertanam di draft — jangan pakai generateFigure untuk UML; user bisa membukanya di UML Builder dari panel "Gambar" untuk diedit.
+5. VISUAL — laporan tidak boleh polos. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
+   a) diagrams type flowchart/usecase/activity/sequence → dibuat otomatis oleh engine UML Builder (vektor, bisa diedit user).
+   b) diagrams type arsitektur/erd/class/konsep/kerangka → dibuat otomatis sebagai diagram vektor terstruktur (kotak komponen + relasi), BUKAN gambar AI.
+   c) figures (ilustrasi: skema konsep, ilustrasi proses nyata, gambaran lingkungan/alat) → dibuat otomatis lewat model gambar di background saat eksekusi; prompt bahasa Inggris, gaya ilustrasi teknis bersih latar putih, tanpa teks panjang.
+   Target: tiap bab inti (landasan teori, metode/perancangan, hasil) punya minimal 1 visual; bab pendahuluan boleh 1 ilustrasi; semua diberi sectionId. Setelah drafted, bila user minta gambar tambahan, pakai generateFigure (ilustrasi) — jangan untuk diagram.
 
 ATURAN KEJUJURAN (mutlak):
 - Sumber hanya dari hasil findSources (DOI terverifikasi Crossref). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
@@ -237,7 +260,7 @@ GAYA JAWABAN: Bahasa Indonesia, hangat tapi padat, markdown ringan. Setelah tool
 
 STATE SAAT INI (sumber kebenaran, bukan riwayat chat):
 stage=${state.stage}; brief=${JSON.stringify(state.brief)}; briefKurang=${missing.join(", ") || "-"};
-plan=${state.plan ? `${state.plan.outline.length} bab, ${state.plan.diagrams.length} diagram, ${state.plan.tables.length} tabel` : "belum ada"};
+plan=${state.plan ? `${state.plan.outline.length} bab, ${state.plan.diagrams.length} diagram, ${state.plan.tables.length} tabel, ${state.plan.figures?.length || 0} ilustrasi` : "belum ada"};
 sources=${state.sources.length} terverifikasi${state.sources.length ? ` (${state.sources.slice(0, 6).map((s) => `${s.authors[0] || "?"} ${s.year || ""}`).join("; ")})` : ""};
 materials=${state.materials.length ? state.materials.map((m) => `${m.kind}:${m.title} (${m.content.length} char)`).join(", ") : "belum ada"};
 job=${state.jobId || "-"}; draft=${state.hasDraft ? "ada" : "belum"}.${state.summary ? `\nRINGKASAN PERCAKAPAN LAMA: ${state.summary.slice(0, 1500)}` : ""}`;
@@ -273,8 +296,9 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: {
           outline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, requiredDiagrams: { type: "array", items: { type: "string" } } }, required: ["title", "purpose"] } },
-          diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "flowchart|usecase|activity|sequence|class|erd|arsitektur" }, purpose: { type: "string" }, sectionId: { type: "string" } }, required: ["title", "type", "purpose"] } },
-          tables: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, columns: { type: "array", items: { type: "string" } }, sectionId: { type: "string" } }, required: ["title", "purpose"] } },
+          diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "UML: flowchart|usecase|activity|sequence. Non-UML (vektor terstruktur): arsitektur|erd|class|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen) — bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
+          tables: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, columns: { type: "array", items: { type: "string" } }, sectionId: { type: "string" } }, required: ["title", "purpose", "sectionId"] } },
+          figures: { type: "array", description: "Ilustrasi non-diagram (maks 6) yang dibuat model gambar saat eksekusi.", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string", description: "Judul singkat Bahasa Indonesia, mis. 'Ilustrasi Proses Fermentasi'." }, caption: { type: "string" }, prompt: { type: "string", description: "Deskripsi visual detail bahasa Inggris untuk model gambar." }, sectionId: { type: "string" } }, required: ["title", "prompt", "sectionId"] } },
           sourceQueries: { type: "array", items: { type: "string" }, description: "3-6 query pencarian literatur (bahasa Inggris & Indonesia)." },
           rationale: { type: "string" },
         },
@@ -408,8 +432,8 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       state.plan = plan;
       if (state.stage === "intake") state.stage = "planned";
       await persist(state);
-      events.push(`Rencana: ${plan.outline.length} bab, ${plan.diagrams.length} diagram, ${plan.tables.length} tabel`);
-      return { ok: true, outline: plan.outline.map((s) => s.title), diagrams: plan.diagrams.length, tables: plan.tables.length, sourceQueries: plan.sourceQueries };
+      events.push(`Rencana: ${plan.outline.length} bab, ${plan.diagrams.length} diagram, ${plan.tables.length} tabel, ${plan.figures.length} ilustrasi`);
+      return { ok: true, outline: plan.outline.map((s) => s.title), diagrams: plan.diagrams.length, tables: plan.tables.length, figures: plan.figures.length, sourceQueries: plan.sourceQueries };
     }
     case "findSources": {
       const query = asStr(args.query, 300);
@@ -462,7 +486,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       if (idx < 0) return { error: `Bagian "${args.sectionTitle}" tidak ditemukan. Bagian yang ada: ${sections.map((s) => s.title).slice(0, 30).join(" | ")}` };
       const sec = sections[idx];
       const original = lines.slice(sec.start, sec.end).join("\n");
-      const payload = await buildProjectPayload({ id: state.id, ownerId: state.ownerId, brief: state.brief, plan: state.plan ?? { outline: [], diagrams: [], tables: [], sourceQueries: [] }, sources: state.sources, materials: state.materials });
+      const payload = await buildProjectPayload({ id: state.id, ownerId: state.ownerId, brief: state.brief, plan: state.plan ?? { outline: [], diagrams: [], tables: [], figures: [], sourceQueries: [] }, sources: state.sources, materials: state.materials });
       const planSec = state.plan?.outline.find((s) => s.title.toLowerCase() === sec.title.toLowerCase());
       // Placeholder gambar yang sudah ada di bagian ini harus dipertahankan.
       const keepPlaceholders = original.match(/\[Gambar:[^\]]+\]/g) || [];

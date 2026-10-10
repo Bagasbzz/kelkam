@@ -65,16 +65,19 @@ export function compactProject(project: unknown) {
       /** Ringkasan alur hasil engine UML (untuk narasi), diisi job setelah diagram jadi. */
       flowSummary: truncate(diagram.flowSummary, 900) || undefined,
     })),
-    /** Gambar ilustrasi (non-UML) yang sudah jadi dari image job — judul harus dipakai persis di placeholder. */
+    /** Gambar ilustrasi (non-diagram): dari rencana (prompt → image job) atau yang sudah jadi (done). */
     figures: records(source.figures).slice(0, 20).map((figure) => ({
       title: truncate(figure.title, 180),
       caption: truncate(figure.caption, 300),
       sectionId: truncate(figure.sectionId, 80) || undefined,
+      prompt: truncate(figure.prompt, 1500) || undefined,
+      done: figure.done === true,
     })).filter((figure) => figure.title),
     tables: records(source.tables).slice(0, 30).map((table) => ({
       title: truncate(table.title, 180),
       purpose: truncate(table.purpose, 500),
       columns: strings(table.columns).slice(0, 12),
+      sectionId: truncate(table.sectionId, 80) || undefined,
     })),
     references: records(source.references).slice(0, 60).map((reference) => ({
       query: truncate(reference.query, 400),
@@ -505,7 +508,10 @@ export async function generateChapter(project: unknown, input: ChapterInput): Pr
   const isRingkas = mode === "ringkas";
 
   const sectionDiagrams = diagramsForSection(compact, section);
-  const sectionFigures = compact.figures.filter((figure) => !figure.sectionId || !section.id || figure.sectionId === section.id);
+  // Ilustrasi hanya di bab yang ditunjuk; tanpa sectionId → masuk ke bab pertama non-pendahuluan agar tidak terduplikasi di tiap bab.
+  const firstBodySectionIndex = Math.min(1, Math.max(0, total - 1));
+  const sectionFigures = compact.figures.filter((figure) => (figure.sectionId && section.id ? figure.sectionId === section.id : index === firstBodySectionIndex));
+  const sectionTables = compact.tables.filter((table) => !table.sectionId || !section.id || table.sectionId === section.id);
   const references = pickReferences(compact, section, isRingkas ? 6 : 16);
   const minCitations = isRingkas ? Math.min(3, references.length) : Math.min(8, references.length);
   // Bahan: head tiap sumber + chunk paling relevan untuk BAB ini (budget char).
@@ -529,7 +535,7 @@ ATURAN SITASI (wajib):
 
 ATURAN GAMBAR/TABEL:
 6. ${mandatoryPlaceholders.length ? `Placeholder gambar berikut WAJIB muncul PERSIS (tulis apa adanya, masing-masing di baris sendiri, di posisi yang paling relevan), lalu jelaskan isinya secara naratif minimal 1 paragraf memakai ringkasan alurnya:\n${mandatoryPlaceholders.map((item) => `   ${item}`).join("\n")}` : "Jangan membuat placeholder gambar baru."} Format umum placeholder gambar: [Gambar: Judul - caption].
-7. Bila ada tabel yang cocok untuk bagian ini, buat tabel markdown mengikuti rencana kolom, didahului baris "**Tabel: Judul Tabel**" dan diikuti paragraf penjelasan.
+7. ${sectionTables.length ? `Tabel berikut WAJIB dibuat di bagian ini sebagai tabel markdown sesuai rencana kolom (isi dengan data dari bahan/referensi; bila belum ada data tulis [ISI ...]), didahului baris "**Tabel: Judul Tabel**" dan diikuti paragraf penjelasan:\n${sectionTables.map((table) => `   - ${table.title}: ${table.purpose}`).join("\n")}` : "Jangan membuat tabel kecuali benar-benar perlu."}
 
 ATURAN TIPOGRAFI:
 8. Istilah asing/bahasa Inggris dan nama latin ditulis miring dengan *...* (contoh: *framework*, *machine learning*, *end-to-end*). Singkatan diperkenalkan sekali dengan kepanjangannya.
@@ -555,7 +561,7 @@ ATURAN TIPOGRAFI:
     },
     ringkasanBabSebelumnya: input.previousSummaries.slice(-4),
     sumber: sources,
-    rencanaTabel: compact.tables.slice(0, 8),
+    rencanaTabel: sectionTables.slice(0, 6),
     referensi: references,
   };
 

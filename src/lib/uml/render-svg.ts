@@ -211,13 +211,14 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
       labelY = (departureY + approachY) / 2;
     } else if (Math.abs(x1 - x2) <= 8) {
       path = `M ${x1},${y1} V ${y2}`;
-      labelX = x1 + 10;
-      labelY = y1 + (y2 - y1) / 2;
+      // Label (Ya/Tidak) ditaruh dekat node asal & di samping garis supaya tidak tertutup node lain / label edge sejajar.
+      labelX = x1 + 40;
+      labelY = y1 + 18;
     } else {
       const midY = snap(y1 + (y2 - y1) / 2);
       path = `M ${x1},${y1} V ${midY} H ${x2} V ${y2}`;
-      labelX = (x1 + x2) / 2;
-      labelY = midY - 12;
+      labelX = x1 + (x2 > x1 ? 40 : -40);
+      labelY = y1 + 18;
     }
   }
 
