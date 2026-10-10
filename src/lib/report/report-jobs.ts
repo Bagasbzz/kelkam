@@ -6,13 +6,16 @@
  * ARSITEKTUR:
  *   - Job disimpan di `report_jobs`, tiap section outline jadi 1 row di
  *     `report_job_steps`. Payload project (sanitized) disimpan di job.
- *   - Tidak ada worker background panjang. Setiap request (status/tick)
- *     memanggil `advanceReportJob()` yang mengerjakan MAKSIMAL 1 step
- *     (1 panggilan AI) lalu return. Client polling ATAU cron eksternal
- *     (`/api/report-jobs/tick`) memicu step berikutnya. Aman untuk hosting
- *     single-process (Passenger) dan tahan restart: progres per BAB di DB.
- *   - Lock anti double-run per job via Set in-memory + step.status "running"
- *     dengan deteksi stale (>STALE_STEP_MS → dianggap mati, di-retry).
+ *   - Tidak ada worker terpisah. `advanceReportJob()` MEMULAI maksimal 1 step
+ *     di background proses Node (tidak menunggu selesai) lalu langsung return
+ *     state. Polling berikutnya hanya membaca state sampai step selesai, lalu
+ *     memicu step berikutnya. Jadi satu step boleh > batas waktu request HTTP
+ *     (proxy ~120 s). Cron (`/api/report-jobs/tick`) jadi pemicu cadangan saat
+ *     tab ditutup atau proses restart.
+ *   - Lock anti double-run per job via Map in-memory + step.status "running"
+ *     dengan heartbeat per potongan teks; step tanpa heartbeat > STALE_STEP_MS
+ *     dianggap mati dan di-retry. Teks parsial disimpan di step.output supaya
+ *     percobaan berikutnya MELANJUTKAN, bukan menulis ulang.
  *   - Event log detail disimpan di `job.log` (dipangkas LOG_LIMIT entri)
  *     supaya user melihat apa yang sedang dikerjakan, bukan sekadar spinner.
  *   - `heartbeatAt` = kapan server terakhir menyentuh job. UI pakai ini untuk
@@ -29,6 +32,8 @@ import { prisma } from "@/lib/db/prisma";
 import {
   assembleReport,
   auditChapter,
+  CHAPTER_STEP_BUDGET_MS,
+  ChapterTimeoutError,
   compactProject,
   fallbackChapter,
   generateChapter,
@@ -128,10 +133,10 @@ export interface ReportJobSummary {
 // Constants & in-memory lock
 // ---------------------------------------------------------------------------
 
-/** Step "running" tanpa update lebih lama dari ini dianggap mati → retry. */
-export const STALE_STEP_MS = 90_000;
+/** Step "running" tanpa heartbeat lebih lama dari ini dianggap mati → retry. Heartbeat diperbarui tiap potongan teks. */
+export const STALE_STEP_MS = 120_000;
 /** Maks percobaan per step sebelum pakai fallback. */
-const MAX_STEP_ATTEMPTS = 3;
+const MAX_STEP_ATTEMPTS = 4;
 /** Maks section yang diproses. */
 const MAX_STEPS = 80;
 /** Entri log terakhir yang disimpan. */
@@ -144,10 +149,10 @@ const globalForJobs = globalThis as typeof globalThis & { __reportJobLocks?: Map
 const jobLocks = globalForJobs.__reportJobLocks || new Map<string, number>();
 globalForJobs.__reportJobLocks = jobLocks;
 
-/** Lock lebih tua dari ini dianggap milik request yang hang → boleh diambil alih. */
-const LOCK_STALE_MS = 150_000;
+/** Lock lebih tua dari ini dianggap milik proses yang hang → boleh diambil alih. */
+const LOCK_STALE_MS = CHAPTER_STEP_BUDGET_MS + 60_000;
 /** Batas keras satu step; lebih dari ini lock dilepas walau promise lama masih jalan. */
-const STEP_HARD_TIMEOUT_MS = 130_000;
+const STEP_HARD_TIMEOUT_MS = CHAPTER_STEP_BUDGET_MS + 30_000;
 
 function acquireLock(id: string, now = Date.now()) {
   const held = jobLocks.get(id);
@@ -334,7 +339,9 @@ export async function findActiveReportJob(ownerId: string, mode?: ReportMode) {
 export async function startReportJob(project: unknown, ownerId: string, mode: ReportMode = "lengkap") {
   const safeProject = sanitizeForPersistence(project);
   const compact = compactProject(safeProject);
-  const outline = compact.outline.slice(0, MAX_STEPS);
+  // Daftar pustaka dirakit otomatis dari sitasi (assembleReport); jangan jadi step AI (hasilnya dobel/ngarang).
+  const isBibliography = (title: string) => /^(daftar\s+pustaka|referensi|references|bibliography)$/i.test(title.trim());
+  const outline = compact.outline.filter((section) => !isBibliography(section.title)).slice(0, MAX_STEPS);
   if (!outline.length) throw new Error("Outline kosong.");
 
   const id = `report_${crypto.randomUUID()}`;
@@ -441,27 +448,27 @@ export async function retryReportJob(id: string, ownerId: string, opts: { redoFa
 }
 
 /**
- * Kerjakan maksimal SATU step untuk job ini, lalu return state terbaru.
- * Idempotent: kalau job sudah selesai / sedang dikerjakan request lain,
- * hanya return state.
+ * Mulai maksimal SATU step untuk job ini di background, lalu return state
+ * terbaru TANPA menunggu step selesai. Idempotent: kalau job sudah selesai /
+ * step lain sedang hidup / lock dipegang, hanya return state.
  */
 export async function advanceReportJob(id: string, ownerId: string): Promise<ReportJob | null> {
   const row = await readJob(id, ownerId);
   if (!row) return null;
   if (isJobFinished(row.status)) return toPublic(row);
+  if (hasLiveStep(row)) return toPublic(row);
   const token = Date.now();
   if (!acquireLock(id, token)) return toPublic(row);
 
-  try {
-    return await withHardTimeout(runNextStep(row, ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server");
-  } catch (error) {
-    console.error(`advance job ${id}:`, error instanceof Error ? error.message : error);
-    const fresh = await readJob(id, ownerId);
-    if (!fresh) return null;
-    return toPublic(fresh);
-  } finally {
-    releaseLock(id, token);
-  }
+  // Jalankan di background: request poll tidak menunggu, jadi tidak kena batas proxy.
+  void withHardTimeout(runNextStep(row, ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
+    .catch((error) => console.error(`advance job ${id}:`, error instanceof Error ? error.message : error))
+    .finally(() => releaseLock(id, token));
+
+  // Beri waktu singkat agar transisi "running" tercatat sebelum state dibaca.
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  const fresh = await readJob(id, ownerId);
+  return fresh ? toPublic(fresh) : null;
 }
 
 /**
@@ -487,14 +494,11 @@ export async function tickReportJobs(limit = 2) {
     if (hasLiveStep(row, now)) continue;
     const token = Date.now();
     if (!acquireLock(row.id, token)) continue;
-    try {
-      const result = await withHardTimeout(runNextStep(row, row.ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server");
-      processed.push({ id: row.id, status: result.status, stage: result.stage });
-    } catch (error) {
-      console.error(`tick job ${row.id}:`, error instanceof Error ? error.message : error);
-    } finally {
-      releaseLock(row.id, token);
-    }
+    // Tick juga tidak menunggu: hanya memicu step di background.
+    void withHardTimeout(runNextStep(row, row.ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
+      .catch((error) => console.error(`tick job ${row.id}:`, error instanceof Error ? error.message : error))
+      .finally(() => releaseLock(row.id, token));
+    processed.push({ id: row.id, status: row.status, stage: row.stage });
   }
   return { scanned: candidates.length, processed };
 }
@@ -569,8 +573,26 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   const onEvent = (message: string) => {
     pendingWrite = pendingWrite.then(() => appendLog(row.id, log, "info", `  ${message}`)).catch(() => undefined);
   };
+  // Teks parsial disimpan berkala: heartbeat step + bisa dilanjutkan kalau proses mati.
+  let lastPartialSave = 0;
+  let latestPartial = "";
+  const savePartial = async (text: string) => {
+    await prisma.$transaction([
+      prisma.reportJobStep.update({ where: { id: next.id }, data: { output: text } }),
+      prisma.reportJob.update({ where: { id: row.id }, data: { heartbeatAt: new Date(), stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps}) · ${countWords(text)} kata` } }),
+    ]);
+  };
+  const onPartial = (text: string) => {
+    latestPartial = text;
+    const now = Date.now();
+    if (now - lastPartialSave < 8_000) return;
+    lastPartialSave = now;
+    pendingWrite = pendingWrite.then(() => savePartial(text)).catch(() => undefined);
+  };
 
   const mode = (row.mode === "ringkas" ? "ringkas" : "lengkap") as ReportMode;
+  // Percobaan ulang bab melanjutkan teks parsial percobaan sebelumnya (bukan placeholder fallback).
+  const previousPartial = kind === "chapter" && attemptNo > 1 && next.output && !/respons AI gagal/.test(next.output) ? next.output : undefined;
   const chapterInput = {
     index: chapterPosition,
     total: chapterSteps.length || 1,
@@ -578,6 +600,8 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
     previousSummaries,
     mode,
     onEvent,
+    onPartial,
+    partial: previousPartial,
   };
 
   const stepStarted = Date.now();
@@ -614,6 +638,10 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
     await pendingWrite;
     const message = error instanceof Error ? error.message.slice(0, 300) : "unknown";
     console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptNo}):`, message);
+    // Teks parsial terbaik yang kita punya untuk dilanjutkan percobaan berikutnya.
+    const partial = error instanceof ChapterTimeoutError && error.partial.length > (latestPartial?.length ?? 0)
+      ? error.partial
+      : latestPartial || previousPartial || null;
 
     if (kind !== "chapter") {
       // Diagram/audit tidak boleh menggagalkan laporan: tandai fallback, lanjut.
@@ -623,19 +651,21 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
       });
       await appendLog(row.id, log, "warn", `${next.title} gagal (${message}) → dilewati`);
     } else if (attemptNo >= MAX_STEP_ATTEMPTS) {
-      // Habis percobaan → fallback placeholder supaya laporan tetap utuh.
+      // Habis percobaan: pakai teks parsial kalau cukup panjang, kalau tidak placeholder.
+      const usable = partial && countWords(partial) >= 250;
       const fallback = fallbackChapter(chapterInput, project);
+      const content = usable ? `${partial.trimEnd()}\n\n[LANJUTAN ${next.title.toUpperCase()}: bagian ini belum selesai, gunakan fitur revisi untuk melengkapi]` : fallback.content;
       await prisma.reportJobStep.update({
         where: { id: next.id },
-        data: { status: "fallback", output: fallback.content, summary: fallback.summary, error: message, finishedAt: new Date() },
+        data: { status: "fallback", output: content, summary: usable ? countWords(partial) + " kata (belum lengkap)" : fallback.summary, error: message, finishedAt: new Date() },
       });
-      await appendLog(row.id, log, "error", `Bab "${next.title}" gagal ${MAX_STEP_ATTEMPTS}x (${message}) → placeholder, bisa diisi lewat revisi`);
+      await appendLog(row.id, log, "error", `Bab "${next.title}" gagal ${MAX_STEP_ATTEMPTS}x (${message}) → ${usable ? "memakai teks yang sudah ada" : "placeholder"}, bisa dilengkapi lewat revisi`);
     } else {
       await prisma.reportJobStep.update({
         where: { id: next.id },
-        data: { status: "failed", error: message },
+        data: { status: "failed", error: message, output: partial },
       });
-      await appendLog(row.id, log, "warn", `Bab "${next.title}" gagal (${message}), akan diulang`);
+      await appendLog(row.id, log, "warn", `Bab "${next.title}" terhenti (${message})${partial ? `, ${countWords(partial)} kata tersimpan` : ""} → akan dilanjutkan`);
     }
   }
 

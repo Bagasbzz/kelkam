@@ -221,6 +221,10 @@ export interface ChapterInput {
   mode: ReportMode;
   /** Callback event detail untuk log job (opsional). */
   onEvent?: (message: string) => void;
+  /** Teks parsial dari percobaan sebelumnya yang timeout — dilanjutkan, bukan ditulis ulang. */
+  partial?: string;
+  /** Dipanggil tiap ada potongan teks baru (untuk simpan parsial + heartbeat). */
+  onPartial?: (text: string) => void;
 }
 
 export interface ChapterOutput {
@@ -232,13 +236,25 @@ export interface ChapterOutput {
   model?: string;
 }
 
+/** Error timeout yang membawa teks parsial supaya step bisa menyimpannya. */
+export class ChapterTimeoutError extends Error {
+  constructor(message: string, public readonly partial: string) {
+    super(message);
+    this.name = "ChapterTimeoutError";
+  }
+}
+
 /**
- * Satu step job harus selesai < ~100 s (proxy hosting memutus ~120 s, step
- * dianggap macet setelah STALE_STEP_MS). Panggilan utama + 1 lanjutan.
+ * Batas waktu per bab. Step dijalankan di background proses (bukan di dalam
+ * request HTTP), jadi tidak terikat ~120 s proxy. Streaming dipakai supaya
+ * teks parsial tersimpan saat timeout dan heartbeat hidup per potongan.
  */
-const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 55000);
-const CONTINUATION_TIMEOUT_MS = 28000;
-const AUDIT_TIMEOUT_MS = Number(process.env.AI_AUDIT_TIMEOUT_MS || 75000);
+const CHAPTER_TIMEOUT_MS = Number(process.env.AI_CHAPTER_TIMEOUT_MS || 200_000);
+const CONTINUATION_TIMEOUT_MS = Number(process.env.AI_CONTINUATION_TIMEOUT_MS || 90_000);
+/** Total budget satu step bab (panggilan utama + lanjutan). */
+export const CHAPTER_STEP_BUDGET_MS = Number(process.env.AI_CHAPTER_BUDGET_MS || 300_000);
+const AUDIT_TIMEOUT_MS = Number(process.env.AI_AUDIT_TIMEOUT_MS || 150_000);
+const MAX_CONTINUATIONS = 3;
 
 /** Hapus heading level-1 dan code fence yang kadang disisipkan model. */
 function cleanChapterOutput(raw: string) {
@@ -246,6 +262,90 @@ function cleanChapterOutput(raw: string) {
   output = output.replace(/^```(?:markdown|md)?\s*/i, "").replace(/\s*```$/i, "").trim();
   output = output.replace(/^(berikut|tentu|baik)[^\n]*\n+/i, "").trim();
   return output;
+}
+
+/**
+ * Deteksi bab yang berhenti di tengah: kalimat tanpa tanda akhir, tabel yang
+ * barisnya belum lengkap, atau heading tanpa isi di ujung.
+ */
+export function looksTruncated(markdown: string) {
+  const trimmed = markdown.trimEnd();
+  if (!trimmed) return true;
+  const lines = trimmed.split("\n");
+  const last = lines[lines.length - 1].trim();
+  if (/^#{1,4}\s/.test(last)) return true;
+  if (last.startsWith("|")) {
+    // Tabel: baris terakhir harus punya jumlah sel sama dengan header.
+    const tableLines = [] as string[];
+    for (let i = lines.length - 1; i >= 0 && lines[i].trim().startsWith("|"); i -= 1) tableLines.unshift(lines[i].trim());
+    const cells = (line: string) => line.split("|").length;
+    return tableLines.length < 3 || cells(tableLines[0]) !== cells(last) || !last.endsWith("|");
+  }
+  return !/[.!?:\])"”*_]$/.test(last);
+}
+
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+/**
+ * Panggil model dengan stream; teks terkumpul dikirim ke onDelta. Saat timeout
+ * lempar ChapterTimeoutError berisi teks parsial.
+ */
+async function streamChapter(
+  params: { model: string; messages: ChatMessage[]; maxTokens: number; temperature: number },
+  timeoutMs: number,
+  onDelta: (fullText: string) => void,
+) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let text = "";
+  const run = async (withReasoning: boolean) => {
+    const stream = await aiClient.chat.completions.create(
+      {
+        model: params.model,
+        messages: params.messages,
+        temperature: params.temperature,
+        max_tokens: params.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+        // Penulisan naratif tidak butuh reasoning panjang; hemat token & waktu.
+        ...(withReasoning ? { reasoning_effort: "low" as const } : {}),
+      },
+      { signal: controller.signal, maxRetries: 0 },
+    );
+    let finishReason = "unknown";
+    let usage = 0;
+    let lastEmit = 0;
+    for await (const chunk of stream) {
+      const delta = chunk.choices?.[0]?.delta?.content;
+      if (delta) {
+        text += delta;
+        const now = Date.now();
+        if (now - lastEmit > 1500) { lastEmit = now; onDelta(text); }
+      }
+      const reason = chunk.choices?.[0]?.finish_reason;
+      if (reason) finishReason = reason;
+      if (chunk.usage?.total_tokens) usage = chunk.usage.total_tokens;
+    }
+    onDelta(text);
+    return { text, finishReason, usage };
+  };
+  try {
+    try {
+      return await run(true);
+    } catch (error) {
+      // Provider tidak kenal reasoning_effort → ulang polos (hanya kalau belum ada teks).
+      const status = (error as { status?: unknown })?.status;
+      if (status === 400 && !text && !controller.signal.aborted) return await run(false);
+      throw error;
+    }
+  } catch (error) {
+    if (controller.signal.aborted || isAbortLikeError(error)) {
+      throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Ambil 2-3 kalimat pertama dari paragraf pertama sebagai ringkasan murah (tanpa AI). */
@@ -462,79 +562,99 @@ ATURAN TIPOGRAFI:
   const model = isRingkas ? AI_MODEL_FAST : AI_MODEL;
   const maxTokens = isRingkas ? 1800 : 5200;
   const emit = input.onEvent ?? (() => {});
+  const onPartial = input.onPartial ?? (() => {});
 
   const chunkCount = sources.reduce((acc, source) => acc + source.kutipanRelevan.length, 0);
   emit(`Menyiapkan bahan: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi, ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
-  emit("Menulis isi bab…");
 
-  const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+  const baseMessages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     { role: "user", content: JSON.stringify(userPayload) },
   ];
+  const continuationMessages = (soFar: string): ChatMessage[] => [
+    ...baseMessages,
+    { role: "assistant", content: soFar },
+    { role: "user", content: "Lanjutkan TEPAT dari titik terakhir tanpa mengulang kalimat/heading yang sudah ada. Output hanya kelanjutan markdown. Selesaikan semua sub-bagian yang direncanakan dan akhiri dengan kalimat utuh." },
+  ];
+
+  const startedAt = Date.now();
+  const remaining = () => CHAPTER_STEP_BUDGET_MS - (Date.now() - startedAt);
+  let content = cleanChapterOutput(input.partial || "");
+  let finishReason = "unknown";
+  let tokensUsed = 0;
+  let continuations = 0;
+  const reportDelta = (prefix: string) => (text: string) => onPartial(prefix ? `${prefix}\n${text}` : text);
 
   try {
-    const startedAt = Date.now();
-    const response = await aiClient.chat.completions.create({
-      model,
-      messages,
-      temperature: 0.15,
-      max_tokens: maxTokens,
-    }, { timeout: CHAPTER_TIMEOUT_MS, maxRetries: 0 });
+    if (content) {
+      emit(`Melanjutkan dari teks sebelumnya (${countWordsLocal(content)} kata)…`);
+    } else {
+      emit("Menulis isi bab…");
+      const first = await streamChapter({ model, messages: baseMessages, maxTokens, temperature: 0.15 }, Math.min(CHAPTER_TIMEOUT_MS, remaining()), reportDelta(""));
+      content = cleanChapterOutput(stripThinking(first.text));
+      finishReason = first.finishReason;
+      tokensUsed += first.usage;
+      emit(`Draf bab selesai: ${countWordsLocal(content)} kata`);
+    }
 
-    const choice = response.choices[0];
-    let content = cleanChapterOutput(stripThinking(choice?.message.content));
-    let finishReason = choice?.finish_reason || "unknown";
-    let tokensUsed = response.usage?.total_tokens ?? 0;
-    emit(`Draf bab selesai: ${content.split(/\s+/).length} kata`);
-
-    // Lanjutan bila terpotong — dibatasi budget waktu step (~100 s total).
-    let continuations = 0;
-    while (finishReason === "length" && content && continuations < 2 && Date.now() - startedAt < 55_000) {
+    // Lanjutan selama terpotong (finish=length ATAU teks terlihat putus) dan budget tersisa.
+    while (
+      content
+      && continuations < MAX_CONTINUATIONS
+      && (finishReason === "length" || looksTruncated(content) || (input.partial && continuations === 0))
+      && remaining() > 20_000
+    ) {
       continuations += 1;
       emit(`Melanjutkan penulisan bagian yang belum selesai (${continuations})…`);
-      const cont = await aiClient.chat.completions.create({
-        model,
-        messages: [
-          ...messages,
-          { role: "assistant", content },
-          { role: "user", content: "Lanjutkan tepat dari kalimat terakhir tanpa mengulang. Output hanya kelanjutan markdown. Pastikan diakhiri kalimat utuh." },
-        ],
-        temperature: 0.15,
-        max_tokens: Math.round(maxTokens / 2),
-      }, { timeout: CONTINUATION_TIMEOUT_MS, maxRetries: 0 });
-      const extra = cleanChapterOutput(stripThinking(cont.choices[0]?.message.content));
-      if (extra) content = `${content}\n${extra}`;
-      finishReason = cont.choices[0]?.finish_reason || finishReason;
-      tokensUsed += cont.usage?.total_tokens ?? 0;
+      const cont = await streamChapter(
+        { model, messages: continuationMessages(content), maxTokens: Math.round(maxTokens / 2), temperature: 0.15 },
+        Math.min(CONTINUATION_TIMEOUT_MS, remaining()),
+        reportDelta(content),
+      );
+      const extra = cleanChapterOutput(stripThinking(cont.text));
+      if (!extra) break;
+      content = `${content.trimEnd()}\n${extra}`;
+      finishReason = cont.finishReason;
+      tokensUsed += cont.usage;
     }
-
-    if (content.length < 200) {
-      emit("Isi bab terlalu pendek, memakai kerangka sementara");
-      return { ...fallbackChapter(input, project), tokensUsed, model };
-    }
-    if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
-
-    // Jaminan: placeholder gambar wajib selalu ada (model kadang lupa). Ditempel
-    // di akhir bab agar exporter tetap menyisipkan gambarnya.
-    const missing = mandatoryPlaceholders.filter((placeholder) => {
-      const title = placeholder.slice("[Gambar: ".length).split(" - ")[0].trim().toLowerCase();
-      return !content.toLowerCase().includes(`[gambar: ${title}`);
-    });
-    if (missing.length) {
-      emit(`Menambahkan ${missing.length} penanda gambar yang belum ada`);
-      content = `${content.trimEnd()}\n\n${missing.join("\n\n")}\n`;
-    }
-    const citationCount = countDistinctCitations(content);
-    emit(`Sitasi terdeteksi: ${citationCount}${citationCount < minCitations ? ` (target ${minCitations}, akan dilengkapi saat audit)` : ""}`);
-
-    return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
   } catch (error: unknown) {
+    if (error instanceof ChapterTimeoutError) {
+      const merged = cleanChapterOutput(content ? `${content.trimEnd()}\n${stripThinking(error.partial)}` : stripThinking(error.partial));
+      emit(`Penulisan bab melebihi batas waktu (${countWordsLocal(merged)} kata tersimpan), akan dilanjutkan`);
+      throw new ChapterTimeoutError(`Timeout saat menulis "${section.title}"`, merged);
+    }
     if (isAbortLikeError(error)) {
-      emit("Penulisan bab melebihi batas waktu, akan dicoba ulang");
-      throw new Error(`Timeout ${Math.round(CHAPTER_TIMEOUT_MS / 1000)}s saat menulis "${section.title}"`);
+      emit("Penulisan bab melebihi batas waktu, akan dilanjutkan");
+      throw new ChapterTimeoutError(`Timeout saat menulis "${section.title}"`, content);
     }
     throw error;
   }
+
+  if (content.length < 200) {
+    emit("Isi bab terlalu pendek, memakai kerangka sementara");
+    return { ...fallbackChapter(input, project), tokensUsed, model };
+  }
+  if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
+
+  // Jaminan: placeholder gambar wajib selalu ada (model kadang lupa). Ditempel
+  // di akhir bab agar exporter tetap menyisipkan gambarnya.
+  const missing = mandatoryPlaceholders.filter((placeholder) => {
+    const title = placeholder.slice("[Gambar: ".length).split(" - ")[0].trim().toLowerCase();
+    return !content.toLowerCase().includes(`[gambar: ${title}`);
+  });
+  if (missing.length) {
+    emit(`Menambahkan ${missing.length} penanda gambar yang belum ada`);
+    content = `${content.trimEnd()}\n\n${missing.join("\n\n")}\n`;
+  }
+  const citationCount = countDistinctCitations(content);
+  emit(`Sitasi terdeteksi: ${citationCount}${citationCount < minCitations ? ` (target ${minCitations}, akan dilengkapi saat audit)` : ""}`);
+  if (looksTruncated(content)) emit("Catatan: akhir bab masih terlihat terpotong, akan dirapikan saat audit");
+
+  return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
+}
+
+function countWordsLocal(text: string) {
+  return text.split(/\s+/).filter(Boolean).length;
 }
 
 /** Jumlah sitasi in-text unik (Nama, Tahun) di sebuah markdown. */
@@ -620,15 +740,22 @@ Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
   };
 
   try {
-    const response = await aiClient.chat.completions.create({
+    const request = {
       model,
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: JSON.stringify(userPayload) },
+        { role: "system" as const, content: systemPrompt },
+        { role: "user" as const, content: JSON.stringify(userPayload) },
       ],
       temperature: 0.1,
       max_tokens: 6000,
-    }, { timeout: AUDIT_TIMEOUT_MS, maxRetries: 0 });
+    };
+    let response;
+    try {
+      response = await aiClient.chat.completions.create({ ...request, reasoning_effort: "low" }, { timeout: AUDIT_TIMEOUT_MS, maxRetries: 0 });
+    } catch (error) {
+      if ((error as { status?: unknown })?.status !== 400) throw error;
+      response = await aiClient.chat.completions.create(request, { timeout: AUDIT_TIMEOUT_MS, maxRetries: 0 });
+    }
     const choice = response.choices[0];
     let content = cleanChapterOutput(stripThinking(choice?.message.content));
     const tokensUsed = response.usage?.total_tokens ?? 0;
