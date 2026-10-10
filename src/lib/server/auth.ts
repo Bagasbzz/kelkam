@@ -58,11 +58,17 @@ import { ApiRequestError } from "@/lib/server/request-guards";
  * di-set (akan di-cek oleh middleware setup di cPanel).
  */
 const DEV_JWT_SECRET = "keluhkampus-dev-secret-change-me-in-production";
-if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
-  // Tanpa secret kuat, semua cookie session bisa dipalsukan. Lebih baik gagal start.
-  throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+let cachedJwtSecret: Uint8Array | null = null;
+/** Dievaluasi saat request, bukan saat import: `next build` di CI tidak punya env ini. */
+function getJwtSecret(): Uint8Array {
+  if (cachedJwtSecret) return cachedJwtSecret;
+  if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
+    // Tanpa secret kuat, semua cookie session bisa dipalsukan.
+    throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+  }
+  cachedJwtSecret = new TextEncoder().encode(process.env.AUTH_JWT_SECRET || DEV_JWT_SECRET);
+  return cachedJwtSecret;
 }
-const JWT_SECRET = new TextEncoder().encode(process.env.AUTH_JWT_SECRET || DEV_JWT_SECRET);
 
 /** Nama cookie session. Bisa di-override via env (berguna untuk multi-app). */
 const COOKIE_NAME = process.env.AUTH_COOKIE_NAME || "keluhkampus_session";
@@ -145,7 +151,7 @@ export async function createSessionToken(
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(`${TOKEN_TTL_SECONDS}s`)
-    .sign(JWT_SECRET);
+    .sign(getJwtSecret());
 }
 
 /**
@@ -215,7 +221,7 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   if (!token) return null;
 
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, getJwtSecret());
     const userId = String(payload.sub || "");
     if (!userId) return null;
 

@@ -97,12 +97,18 @@ const PROTECTED_PAGE_PREFIXES = [
  * Duplikasi ini disengaja — proxy.js jalan di Edge runtime yang tidak bisa
  * import dari kode yg pakai Prisma/argon2 (Node-only modules).
  */
-if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
-  throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+let cachedJwtSecret: Uint8Array | null = null;
+/** Lazy: dicek saat request pertama, bukan saat build. */
+function getJwtSecret(): Uint8Array {
+  if (cachedJwtSecret) return cachedJwtSecret;
+  if (process.env.NODE_ENV === "production" && !process.env.AUTH_JWT_SECRET) {
+    throw new Error("AUTH_JWT_SECRET wajib di-set di production.");
+  }
+  cachedJwtSecret = new TextEncoder().encode(
+    process.env.AUTH_JWT_SECRET || "keluhkampus-dev-secret-change-me-in-production"
+  );
+  return cachedJwtSecret;
 }
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.AUTH_JWT_SECRET || "keluhkampus-dev-secret-change-me-in-production"
-);
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -141,7 +147,7 @@ export async function proxy(request: NextRequest) {
   // JWT verify (signature + expiry)
   // -------------------------------------------------------------------------
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
+    const { payload } = await jwtVerify(token, getJwtSecret());
     const userId = String(payload.sub || "");
     if (!userId) throw new Error("missing sub");
 
