@@ -94,6 +94,8 @@ export interface ReportJob {
   createdAt: string;
   updatedAt: string;
   heartbeatAt?: string;
+  /** Jam server saat respons dibuat — UI pakai untuk hitung durasi tanpa tergantung jam klien. */
+  serverNow: string;
   /** Detik sejak heartbeat terakhir — UI pakai untuk deteksi macet. */
   idleSeconds: number;
   /** true kalau job belum selesai dan tidak ada step yang sedang hidup. */
@@ -137,9 +139,32 @@ const LOG_LIMIT = 120;
 /** Job lebih tua dari ini tidak dilanjutkan oleh tick. */
 export const JOB_TTL_MS = 24 * 60 * 60 * 1000;
 
-const globalForJobs = globalThis as typeof globalThis & { __reportJobLocks?: Set<string> };
-const jobLocks = globalForJobs.__reportJobLocks || new Set<string>();
+const globalForJobs = globalThis as typeof globalThis & { __reportJobLocks?: Map<string, number> };
+/** jobId → epoch ms saat lock diambil. */
+const jobLocks = globalForJobs.__reportJobLocks || new Map<string, number>();
 globalForJobs.__reportJobLocks = jobLocks;
+
+/** Lock lebih tua dari ini dianggap milik request yang hang → boleh diambil alih. */
+const LOCK_STALE_MS = 150_000;
+/** Batas keras satu step; lebih dari ini lock dilepas walau promise lama masih jalan. */
+const STEP_HARD_TIMEOUT_MS = 130_000;
+
+function acquireLock(id: string, now = Date.now()) {
+  const held = jobLocks.get(id);
+  if (held !== undefined && now - held < LOCK_STALE_MS) return false;
+  jobLocks.set(id, now);
+  return true;
+}
+
+function releaseLock(id: string, token: number) {
+  if (jobLocks.get(id) === token) jobLocks.delete(id);
+}
+
+async function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let t: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error(label)), ms); });
+  try { return await Promise.race([p, timeout]); } finally { if (t) clearTimeout(t); }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -193,6 +218,7 @@ function toPublic(row: JobRow): ReportJob {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     heartbeatAt: heartbeat.toISOString(),
+    serverNow: new Date(now).toISOString(),
     idleSeconds: Math.max(0, Math.round((now - heartbeat.getTime()) / 1000)),
     needsResume: !finished && !hasLiveStep(row, now),
     totalSteps: row.totalSteps,
@@ -423,13 +449,18 @@ export async function advanceReportJob(id: string, ownerId: string): Promise<Rep
   const row = await readJob(id, ownerId);
   if (!row) return null;
   if (isJobFinished(row.status)) return toPublic(row);
-  if (jobLocks.has(id)) return toPublic(row);
+  const token = Date.now();
+  if (!acquireLock(id, token)) return toPublic(row);
 
-  jobLocks.add(id);
   try {
-    return await runNextStep(row, ownerId);
+    return await withHardTimeout(runNextStep(row, ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server");
+  } catch (error) {
+    console.error(`advance job ${id}:`, error instanceof Error ? error.message : error);
+    const fresh = await readJob(id, ownerId);
+    if (!fresh) return null;
+    return toPublic(fresh);
   } finally {
-    jobLocks.delete(id);
+    releaseLock(id, token);
   }
 }
 
@@ -453,15 +484,16 @@ export async function tickReportJobs(limit = 2) {
   const processed: Array<{ id: string; status: string; stage: string }> = [];
   for (const row of candidates) {
     if (processed.length >= limit) break;
-    if (jobLocks.has(row.id) || hasLiveStep(row, now)) continue;
-    jobLocks.add(row.id);
+    if (hasLiveStep(row, now)) continue;
+    const token = Date.now();
+    if (!acquireLock(row.id, token)) continue;
     try {
-      const result = await runNextStep(row, row.ownerId);
+      const result = await withHardTimeout(runNextStep(row, row.ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server");
       processed.push({ id: row.id, status: result.status, stage: result.stage });
     } catch (error) {
       console.error(`tick job ${row.id}:`, error instanceof Error ? error.message : error);
     } finally {
-      jobLocks.delete(row.id);
+      releaseLock(row.id, token);
     }
   }
   return { scanned: candidates.length, processed };
@@ -525,6 +557,7 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
         status: "running",
         stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps})`,
         progress: progressFor(doneBefore, row.totalSteps),
+        heartbeatAt: new Date(),
       },
     }),
   ]);

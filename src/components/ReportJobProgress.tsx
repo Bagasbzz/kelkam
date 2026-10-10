@@ -38,9 +38,9 @@ const STEP_LABEL: Record<ReportJobStep["status"], string> = {
   failed: "gagal",
 };
 
-function seconds(a?: string, b?: string) {
+function seconds(a?: string, b?: string, nowMs?: number) {
   if (!a) return null;
-  const end = b ? new Date(b).getTime() : Date.now();
+  const end = b ? new Date(b).getTime() : (nowMs ?? new Date(a).getTime());
   return Math.max(0, Math.round((end - new Date(a).getTime()) / 1000));
 }
 
@@ -49,10 +49,19 @@ function fmtTime(iso: string) {
 }
 
 export default function ReportJobProgress({ job, polling, onResume, onRetry, onCancel, onDiscard, compact }: Props) {
-  const [, tick] = useState(0);
+  // Jam klien yang di-update tiap detik; dipakai untuk durasi langkah yang masih berjalan.
+  const [nowMs, setNowMs] = useState(0);
+  // Selisih jam klien vs server agar durasi langkah tidak salah saat jam PC melenceng.
+  const [clockOffsetMs, setClockOffsetMs] = useState(0);
   useEffect(() => {
     if (!job || job.status === "done" || job.status === "failed" || job.status === "cancelled") return;
-    const timer = window.setInterval(() => tick((n) => n + 1), 1000);
+    const serverNow = job.serverNow ? new Date(job.serverNow).getTime() : NaN;
+    const sync = () => {
+      const t = Date.now();
+      setNowMs(t);
+      if (Number.isFinite(serverNow)) setClockOffsetMs(t - serverNow);
+    };
+    const timer = window.setInterval(sync, 1000);
     return () => window.clearInterval(timer);
   }, [job]);
 
@@ -93,7 +102,7 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
 
       {runningStep && active && (
         <p className="mt-2 text-[11px] text-blue-700">
-          Sedang menulis <b>{runningStep.title}</b> — {seconds(runningStep.startedAt) ?? 0} dtk
+          Sedang menulis <b>{runningStep.title}</b> — {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
           {runningStep.attempts > 1 ? ` (percobaan ${runningStep.attempts})` : ""}. Satu bagian biasanya 15-60 dtk.
         </p>
       )}

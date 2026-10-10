@@ -33,6 +33,7 @@ export interface ReportJob {
   createdAt: string;
   updatedAt: string;
   heartbeatAt?: string;
+  serverNow?: string;
   idleSeconds: number;
   needsResume: boolean;
   totalSteps: number;
