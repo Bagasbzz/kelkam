@@ -122,8 +122,8 @@ export interface RunOptions {
  * menampilkan tombol "Lanjutkan".
  */
 export async function runJobUntilDone(jobId: string, opts: RunOptions): Promise<ReportJob> {
-  const interval = opts.intervalMs ?? 500;
-  const maxPolls = opts.maxPolls ?? 7200;
+  const interval = opts.intervalMs ?? 1500;
+  const maxPolls = opts.maxPolls ?? 2400;
   let consecutiveErrors = 0;
 
   for (let i = 0; i < maxPolls; i += 1) {
@@ -135,8 +135,10 @@ export async function runJobUntilDone(jobId: string, opts: RunOptions): Promise<
       if (job.status === "done" || job.status === "failed" || job.status === "cancelled") return job;
     } catch (error) {
       consecutiveErrors += 1;
-      if (consecutiveErrors >= 5) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 1500 * consecutiveErrors));
+      if (consecutiveErrors >= 8) throw error;
+      // Backoff lebih panjang saat server membatasi permintaan (429).
+      const limited = error instanceof Error && /terlalu banyak/i.test(error.message);
+      await new Promise((resolve) => setTimeout(resolve, (limited ? 5000 : 1500) * consecutiveErrors));
       continue;
     }
     await new Promise((resolve) => setTimeout(resolve, interval));

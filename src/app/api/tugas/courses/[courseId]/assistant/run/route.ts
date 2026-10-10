@@ -8,7 +8,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { requireCourseAdmin } from "@/lib/server/auth";
-import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { controlAgentRun, findActiveAgentRun, getAgentRun } from "@/lib/server/agent-runs/engine";
 import { streamAgentRun } from "@/lib/server/agent-runs/stream";
 
@@ -38,6 +38,8 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
   try {
     const { courseId } = await context.params;
     const admin = await requireCourseAdmin(courseId);
+    const rl = enforceRateLimit(`tugas-run:${admin.id}`, { limit: 300, windowMs: 10 * 60 * 1000 });
+    if (rl) return rl;
     const parsed = BodySchema.safeParse(await readJsonBody<unknown>(req, 4 * 1024));
     if (!parsed.success) return NextResponse.json({ success: false, error: "Input tidak valid." }, { status: 400 });
 

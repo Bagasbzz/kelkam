@@ -79,6 +79,18 @@ const PUBLIC_API_EXACT_PATHS = [
 ];
 
 /**
+ * Endpoint polling/stream yang dipanggil klien berulang (tiap 0.5-2 s) selama job
+ * berjalan. Gateway limit 40/10 menit akan memutus polling → job "macet".
+ * Handler masing-masing sudah punya rate limit sendiri yang sesuai.
+ */
+function isPollingEndpoint(pathname: string) {
+  return /^\/api\/report-jobs\/status\/[^/]+$/.test(pathname)
+    || /^\/api\/laporan\/sessions\/[^/]+\/run$/.test(pathname)
+    || /^\/api\/tugas\/courses\/[^/]+\/assistant\/run$/.test(pathname)
+    || /^\/api\/ai\/generate-image\/[^/]+$/.test(pathname);
+}
+
+/**
  * Path page (UI) yang WAJIB login.
  * User yang belum login akan di-redirect ke /login?redirect=<path>.
  *
@@ -153,7 +165,7 @@ export async function proxy(request: NextRequest) {
 
     // Rate limit HANYA untuk API (page navigation tidak di-rate-limit di sini;
     // Next.js sudah handle browser-side caching).
-    if (isProtectedApi) {
+    if (isProtectedApi && !isPollingEndpoint(pathname)) {
       // Endpoint "expensive" (AI, fix-format) dapat limit lebih ketat.
       const expensive = pathname.startsWith("/api/ai/") || pathname.startsWith("/api/fix-format");
       const rateLimit = enforceRateLimit(`api-gateway:${userId}:${pathname}`, {

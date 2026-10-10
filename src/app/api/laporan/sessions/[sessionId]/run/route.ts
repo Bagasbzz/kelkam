@@ -10,7 +10,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
-import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { controlAgentRun, findActiveAgentRun, getAgentRun } from "@/lib/server/agent-runs/engine";
 import { streamAgentRun } from "@/lib/server/agent-runs/stream";
 
@@ -39,6 +39,8 @@ export async function POST(req: Request, context: { params: Promise<{ sessionId:
   try {
     const auth = await authenticateRequestFromCookie();
     if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
+    const rl = enforceRateLimit(`laporan-run:${auth.user.id}`, { limit: 300, windowMs: 10 * 60 * 1000 });
+    if (rl) return rl;
     const { sessionId } = await context.params;
     const parsed = BodySchema.safeParse(await readJsonBody<unknown>(req, 4 * 1024));
     if (!parsed.success) return NextResponse.json({ success: false, error: "Input tidak valid." }, { status: 400 });

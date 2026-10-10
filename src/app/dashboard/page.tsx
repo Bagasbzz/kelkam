@@ -150,7 +150,7 @@ export default function LaporanPage() {
     abortRef.current = controller;
     setPolling(true);
     try {
-      const final = await runJobUntilDone(jobId, { onUpdate: setJob, signal: controller.signal, intervalMs: 700 });
+      const final = await runJobUntilDone(jobId, { onUpdate: setJob, signal: controller.signal, intervalMs: 1500 });
       setJob(final);
       if (activeId) await loadDetail(activeId);
       if (final.status === "done") setTab("draft");
