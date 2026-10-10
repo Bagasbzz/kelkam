@@ -198,6 +198,7 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
     case "getMaterialContent": return "Membaca isi materi (PPTX/PDF)…";
     case "exportSubmissionDocx":
     case "exportReportDocx": return "Menyusun dokumen Word…";
+    case "askUser": return "Menyiapkan pertanyaan untuk admin…";
     default: return null;
   }
 }

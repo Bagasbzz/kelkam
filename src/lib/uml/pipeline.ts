@@ -628,10 +628,13 @@ function parseCompactSpec(value: unknown): CompactSpec {
     participants,
     messages,
     qualityNotes: Array.isArray(source.qualityNotes)
-      ? source.qualityNotes.map((note) => optionalString(note, 180)).filter(Boolean).slice(0, 5)
+      ? source.qualityNotes.map((note) => optionalString(note, 180)).filter((note) => note && !TECHNICAL_NOTE.test(note)).slice(0, 5)
       : undefined,
   };
 }
+
+/** Catatan model yang menyebut nama model/vendor/istilah internal tidak diteruskan ke user. */
+const TECHNICAL_NOTE = /\b(claude|deepseek|gpt|openai|anthropic|llm|model|token|json|spec|schema|prompt)\b/i;
 
 function extractJson(text: string) {
   let json = stripThinking(text);
@@ -671,7 +674,7 @@ function prepareDiagram(
 // ---------------------------------------------------------------------------
 
 export type UmlStreamEvent =
-  | { type: "status"; text: string; phase: string; model?: string }
+  | { type: "status"; text: string; phase: string }
   | { type: "partial"; data: RenderedDiagram; count: number }
   | { type: "result"; status: number; payload: Record<string, unknown> };
 
@@ -832,12 +835,11 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
       emit({
         type: "status",
         phase,
-        model,
         text: repairSpec
-          ? `Memperbaiki ${repairErrors.length} masalah struktur dengan ${model}…`
+          ? `Memperbaiki ${repairErrors.length} masalah struktur…`
           : askFirst
-            ? `Menyusun pertanyaan klarifikasi dengan ${model}…`
-            : `Menunggu ${model} mulai menulis spec (model berpikir dulu, belum ada token keluar)…`,
+            ? `Menyusun pertanyaan klarifikasi…`
+            : `AI sedang memahami kebutuhan diagram…`,
       });
 
       const t0 = Date.now();
@@ -846,7 +848,7 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
       const onDelta = (text: string) => {
         if (!firstTokenAt) {
           firstTokenAt = Date.now();
-          emit({ type: "status", phase, model, text: `${model} mulai menulis spec (${((firstTokenAt - t0) / 1000).toFixed(1)}s berpikir)…` });
+          emit({ type: "status", phase, text: "AI mulai menyusun elemen diagram…" });
         }
         if (quick) return;
         // Parse hanya saat ada objek baru yang mungkin selesai (ada "}" baru), bukan tiap token.
@@ -869,7 +871,7 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
         result = await streamChat(baseParams, Math.min(timeout, remainingMs()), onDelta);
       }
       console.info(`[generate-uml] ${model} ${phase} ${Date.now() - t0}ms ttft=${firstTokenAt ? firstTokenAt - t0 : "-"}ms tokens=${result.usage ?? "?"}`);
-      emit({ type: "status", phase: "validate", model, text: "Spec selesai ditulis. Memeriksa struktur dan menyusun tata letak…" });
+      emit({ type: "status", phase: "validate", text: "Memeriksa struktur dan menyusun tata letak…" });
       return extractJson(result.text || "{}");
     };
 
@@ -884,7 +886,7 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
       const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
       const left = remainingMs();
       if (!isTimeout || left < MIN_STEP_MS) throw error;
-      emit({ type: "status", phase: "fallback", text: "AI utama terlalu lama. Beralih ke jalur cepat…" });
+      emit({ type: "status", phase: "fallback", text: "Proses lebih lama dari biasanya, mencoba jalur lebih cepat…" });
       return callModel(AI_MODEL_FAST, Math.min(35_000, left));
     }
   };

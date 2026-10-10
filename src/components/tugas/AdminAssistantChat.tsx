@@ -33,7 +33,6 @@ interface ChatMsg {
   content: string;
   pending?: boolean;
   attachments?: AssistantAttachment[];
-  toolsUsed?: string[];
 }
 
 const QUICK_PROMPTS = [
@@ -174,7 +173,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
         || (pq ? "" : "(tidak ada jawaban)");
       setMessages((prev) => {
         const next = prev.filter((m) => m.id !== placeholderId);
-        if (replyText) next.push({ id: placeholderId, role: "assistant", content: replyText, attachments: final?.attachments ?? [], toolsUsed: final?.toolsUsed ?? [] });
+        if (replyText) next.push({ id: placeholderId, role: "assistant", content: replyText, attachments: final?.attachments ?? [] });
         return next;
       });
       void loadSessions();
@@ -287,9 +286,6 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
                           </a>
                         ))}
                       </div>
-                    ) : null}
-                    {m.toolsUsed?.length ? (
-                      <p className="mt-1.5 text-[10px] text-slate-400">tools: {Array.from(new Set(m.toolsUsed)).join(", ")}</p>
                     ) : null}
                   </>
                 ) : (

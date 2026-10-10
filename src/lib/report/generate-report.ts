@@ -464,8 +464,8 @@ ATURAN TIPOGRAFI:
   const emit = input.onEvent ?? (() => {});
 
   const chunkCount = sources.reduce((acc, source) => acc + source.kutipanRelevan.length, 0);
-  emit(`Bahan dipilih: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi (min. ${minCitations} sitasi), ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
-  emit(`Memanggil model ${model} (maks ${maxTokens} token)`);
+  emit(`Menyiapkan bahan: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi, ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
+  emit("Menulis isi bab…");
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
@@ -485,13 +485,13 @@ ATURAN TIPOGRAFI:
     let content = cleanChapterOutput(stripThinking(choice?.message.content));
     let finishReason = choice?.finish_reason || "unknown";
     let tokensUsed = response.usage?.total_tokens ?? 0;
-    emit(`Respons diterima ${Math.round((Date.now() - startedAt) / 1000)}s, ${content.split(/\s+/).length} kata, finish=${finishReason}`);
+    emit(`Draf bab selesai: ${content.split(/\s+/).length} kata`);
 
     // Lanjutan bila terpotong — dibatasi budget waktu step (~100 s total).
     let continuations = 0;
     while (finishReason === "length" && content && continuations < 2 && Date.now() - startedAt < 55_000) {
       continuations += 1;
-      emit(`Output terpotong, melanjutkan penulisan (${continuations})...`);
+      emit(`Melanjutkan penulisan bagian yang belum selesai (${continuations})…`);
       const cont = await aiClient.chat.completions.create({
         model,
         messages: [
@@ -509,7 +509,7 @@ ATURAN TIPOGRAFI:
     }
 
     if (content.length < 200) {
-      emit("Output terlalu pendek, memakai placeholder");
+      emit("Isi bab terlalu pendek, memakai kerangka sementara");
       return { ...fallbackChapter(input, project), tokensUsed, model };
     }
     if (!/^##\s+/m.test(content)) content = `## ${section.title}\n\n${content}`;
@@ -521,16 +521,16 @@ ATURAN TIPOGRAFI:
       return !content.toLowerCase().includes(`[gambar: ${title}`);
     });
     if (missing.length) {
-      emit(`${missing.length} placeholder gambar tidak ditulis model, ditambahkan otomatis`);
+      emit(`Menambahkan ${missing.length} penanda gambar yang belum ada`);
       content = `${content.trimEnd()}\n\n${missing.join("\n\n")}\n`;
     }
     const citationCount = countDistinctCitations(content);
-    emit(`Sitasi berbeda terdeteksi: ${citationCount}${citationCount < minCitations ? ` (kurang dari target ${minCitations}, akan dicek saat audit)` : ""}`);
+    emit(`Sitasi terdeteksi: ${citationCount}${citationCount < minCitations ? ` (target ${minCitations}, akan dilengkapi saat audit)` : ""}`);
 
     return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
   } catch (error: unknown) {
     if (isAbortLikeError(error)) {
-      emit(`Model timeout (${Math.round(CHAPTER_TIMEOUT_MS / 1000)}s)`);
+      emit("Penulisan bab melebihi batas waktu, akan dicoba ulang");
       throw new Error(`Timeout ${Math.round(CHAPTER_TIMEOUT_MS / 1000)}s saat menulis "${section.title}"`);
     }
     throw error;
@@ -598,7 +598,7 @@ export async function auditChapter(project: unknown, input: {
   const model = AI_MODEL_REVIEW;
   const placeholders = input.content.match(/\[Gambar:[^\]]+\]/g) || [];
 
-  emit(`Audit "${input.sectionTitle}": ${issues.length ? issues.join("; ") : "tidak ada masalah struktural, cek gaya & sitasi"}`);
+  emit(`Mengaudit bab "${input.sectionTitle}"${issues.length ? `: ${issues.join("; ")}` : ""}`);
 
   const systemPrompt = `Anda adalah editor/pembimbing laporan akademik Indonesia. Tugas: AUDIT dan PERBAIKI satu bab laporan di bawah ini, lalu keluarkan VERSI FINAL bab tersebut (markdown utuh, bukan daftar perubahan).
 
@@ -620,7 +620,6 @@ Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
   };
 
   try {
-    const startedAt = Date.now();
     const response = await aiClient.chat.completions.create({
       model,
       messages: [
@@ -635,19 +634,19 @@ Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
     const tokensUsed = response.usage?.total_tokens ?? 0;
     const originalWords = input.content.split(/\s+/).length;
     const words = content.split(/\s+/).length;
-    emit(`Audit selesai ${Math.round((Date.now() - startedAt) / 1000)}s: ${originalWords} → ${words} kata, finish=${choice?.finish_reason}`);
+    emit(`Audit selesai: ${originalWords} → ${words} kata`);
 
     // Guard: hasil audit terpotong/menyusut drastis/kehilangan placeholder → pakai asli.
     const lostPlaceholder = placeholders.some((placeholder) => !content.includes(placeholder));
     const shrunk = words < originalWords * 0.7;
     if (!content || choice?.finish_reason === "length" || lostPlaceholder || shrunk) {
-      emit(`Hasil audit ditolak (${!content ? "kosong" : choice?.finish_reason === "length" ? "terpotong" : lostPlaceholder ? "placeholder hilang" : "menyusut"}), versi awal dipertahankan`);
+      emit("Hasil audit kurang baik, versi awal dipertahankan");
       return { content: input.content, changed: false, tokensUsed, model, issues };
     }
     if (!/^##\s+/m.test(content)) content = `## ${input.sectionTitle}\n\n${content}`;
     return { content, changed: content !== input.content, tokensUsed, model, issues };
-  } catch (error: unknown) {
-    emit(`Audit gagal (${error instanceof Error ? error.message.slice(0, 120) : "unknown"}), versi awal dipertahankan`);
+  } catch {
+    emit("Audit tidak selesai, versi awal dipertahankan");
     return { content: input.content, changed: false, tokensUsed: 0, model, issues };
   }
 }

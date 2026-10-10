@@ -100,7 +100,7 @@ async function readUmlApiPayload(response: Response): Promise<UmlApiPayload> {
 }
 
 type UmlStreamEvent =
-  | { type: 'status'; text: string; phase: string; model?: string }
+  | { type: 'status'; text: string; phase: string }
   | { type: 'partial'; data: UmlApiPayload['data']; count: number }
   | { type: 'result'; status: number; payload: UmlApiPayload };
 

@@ -206,14 +206,15 @@ function compactMessages(messages: Msg[], force = false): Msg[] {
   });
 }
 
-/** Deskripsi default pemanggilan tool bila driver tidak menyediakan. */
-function defaultDescribe(name: string, args: Record<string, unknown>) {
-  const keys = Object.keys(args).slice(0, 3).map((k) => {
-    const v = args[k];
-    const s = typeof v === "string" ? v : JSON.stringify(v);
-    return `${k}=${(s ?? "").slice(0, 40)}`;
-  });
-  return `Menjalankan ${name}${keys.length ? ` (${keys.join(", ")})` : ""}`;
+/** Deskripsi default pemanggilan tool bila driver tidak menyediakan — tanpa nama/argumen teknis. */
+function defaultDescribe() {
+  return "Mengumpulkan data…";
+}
+
+/** Label manusiawi sebuah tool untuk event progres (fallback ke label generik). */
+function describeTool(driver: AgentDriver, name: string) {
+  const text = driver.describeToolCall?.(name, {}) || "";
+  return text.replace(/[…:.\s]+$/u, "").replace(/\s*"\s*"$/u, "").trim() || "Langkah";
 }
 
 // ---------------------------------------------------------------------------
@@ -562,7 +563,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       if (!calls.length) {
         let reply = stripThinking(msg.content);
         if (!reply) reply = await forceFinalAnswer("Jawaban kosong.");
-        if (!reply) reply = `Saya sudah menjalankan ${toolsUsed.length} langkah (${Array.from(new Set(toolsUsed)).join(", ") || "-"}) tetapi belum sampai kesimpulan. Ketik "lanjut" atau persempit permintaan.`;
+        if (!reply) reply = `Saya sudah mengerjakan ${toolsUsed.length} langkah tetapi belum sampai kesimpulan. Ketik "lanjut" atau persempit permintaan.`;
         if (attachments.length) reply += `\n\nFile siap diunduh: ${attachments.map((a) => `[${a.name}](${a.url})`).join(", ")}`;
         emit("Selesai.");
         return finish({ status: "done", reply });
@@ -587,7 +588,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           continue;
         }
 
-        emit(driver.describeToolCall?.(name, args) || defaultDescribe(name, args), "tool");
+        emit(driver.describeToolCall?.(name, args) || defaultDescribe(), "tool");
         const t0 = Date.now();
         let result: unknown;
         try {
@@ -597,10 +598,10 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           const raw = err instanceof Error ? err.message : "Tool gagal.";
           console.warn(`[agent-run ${runId}] tool ${name} gagal:`, raw.slice(0, 300));
           result = { error: raw.slice(0, 400) };
-          emit(`${name} gagal: ${toPublicErrorMessage(err, "terjadi gangguan")}`, "warn");
+          emit(`${describeTool(driver, name)} gagal: ${toPublicErrorMessage(err, "terjadi gangguan")}`, "warn");
         }
         const secs = Math.round((Date.now() - t0) / 1000);
-        if (secs >= 3) emit(`${name} selesai (${secs}s)`);
+        if (secs >= 3) emit(`${describeTool(driver, name)} selesai (${secs}s)`);
         messages.push({ role: "tool", tool_call_id: call.id, content: clipToolResult(result) });
       }
 
