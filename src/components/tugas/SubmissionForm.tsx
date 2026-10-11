@@ -102,7 +102,7 @@ export default function SubmissionForm({
         setExisting(data.submission);
         setCount(data.count);
       } catch {
-        // Tidak fatal — form tetap bisa dipakai.
+        // Tidak fatal, form tetap bisa dipakai.
       }
     })();
     return () => {

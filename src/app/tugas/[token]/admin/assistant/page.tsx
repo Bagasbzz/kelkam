@@ -10,7 +10,7 @@ import { useAuth } from "@/components/AuthProvider";
 import { fetchCourseByToken, fetchMe, type CourseSummary } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/admin/assistant — Chatbot Admin AI untuk course.
+ * /tugas/[token]/admin/assistant, Chatbot Admin AI untuk course.
  * Query ?q= mengisi prompt awal (dipakai tombol "Koreksi dengan AI").
  */
 export default function CourseAssistantPage() {

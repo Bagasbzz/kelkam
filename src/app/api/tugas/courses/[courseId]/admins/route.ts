@@ -2,7 +2,7 @@
  * POST /api/tugas/courses/[courseId]/admins
  * -----------------------------------------------------------------------------
  * Tambah co-admin untuk course. Auth: course creator ONLY (anti privilege
- * escalation berlapis — co-admin tidak boleh nambah co-admin lain).
+ * escalation berlapis, co-admin tidak boleh nambah co-admin lain).
  *
  *   body: { email }
  *   200 : { success, admin: { id, email, name } }

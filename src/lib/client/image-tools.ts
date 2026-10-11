@@ -2,7 +2,7 @@
  * src/lib/client/image-tools.ts
  * -----------------------------------------------------------------------------
  * Browser-side image manipulation. Convert format, compress, resize,
- * crop, base64 encode/decode — semua via Canvas + browser-image-compression.
+ * crop, base64 encode/decode, semua via Canvas + browser-image-compression.
  *
  * Tidak ada backend call. File max di-handle 50MB (limit canvas internal).
  * -----------------------------------------------------------------------------
@@ -65,7 +65,7 @@ export async function resizeImage(file: File, width: number, height: number): Pr
   saveAs(out, `resized-${width}x${height}-${file.name}`);
 }
 
-/** Crop image — ambil rectangle (x,y,w,h) dalam pixels. */
+/** Crop image, ambil rectangle (x,y,w,h) dalam pixels. */
 export async function cropImage(
   file: File,
   rect: { x: number; y: number; width: number; height: number },

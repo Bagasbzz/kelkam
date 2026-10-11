@@ -1,5 +1,5 @@
 /**
- * Analisis teks pengumpulan tugas — murni lokal, 0 token AI.
+ * Analisis teks pengumpulan tugas, murni lokal, 0 token AI.
  * -----------------------------------------------------------------------------
  *  - Kemiripan antar-submission: shingling k-gram kata + Jaccard, dan cosine TF.
  *  - Indikasi tulisan AI: heuristik statistik (burstiness, variasi kalimat,
@@ -192,7 +192,7 @@ export interface AiSignals {
   paragraphUniformity: number;
   /** Ada typo/slang/informal khas manusia (menurunkan skor). */
   informalHits: number;
-  /** Kode sumber (bukan prosa) — skor tidak bisa diandalkan. */
+  /** Kode sumber (bukan prosa), skor tidak bisa diandalkan. */
   looksLikeCode: boolean;
 }
 

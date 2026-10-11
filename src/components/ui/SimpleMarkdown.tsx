@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * SimpleMarkdown — renderer markdown ringan & aman (tanpa dangerouslySetInnerHTML).
+ * SimpleMarkdown, renderer markdown ringan & aman (tanpa dangerouslySetInnerHTML).
  * Mendukung: heading, bullet/numbered list, tabel, blok kode, **bold**, *italic*,
  * `code`, dan tautan [teks](url) dengan whitelist skema (http/https, /api/files/).
  */

@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Generic drag-and-drop file picker.
  *
- * KHUSUS UNTUK BROWSER-SIDE TOOLS (PDF/DOCX/Image di /tools) — JANGAN pakai
+ * KHUSUS UNTUK BROWSER-SIDE TOOLS (PDF/DOCX/Image di /tools), JANGAN pakai
  * untuk upload ke server. Untuk upload submission, pakai SubmissionForm
  * yang udah handle /api/files/upload + hashing + id.
  *

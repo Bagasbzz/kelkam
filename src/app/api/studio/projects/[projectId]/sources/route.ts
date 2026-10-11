@@ -3,17 +3,17 @@
  * -----------------------------------------------------------------------------
  * CRUD untuk StudioSource (sumber konteks proyek).
  *
- * StudioSource merepresentasikan satu input ke project — bisa brief dari
+ * StudioSource merepresentasikan satu input ke project, bisa brief dari
  * user, file yang di-upload, jurnal yang sudah diekstrak, dll.
  * Authority menandakan "trusted level" (binding/primary/supporting/dll).
  *
- * POST — tambah source baru.
+ * POST, tambah source baru.
  *   Body: { kind, authority, title, content, fileName?, provenance?, notes? }
  *   - kind: "brief" | "guide" | "code" | "dataset" | "reference" | "note"
  *   - authority: "binding" | "primary" | "supporting" | "example_only" | "unverified"
  *   - content max 2MB (untuk handle PDF text hasil extract).
  *
- * DELETE — hapus source.
+ * DELETE, hapus source.
  *   Query: ?sourceId=<id>
  *   - deleteMany (bukan delete) supaya idempotent kalau id sudah tidak ada.
  * -----------------------------------------------------------------------------
@@ -75,7 +75,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ proje
     return NextResponse.json({ success: false, error: "Proyek tidak ditemukan." }, { status: 404 });
   }
 
-  // deleteMany (bukan delete) — idempotent, return count=0 kalau sudah tidak ada.
+  // deleteMany (bukan delete), idempotent, return count=0 kalau sudah tidak ada.
   await prisma.studioSource.deleteMany({ where: { id: sourceId, projectId, ownerId: auth.user.id } });
   return NextResponse.json({ success: true });
 }

@@ -21,7 +21,7 @@ import { ApiRequestError } from "@/lib/server/request-guards";
 // ---------------------------------------------------------------------------
 
 /**
- * Ambil course by token (publik — buat halaman /tugas/[token]).
+ * Ambil course by token (publik, buat halaman /tugas/[token]).
  * Return null kalau token tidak ditemukan (caller decide 404).
  */
 export async function getCourseByToken(token: string) {
@@ -48,7 +48,7 @@ export async function getCourseOrThrow(courseId: string) {
 
 /**
  * Ambil tugas by id, include class. Throw 404 kalau tidak ada.
- * `assertTugasBelongsToCourse` opsional — bisa dipakai terpisah kalau perlu.
+ * `assertTugasBelongsToCourse` opsional, bisa dipakai terpisah kalau perlu.
  */
 export async function getTugasOrThrow(tugasId: string) {
   const tugas = await prisma.tugas.findUnique({
@@ -126,7 +126,7 @@ export async function assertFileUploadOwnedBy(
     throw new ApiRequestError(400, "File tidak ditemukan.");
   }
   if (file.ownerId !== userId) {
-    // Sengaja generic — anti probing ID orang lain.
+    // Sengaja generic, anti probing ID orang lain.
     throw new ApiRequestError(400, "File tidak valid untuk submit ini.");
   }
   return file;

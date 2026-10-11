@@ -1,4 +1,4 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getErrorMessage } from "@/lib/errors";
 import { searchSemanticScholar } from "@/lib/references/semantic-scholar";
 import { searchOpenAlex } from "@/lib/references/openalex";
@@ -176,7 +176,7 @@ export async function POST(req: Request) {
       })
     );
 
-    // Cek nyata link PDF (HEAD/GET ringan) — "verified" hanya kalau content-type PDF.
+    // Cek nyata link PDF (HEAD/GET ringan), "verified" hanya kalau content-type PDF.
     const pdfStatuses = await verifyPdfUrls(doiChecked.map((paper) => paper.pdfUrl));
     const verified = doiChecked.map((paper, index) => ({
       ...paper,

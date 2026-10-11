@@ -1,8 +1,8 @@
 /**
  * /api/tugas/tugas
  * -----------------------------------------------------------------------------
- * POST  — Buat tugas baru di course. Auth: course admin.
- * GET   — List tugas untuk course tertentu. Auth: login + akses course.
+ * POST, Buat tugas baru di course. Auth: course admin.
+ * GET, List tugas untuk course tertentu. Auth: login + akses course.
  *
  *   POST body: { courseId, classId?, title, description, deadline(ISO) }
  *   GET  query: ?courseId=...

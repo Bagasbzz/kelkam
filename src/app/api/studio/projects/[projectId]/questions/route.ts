@@ -4,12 +4,12 @@
  * StudioQuestion: pertanyaan terbuka yang perlu dijawab user untuk lock
  * requirement project. Dipakai oleh Question Engine (lihat src/lib/studio/engine.ts).
  *
- * POST — tambah pertanyaan baru.
+ * POST, tambah pertanyaan baru.
  *   Body: { questionKey?, category, questionClass, prompt, why?, answerHint?, ... }
  *   - questionKey unik per project (lihat @@unique di schema).
  *   - Kalau duplicate → 409.
  *
- * PUT — update pertanyaan berdasarkan questionKey.
+ * PUT, update pertanyaan berdasarkan questionKey.
  *   Body: { questionKey: string, patch: { status?, answer?, waiverReason?, priority? } }
  *   - status: "unanswered" | "answered" | "waived"
  *   - updateMany (bukan update) supaya idempotent kalau row tidak ada.

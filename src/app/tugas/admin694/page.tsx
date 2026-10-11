@@ -22,7 +22,7 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/admin — Index course yang di-manage + form bikin course baru.
+ * /tugas/admin, Index course yang di-manage + form bikin course baru.
  *
  * Auth: user harus login DAN role=ADMIN.
  */

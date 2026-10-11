@@ -1,16 +1,16 @@
 /**
  * /api/studio/projects
  * -----------------------------------------------------------------------------
- * Studio Project API — list & create.
+ * Studio Project API, list & create.
  *
  * Studio adalah workspace terstruktur untuk research workflow (Intake → Questions
  * → Decisions → Specification → Artifacts → Format). Lihat src/lib/studio/engine.ts
  * untuk state machine lengkapnya.
  *
- * GET — list semua StudioProject milik user.
+ * GET, list semua StudioProject milik user.
  *   Response: { success: true, data: StudioProject[] (dengan _count) }
  *
- * POST — buat StudioProject baru.
+ * POST, buat StudioProject baru.
  *   Body: { name?: string, projectId?: string }
  *   - Kalau projectId dikasih → reuse (idempotent via upsert)
  *   - Kalau tidak → generate random `studio_xxxxxxxx`
@@ -59,7 +59,7 @@ export async function POST(req: Request) {
       update: { ownerId: auth.user.id },
     });
 
-    // Upsert StudioProject — kalau projectId sudah ada (mis. user retry), cuma update name.
+    // Upsert StudioProject, kalau projectId sudah ada (mis. user retry), cuma update name.
     const project = await prisma.studioProject.upsert({
       where: { projectId },
       create: {

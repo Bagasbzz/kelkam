@@ -9,14 +9,14 @@ import Button from "@/components/ui/Button";
 import { useAuth } from "@/components/AuthProvider";
 
 /**
- * /login — Full-page login (and register) form.
+ * /login, Full-page login (and register) form.
  *
  * Dipakai ketika middleware (src/proxy.ts) redirect user yang belum login
  * dari path terproteksi. Selalu include `?redirect=<path>` di query.
  *
  * Pakai AuthProvider context supaya state sinkron dengan Navbar / modal lain.
  *
- * useSearchParams() WAJIB dibungkus <Suspense> di Next.js 15+ — tanpa itu
+ * useSearchParams() WAJIB dibungkus <Suspense> di Next.js 15+, tanpa itu
  * `next build` fail dengan "should be wrapped in a suspense boundary".
  */
 export default function LoginPage() {
@@ -51,7 +51,7 @@ function LoginPageInner() {
   // yang membaca cookie sesi, dan hosting me-rewrite path ke subfolder app.
   // Navigasi client-side ke sana bisa berhenti diam tanpa pindah halaman.
   function goToTarget() {
-    // Hanya path internal yang diizinkan — cegah open redirect ke domain lain.
+    // Hanya path internal yang diizinkan, cegah open redirect ke domain lain.
     const safeTarget =
       redirectTarget.startsWith("/") && !redirectTarget.startsWith("//") ? redirectTarget : "/";
     window.location.assign(safeTarget);

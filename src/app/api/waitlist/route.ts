@@ -6,14 +6,14 @@
  * Endpoint ini PUBLIK (tidak butuh login), jadi rate limit pakai IP client
  * bukan user id. Limit ketat (5 per hari per IP) supaya tidak bisa di-spam.
  *
- * POST — daftar email baru:
+ * POST, daftar email baru:
  *   Body: { email: string }
  *   - 200 { success: true, alreadyJoined: boolean }
- *   - 400 { success: false, error } — email format invalid
- *   - 429 — rate limit
+ *   - 400 { success: false, error }, email format invalid
+ *   - 429, rate limit
  *
- * GET — list semua (ADMIN ONLY, dipakai untuk dashboard internal):
- *   - 401 — belum login
+ * GET, list semua (ADMIN ONLY, dipakai untuk dashboard internal):
+ *   - 401, belum login
  *   - 200 { success: true, data: Waitlist[] }
  *
  * Skema tabel `waitlist` (lihat prisma/schema.prisma):
@@ -34,7 +34,7 @@ function clientKey(req: Request) {
   return (forwarded || req.headers.get("x-real-ip") || "unknown").slice(0, 100);
 }
 
-/** Regex email sederhana — cukup untuk waitlist, bukan validasi strict RFC. */
+/** Regex email sederhana, cukup untuk waitlist, bukan validasi strict RFC. */
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(req: Request) {

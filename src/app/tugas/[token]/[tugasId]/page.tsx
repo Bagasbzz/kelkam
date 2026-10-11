@@ -15,7 +15,7 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/[tugasId] — detail satu tugas + form kumpulkan / ubah.
+ * /tugas/[token]/[tugasId], detail satu tugas + form kumpulkan / ubah.
  * Riwayat seluruh mata kuliah ada di halaman mata kuliah, bukan di sini.
  */
 export default function TugasDetailPage() {

@@ -54,7 +54,7 @@ export function rememberJob(mode: ReportJobMode, jobId: string | null) {
   try {
     if (jobId) localStorage.setItem(KEY(mode), jobId);
     else localStorage.removeItem(KEY(mode));
-  } catch { /* storage penuh/privat — abaikan */ }
+  } catch { /* storage penuh/privat, abaikan */ }
 }
 
 export function rememberedJobId(mode: ReportJobMode) {
@@ -113,7 +113,7 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Jeda antar poll (ms). */
   intervalMs?: number;
-  /** Batas poll — 900 × 1s = 15 menit idle sebelum menyerah (bukan batas kerja). */
+  /** Batas poll, 900 × 1s = 15 menit idle sebelum menyerah (bukan batas kerja). */
   maxPolls?: number;
 }
 

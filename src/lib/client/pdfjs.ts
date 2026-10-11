@@ -17,7 +17,7 @@
 
 import * as pdfjsLib from "pdfjs-dist";
 
-// Resolve worker URL via runtime URL constructor — Turbopack-compatible
+// Resolve worker URL via runtime URL constructor, Turbopack-compatible
 // (tidak butuh `?url` import yang return default export).
 const pdfWorkerUrl = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -27,7 +27,7 @@ const pdfWorkerUrl = new URL(
 let configured = false;
 
 /**
- * Set global workerSrc untuk pdfjs-dist. Idempotent — aman dipanggil
+ * Set global workerSrc untuk pdfjs-dist. Idempotent, aman dipanggil
  * berkali-kali. Hanya jalan di browser; di server no-op.
  */
 export function configurePdfJs(): void {

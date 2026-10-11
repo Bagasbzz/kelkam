@@ -1,8 +1,8 @@
 /**
  * /api/tugas/tugas/[id]
  * -----------------------------------------------------------------------------
- * PATCH  — Edit tugas. Auth: course admin. Field partial.
- * DELETE — Hapus tugas. Auth: course admin. Cascade hapus submissions.
+ * PATCH, Edit tugas. Auth: course admin. Field partial.
+ * DELETE, Hapus tugas. Auth: course admin. Cascade hapus submissions.
  *
  *   PATCH body: partial({ title, description, deadline, classId })
  *   200 : { success, tugas }

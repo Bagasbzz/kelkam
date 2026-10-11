@@ -23,7 +23,7 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/admin/insights — AI summary untuk course.
+ * /tugas/[token]/admin/insights, AI summary untuk course.
  *
  * Auth: course admin.
  */

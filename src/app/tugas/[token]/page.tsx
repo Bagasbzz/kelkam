@@ -18,7 +18,7 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token] — halaman mata kuliah untuk mahasiswa.
+ * /tugas/[token], halaman mata kuliah untuk mahasiswa.
  * Tugas aktif dan yang sudah lewat batas waktu ditampilkan terpisah; keduanya tetap
  * bisa dibuka supaya mahasiswa bisa melihat riwayat pengumpulannya.
  */

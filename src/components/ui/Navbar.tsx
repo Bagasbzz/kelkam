@@ -3,15 +3,15 @@
  * -----------------------------------------------------------------------------
  * Top navigation. Karena web punya 10 halaman, navbar dipecah jadi:
  *
- *   1. PRIMARY (3 link) — yang paling sering diakses: Studio, Laporan, Tugas.
- *   2. DROPDOWN "Lainnya" — 7 utility link dikelompokkan per kategori:
+ *   1. PRIMARY (3 link), yang paling sering diakses: Studio, Laporan, Tugas.
+ *   2. DROPDOWN "Lainnya", 7 utility link dikelompokkan per kategori:
  *        - Rancang (UML, Editor)
  *        - Olah Data (Data Synthesizer)
  *        - AI (AI Tools)
  *        - Utilitas (Format Fix, Tools)
  *        - Pantau (Tracker)
  *
- * Pattern: Linear / Vercel / Notion pakai pendekatan serupa — biar tetep
+ * Pattern: Linear / Vercel / Notion pakai pendekatan serupa, biar tetep
  * ke-scan tapi ga overcrowded. Mobile menu tetep flat list (dropdown di
  * mobile kecil susah dijangkau).
  *
@@ -95,7 +95,7 @@ const MORE_GROUPS: NavGroup[] = [
   },
 ];
 
-/** Flat list semua link — dipakai mobile menu. */
+/** Flat list semua link, dipakai mobile menu. */
 const ALL_LINKS: NavItem[] = [
   ...PRIMARY_LINKS,
   ...MORE_GROUPS.flatMap((g) => g.items),
@@ -295,7 +295,7 @@ export default function Navbar() {
         </div>
       </nav>
 
-      {/* Mobile Menu Dropdown — flat list (lebih ramah sentuhan). */}
+      {/* Mobile Menu Dropdown, flat list (lebih ramah sentuhan). */}
       {mobileMenuOpen && (
         <div
           className="fixed inset-0 z-[90] bg-slate-900/20 backdrop-blur-sm xl:hidden"

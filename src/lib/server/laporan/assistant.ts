@@ -10,7 +10,7 @@
  */
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, stripDashes, stripThinking } from "@/lib/ai/client";
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
 import { startReportJob, getReportJob, extractDiagramArtifacts, type ReportJob, type ReportDiagramArtifact } from "@/lib/report/report-jobs";
@@ -107,13 +107,17 @@ function slug(s: string, i: number) {
   return `${s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 40) || "bagian"}-${i + 1}`;
 }
 
+/** Batas bab inti: lebih dari ini hampir pasti outline terlalu pecah (Daftar Pustaka/Lampiran bukan bab). */
+const MAX_OUTLINE_SECTIONS = 6;
+const NON_CHAPTER_TITLE = /^(daftar\s+(pustaka|isi|gambar|tabel|lampiran)|referensi|references|bibliography|lampiran|appendix|abstrak|abstract|kata\s+pengantar)\b/i;
+
 function normalizePlan(raw: unknown): ReportPlan {
   const o = asObj(raw);
   const outline: PlanSection[] = asArr(o.outline).map((s, i) => {
     const so = asObj(s);
     const title = asStr(so.title, 160) || `Bagian ${i + 1}`;
     return { id: asStr(so.id, 60) || slug(title, i), title, purpose: asStr(so.purpose, 500), requiredDiagrams: strList(so.requiredDiagrams, 6) };
-  }).slice(0, 40);
+  }).filter((s) => !NON_CHAPTER_TITLE.test(s.title.trim())).slice(0, MAX_OUTLINE_SECTIONS);
   const diagrams: PlanDiagram[] = asArr(o.diagrams).map((d, i) => {
     const dobj = asObj(d);
     const status: PlanDiagram["status"] = dobj.status === "approved" || dobj.status === "failed" ? dobj.status : "planned";
@@ -242,24 +246,25 @@ function systemPrompt(state: { stage: string; brief: ReportBrief; plan: ReportPl
   return `Anda adalah Asisten Laporan keluhkampus: pembimbing penulisan akademik yang mengobrol natural (bukan formulir), lalu MENGERJAKAN laporan/skripsi untuk pengguna.
 
 ALUR:
-1. INTAKE — ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru → panggil updateBrief.
-2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
-3. EXECUTING — hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
-4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat — jangan membuat ulang kecuali diminta.
-5. VISUAL — laporan tidak boleh polos. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
-   a) diagrams type flowchart/usecase/activity/sequence → dibuat otomatis oleh engine UML Builder (vektor, bisa diedit user).
-   b) diagrams type arsitektur/erd/class/konsep/kerangka → dibuat otomatis sebagai diagram vektor terstruktur (kotak komponen + relasi), BUKAN gambar AI.
-   c) figures (ilustrasi: skema konsep, ilustrasi proses nyata, gambaran lingkungan/alat) → dibuat otomatis lewat model gambar di background saat eksekusi; prompt bahasa Inggris, gaya ilustrasi teknis bersih latar putih, tanpa teks panjang.
-   Target: tiap bab inti (landasan teori, metode/perancangan, hasil) punya minimal 1 visual; bab pendahuluan boleh 1 ilustrasi; semua diberi sectionId. Setelah drafted, bila user minta gambar tambahan, pakai generateFigure (ilustrasi) — jangan untuk diagram.
+1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru, panggil updateBrief.
+2. PLANNED: bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
+   JUMLAH BAB (wajib ikuti kecuali ketentuan format kampus user menyebut lain): makalah/paper/laporan praktikum/laporan tugas = 3-4 bab (Pendahuluan, Landasan Teori/Tinjauan Pustaka, Pembahasan, Penutup); laporan proyek/PKL/magang = 4-5 bab; skripsi/tugas akhir/tesis = 5 bab (Pendahuluan, Tinjauan Pustaka, Metode, Hasil dan Pembahasan, Penutup). Maksimal 6 bab hanya bila formatRules user menyebut eksplisit. Daftar Pustaka dan Lampiran BUKAN bab, jangan masukkan ke outline. Gabungkan materi ke sub-bab, bukan menambah bab baru.
+3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
+4. DRAFTED: user bisa minta revisi bagian tertentu, panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat, jangan membuat ulang kecuali diminta.
+5. VISUAL: laporan tidak boleh polos. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
+   a) diagrams type flowchart/usecase/activity/sequence: dibuat otomatis oleh engine UML Builder (vektor, bisa diedit user).
+   b) diagrams type arsitektur/erd/class/konsep/kerangka: dibuat otomatis sebagai diagram vektor terstruktur (kotak komponen + relasi), BUKAN gambar AI.
+   c) figures (ilustrasi: skema konsep, ilustrasi proses nyata, gambaran lingkungan/alat): dibuat otomatis lewat model gambar di background saat eksekusi; prompt bahasa Inggris, gaya ilustrasi teknis bersih latar putih, tanpa teks panjang.
+   Target: tiap bab inti (landasan teori, metode/perancangan, hasil) punya minimal 1 visual; bab pendahuluan boleh 1 ilustrasi; semua diberi sectionId. Setelah drafted, bila user minta gambar tambahan, pakai generateFigure (ilustrasi), jangan untuk diagram.
 
 ATURAN KEJUJURAN (mutlak):
 - Sumber hanya dari hasil findSources (DOI terverifikasi Crossref). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
 - Peringkat SINTA/Scimago TIDAK bisa dipastikan otomatis; katakan bahwa sistem menyaring (ISSN/DOAJ/DOI) dan user memverifikasi tier lewat tautan "Cek Scimago/SINTA" yang disediakan. Jangan mengklaim "Q1" atau "SINTA 2" sebagai fakta.
 - Sistem hanya membaca ABSTRAK sumber (readLevel=abstract), bukan teks penuh. Jangan bilang sudah membaca isi jurnal.
-- Jangan janji lolos Turnitin/deteksi AI.
+- Jangan janji lolos Turnitin/deteksi AI. Sistem hanya menekan kemiripan lewat parafrase dan cek n-gram lokal; hasil Turnitin kampus tetap bisa berbeda.
 - Jangan mengarang isi bahan user; jika bahan belum diunggah, minta.
 
-GAYA JAWABAN: Bahasa Indonesia, hangat tapi padat, markdown ringan. Setelah tool berjalan, jelaskan hasil singkat (UI sudah menampilkan detail rencana/sumber, jangan ulangi semuanya).
+GAYA JAWABAN: Bahasa Indonesia, hangat tapi padat, markdown ringan. Jangan pernah memakai tanda em dash atau en dash; pakai koma, titik, atau tanda kurung. Setelah tool berjalan, jelaskan hasil singkat (UI sudah menampilkan detail rencana/sumber, jangan ulangi semuanya).
 
 STATE SAAT INI (sumber kebenaran, bukan riwayat chat):
 stage=${state.stage}; brief=${JSON.stringify(state.brief)}; briefKurang=${missing.join(", ") || "-"};
@@ -294,12 +299,12 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "proposePlan",
-      description: "Buat/perbarui rencana: outline bab, diagram, tabel, dan query pencarian sumber. Sesuaikan dengan jenis dokumen & ketentuan format user.",
+      description: "Buat/perbarui rencana: outline bab, diagram, tabel, dan query pencarian sumber. Sesuaikan dengan jenis dokumen & ketentuan format user. Outline hanya bab inti (makalah 3-4, laporan proyek 4-5, skripsi 5; maksimal 6 hanya jika format kampus mewajibkan). Jangan masukkan Daftar Pustaka/Lampiran.",
       parameters: {
         type: "object",
         properties: {
           outline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, requiredDiagrams: { type: "array", items: { type: "string" } } }, required: ["title", "purpose"] } },
-          diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "UML: flowchart|usecase|activity|sequence. Non-UML (vektor terstruktur): arsitektur|erd|class|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen) — bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
+          diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "UML: flowchart|usecase|activity|sequence. Non-UML (vektor terstruktur): arsitektur|erd|class|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen), bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
           tables: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, columns: { type: "array", items: { type: "string" } }, sectionId: { type: "string" } }, required: ["title", "purpose", "sectionId"] } },
           figures: { type: "array", description: "Ilustrasi non-diagram (maks 6) yang dibuat model gambar saat eksekusi.", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string", description: "Judul singkat Bahasa Indonesia, mis. 'Ilustrasi Proses Fermentasi'." }, caption: { type: "string" }, prompt: { type: "string", description: "Deskripsi visual detail bahasa Inggris untuk model gambar." }, sectionId: { type: "string" } }, required: ["title", "prompt", "sectionId"] } },
           sourceQueries: { type: "array", items: { type: "string" }, description: "3-6 query pencarian literatur (bahasa Inggris & Indonesia)." },
@@ -691,7 +696,7 @@ async function announceJobFailed(state: SessionState, job: ReportJob) {
     if (await alreadyAnnounced(state.id, job.id)) return;
     const content = job.status === "cancelled"
       ? "Penulisan dibatalkan. Rencana dan sumber masih tersimpan; klik **Setujui & eksekusi** atau ketik \"eksekusi\" untuk memulai lagi."
-      : `Penulisan berhenti: ${job.error || "terjadi kesalahan"}. Ketik "eksekusi" untuk mencoba lagi — bagian yang sudah jadi tidak diulang.`;
+      : `Penulisan berhenti: ${job.error || "terjadi kesalahan"}. Ketik "eksekusi" untuk mencoba lagi, bagian yang sudah jadi tidak diulang.`;
     await prisma.reportMessage.create({ data: { sessionId: state.id, role: "assistant", content, toolCalls: { tools: [], jobDone: job.id } } });
   } catch (error) {
     console.error("[laporan] announceJobFailed gagal:", error);
@@ -856,7 +861,7 @@ export async function executeSession(sessionId: string, ownerId: string, opts: {
 }
 
 // ---------------------------------------------------------------------------
-// Agent run (tahan lama, bisa dilanjutkan) — lihat agent-runs/engine.ts
+// Agent run (tahan lama, bisa dilanjutkan), lihat agent-runs/engine.ts
 // ---------------------------------------------------------------------------
 
 const RUN_KIND = "laporan" as const;
@@ -944,7 +949,7 @@ export const laporanAgentDriver: AgentDriver = {
     const state = await loadSessionForRun(run.sessionId, run.ownerId);
     return `${systemPrompt({ stage: state.stage, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials, jobId: state.jobId, hasDraft: Boolean(state.draft), summary: state.summary })}
 
-MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali (mis. findSources untuk tiap query, satu per satu) sampai pekerjaan benar-benar selesai. Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke user. Setelah semua selesai, tulis satu jawaban akhir yang ringkas. Jika user mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada.`;
+MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama, boleh memanggil tool berkali-kali (mis. findSources untuk tiap query, satu per satu) sampai pekerjaan benar-benar selesai. Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke user. Setelah semua selesai, tulis satu jawaban akhir yang ringkas. Jika user mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada.`;
   },
   async runTool(name, args, ctx: AgentToolContext) {
     const state = await loadSessionForRun(ctx.run.sessionId, ctx.run.ownerId);
@@ -983,7 +988,7 @@ async function summarizeOld(messages: { role: string; content: string }[], prev:
       }, { timeout: 15_000 }),
       16_000,
     );
-    return stripThinking(r.choices[0]?.message?.content) || prev || "";
+    return stripDashes(stripThinking(r.choices[0]?.message?.content)) || prev || "";
   } catch {
     return prev || "";
   }

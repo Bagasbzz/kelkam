@@ -6,7 +6,7 @@
  * Pattern: sidebar list (TOOLS array) + content area (form + run button).
  * Sidebar di-mobile collapse ke top tabs (lihat parent /tools/page.tsx).
  *
- * Props dikontrol oleh caller — shell cuma render + kasih state.
+ * Props dikontrol oleh caller, shell cuma render + kasih state.
  * Untuk Tabs umbrella antar-kategori (PDF/DOCX/Image), lihat Tabs.tsx.
  * -----------------------------------------------------------------------------
  */

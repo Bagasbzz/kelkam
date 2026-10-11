@@ -10,12 +10,12 @@
  *
  * Response shape:
  *   - 200 { success: true, data: ReferenceLibrary[] }
- *   - 400 — projectId format invalid
- *   - 401 — belum login
- *   - 404 — proyek tidak ditemukan / bukan milik user
- *   - 500 — DB error
+ *   - 400, projectId format invalid
+ *   - 401, belum login
+ *   - 404, proyek tidak ditemukan / bukan milik user
+ *   - 500, DB error
  *
- * Cache-Control: private, no-store (jangan cache di proxy/browser — data
+ * Cache-Control: private, no-store (jangan cache di proxy/browser, data
  * spesifik per user).
  * -----------------------------------------------------------------------------
  */

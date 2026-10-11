@@ -1,7 +1,7 @@
 /**
  * src/app/tools/page.tsx
  * -----------------------------------------------------------------------------
- * Halaman /tools — umbrella untuk PDF/DOCX/Image tools. Tabs primitive
+ * Halaman /tools, umbrella untuk PDF/DOCX/Image tools. Tabs primitive
  * dari `src/components/ui/Tabs.tsx`; tiap tab render panel tools kategori
  * masing-masing (server-component shell + client island).
  *
@@ -18,7 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
 
 export const metadata = {
   title: "Tools | keluhkampus",
-  description: "Kumpulan tools PDF, DOCX, dan Image — semua proses di browser, file aman.",
+  description: "Kumpulan tools PDF, DOCX, dan Image, semua proses di browser, file aman.",
 };
 
 export default function ToolsPage() {

@@ -1444,7 +1444,7 @@ export default function UMLBuilder() {
 
           {connectMode && (
             <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: '8px', padding: '8px 14px', fontSize: '0.8rem', color: '#92400e', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Zap size={16} /> <strong>Connect Mode</strong> — {connectFromId ? 'Click a target element.' : 'Click the source element.'}
+              <Zap size={16} /> <strong>Connect Mode</strong>: {connectFromId ? 'Click a target element.' : 'Click the source element.'}
             </div>
           )}
 
@@ -1502,7 +1502,7 @@ export default function UMLBuilder() {
                 <option value="usecase">Use Case Diagram</option>
                 <option value="activity">Activity Diagram</option>
                 <option value="sequence">Sequence Diagram</option>
-                <optgroup label="— Coming Soon —">
+                <optgroup label="Coming Soon">
                   <option value="class" disabled>Class Diagram (soon)</option>
                   <option value="state" disabled>State Diagram (soon)</option>
                 </optgroup>

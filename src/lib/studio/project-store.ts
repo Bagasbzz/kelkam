@@ -274,7 +274,7 @@ export function saveStudioWorkspace(storage: StorageLike, workspace: StudioWorks
 export function duplicateStudioProject(project: StudioProject, timestamp = new Date().toISOString()) {
   const duplicate = normalizeStudioProject(project, timestamp);
   duplicate.id = makeStudioId("project");
-  duplicate.name = `${project.name} — Salinan`;
+  duplicate.name = `${project.name} (Salinan)`;
   duplicate.createdAt = timestamp;
   duplicate.updatedAt = timestamp;
   duplicate.revision = 1;

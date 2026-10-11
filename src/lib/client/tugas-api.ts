@@ -56,7 +56,7 @@ async function fetchWithTimeout(
   }
 }
 // ---------------------------------------------------------------------------
-// Shared types (mirror Prisma shape — boleh ringkas)
+// Shared types (mirror Prisma shape, boleh ringkas)
 // ---------------------------------------------------------------------------
 
 export interface CourseSummary {
@@ -437,7 +437,7 @@ export interface AssistantMessage {
 
 /**
  * Kirim pesan ke Asisten Dosen sebagai agent run tahan lama. Mengembalikan
- * `Response` stream NDJSON (header `x-session-id`, `x-run-id`) — dibaca dengan
+ * `Response` stream NDJSON (header `x-session-id`, `x-run-id`), dibaca dengan
  * `followRun` dari `@/lib/client/agent-run`.
  */
 export async function openAssistantRunStream(

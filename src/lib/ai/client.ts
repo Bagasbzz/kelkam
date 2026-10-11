@@ -81,6 +81,21 @@ export function stripThinking(text: string | null | undefined): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^<think>[\s\S]*$/i, "").trim();
 }
 
+/**
+ * Buang em dash / en dash (ciri khas teks AI) dari output model.
+ * Rentang angka jadi tanda hubung, sel tabel kosong jadi "-", sisanya jadi koma.
+ */
+export function stripDashes(text: string | null | undefined): string {
+  if (!text) return "";
+  return text
+    .replace(/(\d)\s*[\u2013\u2014]\s*(\d)/g, "$1-$2")
+    .replace(/\|\s*[\u2013\u2014]\s*(?=\|)/g, "| - ")
+    .replace(/^(\s*)[\u2013\u2014]\s+/gm, "$1- ")
+    .replace(/\s*[\u2013\u2014]+\s*/g, ", ")
+    .replace(/,\s*,/g, ",")
+    .replace(/,\s*([.;:!?)\]])/g, "$1");
+}
+
 export interface GeneratedImage {
   png: Buffer;
   revisedPrompt?: string;
@@ -88,7 +103,7 @@ export interface GeneratedImage {
 }
 
 /**
- * Generate satu gambar PNG. LAMBAT (~1.5-2.5 menit) — jangan panggil dari request
+ * Generate satu gambar PNG. LAMBAT (~1.5-2.5 menit), jangan panggil dari request
  * HTTP biasa; pakai job background (`src/lib/server/image-jobs.ts`).
  */
 export async function generateImage(prompt: string, options: { size?: "1024x1024" | "1536x1024" | "1024x1536"; quality?: "low" | "medium" | "high"; timeoutMs?: number } = {}): Promise<GeneratedImage> {

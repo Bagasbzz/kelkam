@@ -18,11 +18,11 @@
  *
  * Response shape:
  *   - 200 { success: true, data: { fileId, sha256, deduplicated, size, mime } }
- *   - 400 — file tidak ada / nama invalid
- *   - 401 — belum login
- *   - 413 — file > 12 MB
- *   - 429 — rate limit
- *   - 500 — server error
+ *   - 400, file tidak ada / nama invalid
+ *   - 401, belum login
+ *   - 413, file > 12 MB
+ *   - 429, rate limit
+ *   - 500, server error
  *
  * Setelah upload, downstream route (mis. /api/context/extract) akan baca
  * file via `readUpload(fileId, ownerId)` di src/lib/storage/upload.ts.
@@ -38,7 +38,7 @@ import { saveUpload } from "@/lib/storage/upload";
 /** Pakai Node.js runtime (bukan Edge) karena pakai fs + buffer. */
 export const runtime = "nodejs";
 
-/** Timeout 60 detik — handle file besar. */
+/** Timeout 60 detik, handle file besar. */
 export const maxDuration = 60;
 
 export async function POST(req: Request) {

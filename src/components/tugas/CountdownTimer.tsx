@@ -57,7 +57,7 @@ export default function CountdownTimer({ deadline, className = "" }: CountdownTi
     return (
       <div className={`inline-flex items-center gap-2 text-slate-500 text-xs ${className}`}>
         <Clock className="w-4 h-4" />
-        <span>—</span>
+        <span>-</span>
       </div>
     );
   }

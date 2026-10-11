@@ -7,17 +7,17 @@
  *   1. Auth + rate limit (8 per 10 menit).
  *   2. Validasi projectId & ownership.
  *   3. Ambil evidence user untuk project ini (max 40 row, compact 12 ke prompt).
- *   4. Susun prompt → panggil AI (model "review" — butuh penalaran).
+ *   4. Susun prompt → panggil AI (model "review", butuh penalaran).
  *   5. Parse JSON → normalize (filter referenceId valid, length clamp).
  *   6. Kalau AI gagal → fallback generator dari evidence yang ada.
  *
  * Response shape:
  *   - 200 { success: true, data: NoveltyCandidate[], source: "ai" | "fallback" }
- *   - 400 — projectId invalid / belum ada evidence
- *   - 401 — belum login
- *   - 404 — proyek bukan milik user
- *   - 429 — rate limit
- *   - 500 — server error
+ *   - 400, projectId invalid / belum ada evidence
+ *   - 401, belum login
+ *   - 404, proyek bukan milik user
+ *   - 429, rate limit
+ *   - 500, server error
  * -----------------------------------------------------------------------------
  */
 
@@ -102,7 +102,7 @@ function parseAiJson(response: string): unknown {
   }
 }
 
-/** Filter & clamp AI output — hanya terima candidate dengan field wajib valid. */
+/** Filter & clamp AI output, hanya terima candidate dengan field wajib valid. */
 function normalizeCandidates(value: unknown, validReferenceIds: Set<string>) {
   if (!Array.isArray(value)) return null;
   const candidates = value

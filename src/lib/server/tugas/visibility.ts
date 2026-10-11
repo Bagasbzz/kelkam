@@ -21,7 +21,7 @@ import { prisma } from "@/lib/db/prisma";
 
 /**
  * Data yang dikirim ke mahasiswa: count total + submission sendiri (kalau ada).
- * Submission orang lain TIDAK di-include — privacy by design.
+ * Submission orang lain TIDAK di-include, privacy by design.
  */
 export async function getStudentView(tugasId: string, userId: string) {
   const tugas = await prisma.tugas.findUnique({

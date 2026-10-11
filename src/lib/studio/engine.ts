@@ -629,7 +629,7 @@ function questionTemplates(): QuestionTemplate[] {
       class: "blocker",
       prompt: "Siapa saja aktor dan apa tanggung jawab atau hak aksesnya?",
       why: "UML sering salah karena aktor, boundary, dan kewenangannya belum disepakati.",
-      answerHint: "Format per baris: Aktor — tanggung jawab/hak akses.",
+      answerHint: "Format per baris: Aktor - tanggung jawab/hak akses.",
       impact: 5,
       uncertainty: 4,
       revisionRisk: 5,
@@ -699,7 +699,7 @@ function questionTemplates(): QuestionTemplate[] {
       class: "important",
       prompt: "Apa kondisi gagal, data tidak valid, atau jalur alternatif yang harus ditangani?",
       why: "Exception yang hilang adalah penyebab diagram terlihat benar tetapi sistem tetap mudah bug.",
-      answerHint: "Format: kondisi — respons sistem — hasil akhir.",
+      answerHint: "Format: kondisi - respons sistem - hasil akhir.",
       impact: 4,
       uncertainty: 5,
       revisionRisk: 5,
@@ -1229,10 +1229,10 @@ function collectCategoryValues(project: StudioProject, category: QuestionCategor
 
 function parseActors(value: string): SpecificationActor[] {
   return splitList(value).map((line) => {
-    const [name, ...responsibility] = line.split(/\s+(?:—|-|:)\s+/);
+    const [name, ...responsibility] = line.split(/\s+(?:\u2014|-|:)\s+/);
     return {
       name: clean(name) || line,
-      responsibility: clean(responsibility.join(" — ")) || "Tanggung jawab perlu dirinci",
+      responsibility: clean(responsibility.join(", ")) || "Tanggung jawab perlu dirinci",
     };
   });
 }
@@ -1285,7 +1285,7 @@ export function compileProjectSpecification(project: StudioProject, timestamp = 
     unresolvedBlockers: blockerQuestions.map((question) => question.prompt),
     assumptions: project.questions
       .filter((question) => question.status === "waived")
-      .map((question) => `${question.prompt} — diasumsikan/diabaikan: ${question.waiverReason}`),
+      .map((question) => `${question.prompt}, diasumsikan/diabaikan: ${question.waiverReason}`),
   } satisfies ProjectSpecification;
 }
 
@@ -1315,7 +1315,7 @@ export function validateFormatProfile(project: StudioProject) {
         `margin-${side}`,
         "error",
         `margins.${side}`,
-        `Margin ${side} ${value} mm berada di luar batas aman 15–60 mm.`,
+        `Margin ${side} ${value} mm berada di luar batas aman 15-60 mm.`,
         "Cocokkan angka dengan pedoman resmi.",
       );
     }
@@ -1330,7 +1330,7 @@ export function validateFormatProfile(project: StudioProject) {
     add("heading-size", "warning", "heading1FontSize", "Heading 1 lebih kecil dari body.", "Naikkan Heading 1 atau konfirmasi pengecualian pada pedoman.");
   }
   if (profile.lineSpacing < 1 || profile.lineSpacing > 2.5) {
-    add("line-spacing", "error", "lineSpacing", "Line spacing berada di luar rentang 1–2,5.", "Masukkan nilai dari pedoman.");
+    add("line-spacing", "error", "lineSpacing", "Line spacing berada di luar rentang 1-2,5.", "Masukkan nilai dari pedoman.");
   }
   if (profile.requiredSections.length === 0) {
     add("required-sections", "error", "requiredSections", "Daftar bagian wajib masih kosong.", "Masukkan seluruh halaman awal, BAB, dan lampiran wajib.");
@@ -1604,7 +1604,7 @@ export function specificationAsMarkdown(specification: ProjectSpecification) {
     section("Cakupan Keluar", specification.scopeOut),
     section(
       "Aktor dan Tanggung Jawab",
-      specification.actors.map((actor) => `${actor.name} — ${actor.responsibility}`),
+      specification.actors.map((actor) => `${actor.name}: ${actor.responsibility}`),
     ),
     section("Kebutuhan Fungsional", specification.functionalRequirements),
     section("Kebutuhan Nonfungsional", specification.nonFunctionalRequirements),

@@ -10,7 +10,7 @@ import { fetchMe, type ManagedCourse } from "@/lib/client/tugas-api";
 import { useAuth } from "@/components/AuthProvider";
 
 /**
- * /tugas — halaman masuk mata kuliah.
+ * /tugas, halaman masuk mata kuliah.
  * Hanya kolom token. Pengelola mata kuliah melihat satu tautan kecil ke halaman kelolanya.
  */
 export default function TugasLanding() {

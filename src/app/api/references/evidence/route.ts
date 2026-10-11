@@ -8,15 +8,15 @@
  *   - list = data referensi mentah dari provider (Semantic Scholar dll)
  *   - evidence = ringkasan AI yang sudah di-extract dari referensi
  *
- * Limit 500 per request — evidence matrix biasanya butuh lebih banyak
+ * Limit 500 per request, evidence matrix biasanya butuh lebih banyak
  * daripada reference list karena tiap referensi bisa punya 1+ evidence row.
  *
  * Response shape:
  *   - 200 { success: true, data: ReferenceEvidence[] }
- *   - 400 — projectId format invalid
- *   - 401 — belum login
- *   - 404 — proyek tidak ditemukan
- *   - 500 — DB error
+ *   - 400, projectId format invalid
+ *   - 401, belum login
+ *   - 404, proyek tidak ditemukan
+ *   - 500, DB error
  * -----------------------------------------------------------------------------
  */
 

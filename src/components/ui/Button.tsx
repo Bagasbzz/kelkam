@@ -1,7 +1,7 @@
 /**
  * src/components/ui/Button.tsx
  * -----------------------------------------------------------------------------
- * Button primitive — konsisten dengan design system keluhkampus.
+ * Button primitive, konsisten dengan design system keluhkampus.
  *
  * Design tokens:
  *   - Color base: slate-* (sesuai layout.tsx & Navbar).

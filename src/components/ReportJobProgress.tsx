@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * ReportJobProgress — panel progres detail ala "sedang dikerjakan":
+ * ReportJobProgress, panel progres detail ala "sedang dikerjakan":
  *  - progress bar + stage + ETA kasar
  *  - daftar BAB dengan status, durasi, kata, percobaan
  *  - log event server (apa yang sedang dilakukan AI)
@@ -102,7 +102,7 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
 
       {runningStep && active && (
         <p className="mt-2 text-sm text-blue-700">
-          Sedang menulis <b>{runningStep.title}</b> — {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
+          Sedang menulis <b>{runningStep.title}</b>, {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
           {runningStep.attempts > 1 ? ` (percobaan ${runningStep.attempts})` : ""}. Satu bagian biasanya 15-60 dtk.
         </p>
       )}
@@ -110,7 +110,7 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
       {(stuck || stalled) && (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           <b>Proses tidak bergerak {idle} dtk.</b> {stuck
-            ? "Koneksi/polling terputus. Klik Lanjutkan — pekerjaan diteruskan dari bagian terakhir, bukan dari awal."
+            ? "Koneksi/polling terputus. Klik Lanjutkan, pekerjaan diteruskan dari bagian terakhir, bukan dari awal."
             : "Server mungkin lambat. Kalau terus diam >2 menit, refresh halaman lalu klik Lanjutkan."}
         </div>
       )}

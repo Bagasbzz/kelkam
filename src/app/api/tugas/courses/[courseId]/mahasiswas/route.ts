@@ -48,7 +48,7 @@ const AI_SYSTEM = `Anda adalah parser data mahasiswa. Output HARUS JSON array of
 Jangan tambahkan field lain. Jangan ada markdown. Jangan ada penjelasan. Hanya JSON array. Contoh:
 [{"nim":"23/1234","name":"Budi Santoso","className":"A"}]
 
-Input user kemungkinan besar paste dari Excel/Word — setiap baris 1 mahasiswa. Format bisa:
+Input user kemungkinan besar paste dari Excel/Word, setiap baris 1 mahasiswa. Format bisa:
 - "NIM,Nama,Kelas" (CSV)
 - "NIM - Nama (Kelas)" (dengan separator)
 - Tab-separated

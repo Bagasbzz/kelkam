@@ -7,7 +7,7 @@
  *
  * Auth: harus login. Response shape:
  *   - 200 { success: true, isAdmin, managedCourses: [{id, name, code, token, isCreator}] }
- *   - 401 — belum login
+ *   - 401, belum login
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";

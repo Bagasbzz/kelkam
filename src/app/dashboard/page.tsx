@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * /dashboard — "Laporan": asisten chat untuk menyusun laporan/skripsi.
+ * /dashboard, "Laporan": asisten chat untuk menyusun laporan/skripsi.
  * Alur: ngobrol (AI bertanya) → rencana + sumber terverifikasi → setujui →
  * eksekusi (job tahan lama) → revisi per bagian via chat → unduh DOCX.
  */
@@ -39,7 +39,7 @@ const TABS: ReadonlyArray<[Tab, string, typeof ListChecks]> = [
   ["rencana", "Rencana", ListChecks], ["sumber", "Sumber", BookOpen], ["bahan", "Bahan", Upload], ["gambar", "Gambar", ImageIcon], ["draft", "Draft", FileText],
 ];
 
-/** Breakpoint `lg` Tailwind — di bawah ini panel samping jadi bottom sheet. */
+/** Breakpoint `lg` Tailwind, di bawah ini panel samping jadi bottom sheet. */
 const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
@@ -367,7 +367,7 @@ export default function LaporanPage() {
       const title = detail.title || detail.brief.title || "Laporan";
       const cover = {
         title,
-        subtitle: detail.brief.documentType ? `${detail.brief.documentType}${detail.brief.course ? ` — ${detail.brief.course}` : ""}` : undefined,
+        subtitle: detail.brief.documentType ? `${detail.brief.documentType}${detail.brief.course ? `, ${detail.brief.course}` : ""}` : undefined,
         author: user?.name || undefined,
         institution: detail.brief.institution || undefined,
         year: String(new Date().getFullYear()),
@@ -492,13 +492,13 @@ export default function LaporanPage() {
                       {detail.plan.diagrams.length > 0 && (
                         <div>
                           <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan.diagrams.length})</div>
-                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type}{d.svg ? " · sudah dibuat" : ""})</span> — {d.purpose}</li>)}</ul>
+                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type}{d.svg ? " · sudah dibuat" : ""})</span>, {d.purpose}</li>)}</ul>
                         </div>
                       )}
                       {detail.plan.tables.length > 0 && (
                         <div>
                           <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Table2 className="h-3.5 w-3.5" /> Tabel ({detail.plan.tables.length})</div>
-                          <ul className="space-y-1 text-xs">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{t.title}</b> — {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
+                          <ul className="space-y-1 text-xs">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{t.title}</b>, {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
                         </div>
                       )}
                       <p className="text-sm text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
@@ -509,7 +509,7 @@ export default function LaporanPage() {
 
               {detail && tab === "sumber" && (
                 <div className="space-y-2">
-                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis — cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
+                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis, cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
                   {!detail.sources.length && <p className="text-xs text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
                   {detail.sources.map((s) => (
                     <div key={s.id} className="rounded-xl border border-slate-100 p-2">
@@ -783,7 +783,7 @@ function BriefView({ brief }: { brief: ReportBrief }) {
     ["Format", brief.formatRules], ["Target", brief.targetLength],
   ];
   const filled = rows.filter(([, v]) => v);
-  if (!filled.length) return <p className="text-xs text-slate-500">Brief masih kosong — ceritakan tugasmu di chat.</p>;
+  if (!filled.length) return <p className="text-xs text-slate-500">Brief masih kosong, ceritakan tugasmu di chat.</p>;
   return (
     <dl className="grid grid-cols-[90px_1fr] gap-x-2 gap-y-1 text-xs">
       {filled.map(([k, v]) => <FragmentRow key={k} k={k} v={v!} />)}

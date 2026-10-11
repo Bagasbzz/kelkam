@@ -1,7 +1,7 @@
 /**
  * src/components/ui/ConfirmDialog.tsx
  * -----------------------------------------------------------------------------
- * Modal konfirmasi reusable — pengganti `window.confirm()`. Dipakai saat
+ * Modal konfirmasi reusable, pengganti `window.confirm()`. Dipakai saat
  * aksi destruktif (delete tugas, remove admin, dll).
  *
  * Pakai:
@@ -40,7 +40,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
-  /** Sembunyikan tombol batal — untuk dialog informasi yang cukup ditutup dengan satu tombol. */
+  /** Sembunyikan tombol batal, untuk dialog informasi yang cukup ditutup dengan satu tombol. */
   hideCancel?: boolean;
 }
 

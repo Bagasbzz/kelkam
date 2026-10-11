@@ -12,7 +12,7 @@ import { useAuth } from "@/components/AuthProvider";
 import { fetchCourseByToken, type CourseSummary } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/admin/mahasiswas — Roster management.
+ * /tugas/[token]/admin/mahasiswas, Roster management.
  *
  * Auth: course admin (User.role=ADMIN atau co-admin). Page-level guard via
  * user.role=ADMIN; backend endpoint enforces CourseAdmin lebih ketat.

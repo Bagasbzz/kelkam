@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Panel untuk 10 tool PDF. Mengikuti pola ToolPanelShell: sidebar daftar
  * tool + content area. State internal pakai useState biasa (tidak perlu
- * useReducer — jumlah state kecil per tool).
+ * useReducer, jumlah state kecil per tool).
  *
  * Catatan warna: SEMUA primary action biru (blue-600) untuk harmonisasi
  * dengan design system. Banner info/success/warn dari ToolPanelShell.
@@ -155,7 +155,7 @@ export function PDFToolsPanel() {
           {active === "crop" && (
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-400 px-2 mb-2">
-                Crop box (x, y, w, h) — pisahkan dengan koma
+                Crop box (x, y, w, h), pisahkan dengan koma
               </label>
               <input
                 value={cropRect}

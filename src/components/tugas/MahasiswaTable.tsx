@@ -12,7 +12,7 @@ import {
 
 interface MahasiswaTableProps {
   courseId: string;
-  /** Optional refresh signal — increment to force reload. */
+  /** Optional refresh signal, increment to force reload. */
   refreshKey?: number;
   onChanged?: () => void;
 }
@@ -124,7 +124,7 @@ export default function MahasiswaTable({
                     <td className="px-4 py-2 font-mono text-xs">{r.nim}</td>
                     <td className="px-4 py-2 font-bold text-slate-900">{r.name}</td>
                     <td className="px-4 py-2 text-xs text-slate-500">
-                      {r.class?.name ?? "—"}
+                      {r.class?.name ?? "-"}
                     </td>
                     <td className="px-4 py-2 text-right">
                       <button

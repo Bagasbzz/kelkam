@@ -1,5 +1,5 @@
-﻿/**
- * /api/ai/generate-uml — wrapper HTTP untuk pipeline UML (lihat src/lib/uml/pipeline.ts).
+/**
+ * /api/ai/generate-uml, wrapper HTTP untuk pipeline UML (lihat src/lib/uml/pipeline.ts).
  * Pipeline yang sama dipakai job laporan supaya diagram di laporan = diagram UML Builder.
  */
 import { NextResponse } from "next/server";

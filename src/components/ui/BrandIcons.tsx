@@ -9,7 +9,7 @@
  * 1.5, bisa di-override lewat prop `strokeWidth`.
  *
  * Daftar icon:
- *   - LogoKK      : logo utama — graduation cap + speech bubble corner
+ *   - LogoKK      : logo utama, graduation cap + speech bubble corner
  *   - IconBrain   : buat /studio (AI thinking)
  *   - IconChart   : buat /dashboard (laporan/chart)
  *   - IconCheck   : buat /tugas (checklist/submitted)
@@ -25,7 +25,7 @@
 
 import type { ComponentType, SVGProps } from "react";
 
-/** Tipe komponen icon — bisa dipakai untuk typed nav link list. */
+/** Tipe komponen icon, bisa dipakai untuk typed nav link list. */
 export type IconCmp = ComponentType<SVGProps<SVGSVGElement> & { strokeWidth?: number }>;
 
 interface IconProps extends Omit<SVGProps<SVGSVGElement>, "stroke"> {
@@ -48,7 +48,7 @@ function base(props: IconProps) {
 }
 
 /**
- * LogoKK — graduation cap dengan corner "speech bubble" di kanan bawah
+ * LogoKK, graduation cap dengan corner "speech bubble" di kanan bawah
  * (mengacu ke "keluh" = curhat mahasiswa). Simple, memorable.
  */
 export function LogoKK(props: IconProps) {
@@ -62,7 +62,7 @@ export function LogoKK(props: IconProps) {
   );
 }
 
-/** Brain circuit — buat AI Studio. */
+/** Brain circuit, buat AI Studio. */
 export function IconBrain(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -76,7 +76,7 @@ export function IconBrain(props: IconProps) {
   );
 }
 
-/** Bar chart — buat /dashboard. */
+/** Bar chart, buat /dashboard. */
 export function IconChart(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -88,7 +88,7 @@ export function IconChart(props: IconProps) {
   );
 }
 
-/** Checklist — buat /tugas. */
+/** Checklist, buat /tugas. */
 export function IconCheck(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -98,7 +98,7 @@ export function IconCheck(props: IconProps) {
   );
 }
 
-/** Wrench — buat /tools. */
+/** Wrench, buat /tools. */
 export function IconWrench(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -109,7 +109,7 @@ export function IconWrench(props: IconProps) {
   );
 }
 
-/** Flow / loop arrow — buat /uml-builder. */
+/** Flow / loop arrow, buat /uml-builder. */
 export function IconFlow(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -122,7 +122,7 @@ export function IconFlow(props: IconProps) {
   );
 }
 
-/** Open book — buat /data-synthesizer (narasi). */
+/** Open book, buat /data-synthesizer (narasi). */
 export function IconBook(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -134,7 +134,7 @@ export function IconBook(props: IconProps) {
   );
 }
 
-/** Neural node / cognitive assistant — pengganti sparkle bintang untuk AI. */
+/** Neural node / cognitive assistant, pengganti sparkle bintang untuk AI. */
 export function IconSpark(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -146,7 +146,7 @@ export function IconSpark(props: IconProps) {
   );
 }
 
-/** Typography / text — buat /fix-format. */
+/** Typography / text, buat /fix-format. */
 export function IconType(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -157,7 +157,7 @@ export function IconType(props: IconProps) {
   );
 }
 
-/** Layout grid — buat /template-generator. */
+/** Layout grid, buat /template-generator. */
 export function IconLayout(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -169,7 +169,7 @@ export function IconLayout(props: IconProps) {
   );
 }
 
-/** Pulse / heartbeat — buat /tracker. */
+/** Pulse / heartbeat, buat /tracker. */
 export function IconPulse(props: IconProps) {
   return (
     <svg {...base(props)}>
@@ -178,7 +178,7 @@ export function IconPulse(props: IconProps) {
   );
 }
 
-/** Chevron down — buat dropdown trigger. */
+/** Chevron down, buat dropdown trigger. */
 export function IconChevron(props: IconProps) {
   return (
     <svg {...base(props)}>

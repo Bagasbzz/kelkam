@@ -7,10 +7,10 @@
  * client bisa POST snapshot lengkap project ke sini. Revision number auto
  * match dengan project.revision saat ini.
  *
- * GET — list revision terakhir (max 20).
+ * GET, list revision terakhir (max 20).
  *   Order by revision DESC. Berguna untuk UI "history".
  *
- * POST — buat snapshot baru.
+ * POST, buat snapshot baru.
  *   Body: { reason?: string, snapshot: Record<string, unknown> }
  *   - Snapshot biasanya berisi { sources, questions, decisions, artifacts } lengkap.
  *   - Bisa di-restore di frontend dengan menulis balik ke endpoint PUT.

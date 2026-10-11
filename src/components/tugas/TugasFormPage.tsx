@@ -143,7 +143,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
     const pertemuanTrim = pertemuan.trim();
     const pertemuanNum = pertemuanTrim === "" ? null : Number(pertemuanTrim);
     if (pertemuanNum !== null && (!Number.isInteger(pertemuanNum) || pertemuanNum < 1 || pertemuanNum > 99)) {
-      setError("Pertemuan harus angka 1–99.");
+      setError("Pertemuan harus angka 1-99.");
       return;
     }
 

@@ -21,7 +21,7 @@ interface CourseInsight {
 }
 
 /**
- * /tugas/admin/insights — Global AI insights untuk super admin.
+ * /tugas/admin/insights, Global AI insights untuk super admin.
  *
  * Auth: User.role === 'ADMIN'.
  */

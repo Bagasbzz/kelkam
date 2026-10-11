@@ -34,7 +34,7 @@ import {
 } from "@/lib/client/tugas-api";
 
 /**
- * /tugas/[token]/admin — Dashboard per-course.
+ * /tugas/[token]/admin, Dashboard per-course.
  *
  * - List tugases (with admin controls: edit, delete, lihat submission).
  * - Akses ke API admin (lihat submissions per tugas).
@@ -69,7 +69,7 @@ export default function CourseAdminDashboard() {
       setIsManager(me.isAdmin || me.managedCourses.some((item) => item.id === data.course.id));
       setCourse(data.course);
       setTugases(data.tugases);
-      // Fetch submission counts in parallel (best-effort) — sequential would
+      // Fetch submission counts in parallel (best-effort), sequential would
       // be N round-trips, jadi pakai Promise.allSettled untuk toleransi error.
       const results = await Promise.allSettled(
         data.tugases.map((t) => fetchAdminSubmissions(t.id)),

@@ -1,5 +1,5 @@
 /**
- * Asisten Dosen AI Tugas — driver untuk engine agent run tahan lama.
+ * Asisten Dosen AI Tugas, driver untuk engine agent run tahan lama.
  * -----------------------------------------------------------------------------
  * - Riwayat dipangkas (N pesan terakhir) + ringkasan sesi + "memory" rubric
  *   dari jawaban admin → hemat token tanpa kehilangan konteks.
@@ -10,7 +10,7 @@
 
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, stripDashes, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
 import { readUpload } from "@/lib/storage/upload";
 import {
@@ -61,26 +61,26 @@ function systemPrompt(courseName: string, memory: Record<string, unknown> | null
     : "";
   const sumBlock = summary ? `\n\nRINGKASAN PERCAKAPAN SEBELUMNYA:\n${summary.slice(0, 2000)}` : "";
   const fileBlock = userFiles.length
-    ? `\n\nLAMPIRAN DARI ADMIN (patokan/contoh/materi tambahan — prioritaskan ini):\n${userFiles.map((f) => `- ${f.name} (${f.isImage ? "gambar, sudah terlihat di pesan" : `dokumen, baca dengan getAttachmentContent fileId=${f.fileId}`})`).join("\n")}`
+    ? `\n\nLAMPIRAN DARI ADMIN (patokan/contoh/materi tambahan, prioritaskan ini):\n${userFiles.map((f) => `- ${f.name} (${f.isImage ? "gambar, sudah terlihat di pesan" : `dokumen, baca dengan getAttachmentContent fileId=${f.fileId}`})`).join("\n")}`
     : "";
   return `Anda adalah Asisten Dosen AI untuk course "${courseName}" di keluhkampus. Pengguna adalah admin/asdos course ini. Waktu sekarang: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full", timeStyle: "short" })} WIB.
 
 Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), lampiran yang dikirim admin di chat (getAttachmentContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
 
 ATURAN:
-1. Selalu ambil data lewat tools — jangan mengarang. Di awal percakapan atau saat belum tahu ID, panggil getCourseContext (1 panggilan = semua tugas + deskripsi + materi).
+1. Selalu ambil data lewat tools, jangan mengarang. Di awal percakapan atau saat belum tahu ID, panggil getCourseContext (1 panggilan = semua tugas + deskripsi + materi).
 2. Sebelum menilai kesesuaian pengumpulan, BACA deskripsi tugas (getTugasDetail) dan, bila relevan, materi pertemuan terkait. Nilai berdasarkan instruksi tugas tersebut.
 3. Untuk tugas kode dalam ZIP: lihat pohon file dari getSubmissionContent, lalu baca file penting secara utuh dengan readSubmissionFile (mis. main.py). Periksa kesesuaian dengan instruksi, kelengkapan, dan kualitas.
 4. Hemat token: baca secukupnya, jangan ulangi isi file panjang ke jawaban. Boleh memanggil beberapa tool sekaligus dalam satu langkah bila independen.
-5. Saat mengoreksi: ikuti rubrik dari admin. Jika rubrik/bobot belum jelas dan mempengaruhi nilai, panggil askUser SEKALI dengan pertanyaan yang digabung, lalu berhenti. Jika admin hanya minta analisis (bukan nilai), jangan bertanya — langsung analisis.
+5. Saat mengoreksi: ikuti rubrik dari admin. Jika rubrik/bobot belum jelas dan mempengaruhi nilai, panggil askUser SEKALI dengan pertanyaan yang digabung, lalu berhenti. Jika admin hanya minta analisis (bukan nilai), jangan bertanya, langsung analisis.
 6. Sebelum setFeedback untuk banyak mahasiswa sekaligus, pastikan admin sudah memberi perintah eksplisit (mis. "nilai semua"). Untuk 1-3 mahasiswa, langsung lakukan sesuai perintah.
 7. Nilai 0-100 bulat. Huruf otomatis: A>=85, B>=75, C>=65, D>=55, E<55. Feedback singkat, spesifik, sopan, Bahasa Indonesia, ditujukan ke mahasiswa.
 8. Keterlambatan: gunakan kolom terlambatMenit/keterlambatan dari tools (zona Asia/Jakarta); sebutkan durasi konkret.
 9. Indikasi AI dan kemiripan adalah INDIKASI, bukan bukti. Sampaikan hati-hati dan sarankan konfirmasi.
 10. Bila admin minta file Word/dokumen yang bisa diunduh: pakai exportSubmissionDocx (isi pengumpulan/kode) atau exportReportDocx (hasil analisis Anda). Tautan unduh tampil otomatis; cukup sebutkan nama filenya.
 11. Jawaban akhir: ringkas, terstruktur (markdown: heading kecil, bullet, tabel), Bahasa Indonesia, tanpa basa-basi. Sebutkan ID submission hanya jika admin membutuhkannya.
-12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama — boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.
-13. SAAT MEMERIKSA BANYAK MAHASISWA: kerjakan satu mahasiswa sampai tuntas (baca file → nilai/analisis) sebelum pindah ke berikutnya. Setiap kali satu mahasiswa selesai, tulis catatan 1-2 kalimat hasilnya di pesan assistant (bersamaan dengan tool call berikutnya) agar hasil tidak hilang saat hasil tool lama dipangkas. Setelah semua selesai, SEGERA tulis jawaban akhir berupa tabel rekap — jangan terus memanggil tool.
+12. MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama, boleh memanggil tool berkali-kali sampai pekerjaan benar-benar tuntas (mis. membaca SEMUA pengumpulan satu per satu). Jangan berhenti di tengah untuk "melaporkan progres"; progres sudah tampil otomatis ke admin. Jika admin mengetik "lanjut", teruskan dari langkah terakhir tanpa mengulang tool yang hasilnya sudah ada di konteks.
+13. SAAT MEMERIKSA BANYAK MAHASISWA: kerjakan satu mahasiswa sampai tuntas (baca file → nilai/analisis) sebelum pindah ke berikutnya. Setiap kali satu mahasiswa selesai, tulis catatan 1-2 kalimat hasilnya di pesan assistant (bersamaan dengan tool call berikutnya) agar hasil tidak hilang saat hasil tool lama dipangkas. Setelah semua selesai, SEGERA tulis jawaban akhir berupa tabel rekap, jangan terus memanggil tool.
 14. Jawaban akhir tidak boleh kosong. Jika Anda sudah berhenti memanggil tool, Anda WAJIB menulis kesimpulan dari data yang ada.${fileBlock}${memBlock}${sumBlock}`;
 }
 
@@ -97,7 +97,7 @@ async function buildUserMessage(adminId: string, text: string, files: UserAttach
   const images = files.filter((f) => f.isImage && f.size <= MAX_INLINE_IMAGE_BYTES);
   const docs = files.filter((f) => !f.isImage);
   const note = files.length
-    ? `\n\n[Lampiran: ${files.map((f) => f.name).join(", ")}${docs.length ? " — dokumen bisa dibaca dengan getAttachmentContent" : ""}]`
+    ? `\n\n[Lampiran: ${files.map((f) => f.name).join(", ")}${docs.length ? ", dokumen bisa dibaca dengan getAttachmentContent" : ""}]`
     : "";
   if (!images.length) return { role: "user", content: `${text}${note}` };
   const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [{ type: "text", text: `${text}${note}` }];
@@ -131,7 +131,7 @@ async function summarizeOld(messages: { role: string; content: string }[], prev:
       }, { timeout: 15_000 }),
       16_000,
     );
-    return stripThinking(r.choices[0]?.message?.content) || prev || "";
+    return stripDashes(stripThinking(r.choices[0]?.message?.content)) || prev || "";
   } catch {
     return prev || "";
   }

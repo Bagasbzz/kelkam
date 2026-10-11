@@ -5,7 +5,7 @@
  *
  * Pattern: setiap kali API route butuh akses row ber-project (reference_library,
  * reference_evidence, report_jobs, studio_*, dll), dia WAJIB panggil
- * `ownsProject(userId, projectId)` dulu — kecuali projectId sudah divalidasi
+ * `ownsProject(userId, projectId)` dulu, kecuali projectId sudah divalidasi
  * oleh client (mis. UI selalu kirim projectId sendiri).
  *
  * Kenapa perlu helper ini, bukan langsung `prisma.project.findUnique`?

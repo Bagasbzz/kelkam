@@ -1,5 +1,5 @@
 /**
- * /api/admin/users — manajemen akun oleh ADMIN global.
+ * /api/admin/users, manajemen akun oleh ADMIN global.
  *   GET  ?q=&page=  → daftar user (cari email/nama), tanpa hash.
  *   POST { userId, action: "reset-password", newPassword }
  *        → ganti sandi (argon2id) + cabut semua sesi user tsb.

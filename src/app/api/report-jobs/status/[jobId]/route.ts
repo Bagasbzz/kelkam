@@ -16,16 +16,16 @@
  *   - result: string draft (kalau status "done")
  *   - error: string error (kalau status "failed")
  *
- * Rate limit 600 per 10 menit — polling tiap ~1-2s wajar.
+ * Rate limit 600 per 10 menit, polling tiap ~1-2s wajar.
  *
  * Validasi jobId: pattern `report_<uuid>`.
  *
  * Response shape:
  *   - 200 { success: true, job: ReportJob }
- *   - 400 — jobId format invalid
- *   - 401 — belum login
- *   - 404 — job tidak ditemukan atau sudah expire (>6 jam)
- *   - 429 — rate limit
+ *   - 400, jobId format invalid
+ *   - 401, belum login
+ *   - 404, job tidak ditemukan atau sudah expire (>6 jam)
+ *   - 429, rate limit
  * -----------------------------------------------------------------------------
  */
 

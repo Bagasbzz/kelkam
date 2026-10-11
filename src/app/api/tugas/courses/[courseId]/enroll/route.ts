@@ -1,7 +1,7 @@
 /**
  * POST /api/tugas/courses/[courseId]/enroll
  * -----------------------------------------------------------------------------
- * User enroll ke course (opsional — submit endpoint TIDAK cek enrollment row).
+ * User enroll ke course (opsional, submit endpoint TIDAK cek enrollment row).
  * Idempotent: kalau udah enrolled, return existing row.
  *
  *   200 : { success, enrollmentId, alreadyEnrolled }

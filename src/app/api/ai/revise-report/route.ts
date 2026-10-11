@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripDashes, stripThinking } from "@/lib/ai/client";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
 import { toPublicErrorMessage } from "@/lib/errors";
@@ -12,7 +12,7 @@ const MAX_INSTRUCTION_CHARS = 1_200;
 
 const revisionLabel: Record<string, string> = {
   format: "rapikan format, heading, numbering, dan konsistensi bahasa",
-  expand: "perdalam bagian yang diminta dengan argumen, penjelasan, atau contoh yang relevan dari sumber — bukan menambah kata tanpa substansi",
+  expand: "perdalam bagian yang diminta dengan argumen, penjelasan, atau contoh yang relevan dari sumber, bukan menambah kata tanpa substansi",
   citation: "tambahkan sitasi dari referensi yang tersedia dan tandai placeholder jika kurang sumber",
   table: "tambahkan atau rapikan tabel markdown yang relevan",
   bibliography: "rapikan daftar pustaka sesuai gaya sitasi",
@@ -177,7 +177,9 @@ Aturan ketat:
 6. Untuk sitasi, gunakan referensi tersimpan. Jika belum cukup, tulis [butuh referensi: topik].
 7. Untuk tabel, buat tabel markdown yang rapi dengan kolom yang jelas.
 8. Untuk diagram/gambar, masukkan placeholder [Gambar: Judul - sumber/diagram] dan caption singkat.
-9. Bahasa harus ${compact.formality || "formal"}, jelas, akademik, dan siap ditempel ke laporan.`;
+9. Bahasa harus ${compact.formality || "formal"}, jelas, akademik, dan siap ditempel ke laporan.
+10. Jangan memakai tanda em dash atau en dash; pakai koma, titik, tanda kurung, atau tanda hubung biasa (-).
+11. Parafrase dengan kata-kata sendiri; jangan menyalin kalimat dari abstrak referensi atau bahan (tidak boleh 8 kata berurutan yang sama).`;
 
     const userPayload = {
       revisi: {
@@ -203,7 +205,7 @@ Aturan ketat:
       max_tokens: 3600,
     }, { timeout: 35000 });
 
-    const data = stripThinking(response.choices[0]?.message.content);
+    const data = stripDashes(stripThinking(response.choices[0]?.message.content));
     if (!data) {
       return NextResponse.json({ success: false, error: "AI belum menghasilkan revisi laporan." }, { status: 502 });
     }

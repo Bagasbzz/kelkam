@@ -13,15 +13,15 @@
  *
  * Response shape:
  *   - 200 { success: true, user }
- *   - 400 { success: false, error } — payload invalid
- *   - 401 { success: false, error } — email/password salah (sengaja generik
+ *   - 400 { success: false, error }, payload invalid
+ *   - 401 { success: false, error }, email/password salah (sengaja generik
  *     supaya tidak bocorin "email ada tapi password salah")
- *   - 429 — rate limit
- *   - 500 — server error
+ *   - 429, rate limit
+ *   - 500, server error
  *
  * Keamanan:
  *   - Pesan error 401 TIDAK membedakan antara "email tidak ditemukan" vs
- *     "password salah" — anti-enumeration.
+ *     "password salah", anti-enumeration.
  *   - Argon2.verify() constant-time comparison.
  *   - Log percobaan login ada di Prisma session row (lihat auth.ts createSession).
  * -----------------------------------------------------------------------------
@@ -33,7 +33,7 @@ import { prisma } from "@/lib/db/prisma";
 import { createSession, verifyPassword } from "@/lib/server/auth";
 import { enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
 
-/** Schema input — email otomatis di-lowercase + trim. */
+/** Schema input, email otomatis di-lowercase + trim. */
 const loginSchema = z.object({
   email: z.string().email().max(254).transform((v) => v.toLowerCase().trim()),
   password: z.string().min(1).max(200),

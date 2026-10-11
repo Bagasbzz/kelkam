@@ -4,7 +4,7 @@
  * Konstanta batas ukuran file yang dipakai di server DAN client.
  *
  * PENTING: Satu sumber kebenaran (single source of truth).
- * Kalau nilainya perlu diubah, edit di sini — JANGAN hardcode 12 * 1024 * 1024
+ * Kalau nilainya perlu diubah, edit di sini, JANGAN hardcode 12 * 1024 * 1024
  * di route handler / form / test.
  *
  * Constraint terkait:
@@ -15,7 +15,7 @@
  * -----------------------------------------------------------------------------
  */
 
-/** 12 MB — batas aman untuk LiteSpeed JKC + headroom untuk SHA256 hashing. */
+/** 12 MB, batas aman untuk LiteSpeed JKC + headroom untuk SHA256 hashing. */
 export const MAX_FILE_BYTES = 12 * 1024 * 1024;
 
 /** Batas bytes yang ditampilkan manusia. */

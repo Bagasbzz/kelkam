@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Job background untuk generate gambar AI.
  *
- * gpt-image-2 via z0ne butuh ~1.5-2.5 menit per gambar — jauh di atas batas
+ * gpt-image-2 via z0ne butuh ~1.5-2.5 menit per gambar, jauh di atas batas
  * idle LiteSpeed (~120 s). Karena itu request HTTP hanya MEMBUAT job dan
  * langsung kembali; eksekusi dilakukan:
  *   1. in-process lewat `kickImageJobs()` (fire-and-forget setelah job dibuat),

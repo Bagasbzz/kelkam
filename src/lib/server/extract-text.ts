@@ -233,7 +233,7 @@ export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
 }
 
 /**
- * Baca SATU file di dalam ZIP (path persis) — dipakai Admin AI untuk review
+ * Baca SATU file di dalam ZIP (path persis), dipakai Admin AI untuk review
  * kode secara utuh. Mendukung file teks/kode, DOCX, PDF, PPTX di dalam ZIP.
  */
 export async function readZipEntry(
@@ -389,7 +389,7 @@ export async function extractZip(
     total += block.length;
   }
 
-  // DOCX/PDF/PPTX di dalam ZIP (umum untuk tugas laporan) — baca maksimal 3.
+  // DOCX/PDF/PPTX di dalam ZIP (umum untuk tugas laporan), baca maksimal 3.
   const docs = visible
     .filter((e) => /\.(docx|pdf|pptx)$/i.test(e.name))
     .slice(0, 3);
@@ -407,7 +407,7 @@ export async function extractZip(
       chunks.push(block);
       total += block.length;
     } catch {
-      chunks.push(`\n\n[Dokumen: ${entry.name} — gagal dibaca]`);
+      chunks.push(`\n\n[Dokumen: ${entry.name}, gagal dibaca]`);
     }
   }
 

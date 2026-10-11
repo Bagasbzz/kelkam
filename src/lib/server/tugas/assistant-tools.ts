@@ -348,7 +348,7 @@ async function listMissing(
       sudahKumpul: roster.length - missing.length,
       belumKumpul: missing.length,
       daftarBelumKumpul: missing.map((m) => ({ nim: m.nim, nama: m.name, kelas: m.class?.name ?? "-" })),
-      catatan: roster.length === 0 ? "Roster kosong — impor roster mahasiswa dulu agar daftar ini akurat." : undefined,
+      catatan: roster.length === 0 ? "Roster kosong, impor roster mahasiswa dulu agar daftar ini akurat." : undefined,
     });
   }
   return { hasil: out };
@@ -515,30 +515,30 @@ async function exportSubmissionDocx(
   if (args.submissionId) {
     const s = await submissionInCourse(ctx, args.submissionId);
     targets = [s.id];
-    judul = `${s.tugas.title} — ${s.name} (${s.nim})`;
+    judul = `${s.tugas.title}, ${s.name} (${s.nim})`;
   } else {
     const [t] = await resolveTugas(ctx, args);
     const subs = await prisma.tugasSubmission.findMany({ where: { tugasId: t.id, ...(args.classId ? { classId: args.classId } : {}) }, select: { id: true }, orderBy: { position: "asc" } });
     if (subs.length > MAX_EXPORT_SUBMISSIONS) throw new Error(`Terlalu banyak pengumpulan (${subs.length}). Maksimal ${MAX_EXPORT_SUBMISSIONS} per ekspor; filter per kelas atau per mahasiswa.`);
     targets = subs.map((x) => x.id);
-    judul = `${t.title}${t.pertemuan ? ` (Pertemuan ${t.pertemuan})` : ""} — Kumpulan Pengumpulan`;
+    judul = `${t.title}${t.pertemuan ? ` (Pertemuan ${t.pertemuan})` : ""}, Kumpulan Pengumpulan`;
   }
   if (!targets.length) throw new Error("Tidak ada pengumpulan untuk diekspor.");
 
   const sections: DocxSection[] = [];
   for (const id of targets) {
     const s = await submissionInCourse(ctx, id);
-    const head = `${s.name} (${s.nim}) — ${s.class.name}`;
+    const head = `${s.name} (${s.nim}), ${s.class.name}`;
     const meta = `Dikumpulkan: ${fmtDate(s.submittedAt)} (${lateness(s.submittedAt, s.tugas.deadline).keterlambatan}) • Status: ${s.status} • Nilai: ${s.nilai ?? "-"}${s.feedback ? `\nFeedback: ${s.feedback}` : ""}`;
     sections.push({ title: head, content: meta });
-    if (s.note?.trim()) sections.push({ title: `Catatan mahasiswa — ${s.name}`, content: s.note.trim() });
+    if (s.note?.trim()) sections.push({ title: `Catatan mahasiswa, ${s.name}`, content: s.note.trim() });
     if (!s.fileUploadId) continue;
     const file = await prisma.fileUpload.findUnique({ where: { id: s.fileUploadId }, select: { filePath: true, originalName: true } });
     if (!file) continue;
     const isZip = /\.zip$/i.test(file.originalName);
     if (isZip) {
       let buffer: Buffer;
-      try { buffer = await fs.readFile(file.filePath); } catch { sections.push({ title: `File — ${file.originalName}`, content: "[file tidak ditemukan di penyimpanan]" }); continue; }
+      try { buffer = await fs.readFile(file.filePath); } catch { sections.push({ title: `File, ${file.originalName}`, content: "[file tidak ditemukan di penyimpanan]" }); continue; }
       const entries = await readZipEntries(buffer, { paths: args.onlyPaths, maxFiles: 40, maxCharsPerFile: 30_000 });
       for (const e of entries) {
         if (e.kind === "doc" && !includeDocs) continue;
@@ -909,7 +909,7 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "askUser",
-      description: "Tanyakan ke admin bila konteks untuk mengoreksi tidak cukup (mis. rubrik, bobot, kriteria lulus). Hentikan proses sampai admin menjawab. Gunakan hemat — gabungkan beberapa pertanyaan sekaligus.",
+      description: "Tanyakan ke admin bila konteks untuk mengoreksi tidak cukup (mis. rubrik, bobot, kriteria lulus). Hentikan proses sampai admin menjawab. Gunakan hemat, gabungkan beberapa pertanyaan sekaligus.",
       parameters: { type: "object", properties: { question: { type: "string" }, options: { type: "array", items: { type: "string" } } }, required: ["question"] },
     },
   },

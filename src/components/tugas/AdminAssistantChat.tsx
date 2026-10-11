@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * AdminAssistantChat — chatbot Admin AI untuk 1 course.
+ * AdminAssistantChat, chatbot Admin AI untuk 1 course.
  * - Sesi tersimpan di server (AdminChatSession); bisa ganti/hapus sesi.
  * - askUser: pertanyaan dari AI tampil sebagai kartu; jawaban admin dikirim
  *   dengan `answerTo` supaya disimpan sebagai rubric/memory sesi.
@@ -364,7 +364,7 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
                   ))}
                 </div>
               ) : null}
-              <p className="mt-2 text-xs text-amber-700">Atau ketik jawaban di bawah — akan disimpan sebagai rubrik sesi ini.</p>
+              <p className="mt-2 text-xs text-amber-700">Atau ketik jawaban di bawah, akan disimpan sebagai rubrik sesi ini.</p>
             </div>
           )}
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}

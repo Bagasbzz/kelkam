@@ -6,7 +6,7 @@
  * Dipakai oleh:
  *   - AuthProvider React Context (`src/components/AuthProvider.tsx`) saat mount
  *     untuk tau apakah user sudah login.
- *   - Middleware/proxy tidak — proxy cukup decode JWT cookie.
+ *   - Middleware/proxy tidak, proxy cukup decode JWT cookie.
  *
  * Response shape:
  *   - 200 { success: true, user: null | { id, email, name } }

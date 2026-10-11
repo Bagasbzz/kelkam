@@ -1,7 +1,7 @@
 /**
  * src/lib/client/pdf-tools.ts
  * -----------------------------------------------------------------------------
- * Browser-side PDF manipulation. Semua fungsi murni client-side — TIDAK
+ * Browser-side PDF manipulation. Semua fungsi murni client-side, TIDAK
  * upload file ke server (lihat ToolPanelShell untuk konfirmasi).
  *
  * Dependency:
@@ -50,7 +50,7 @@ export async function mergePdfs(files: File[]): Promise<void> {
 }
 
 /**
- * Split PDF — ambil halaman tertentu (1-based). Output satu PDF baru.
+ * Split PDF, ambil halaman tertentu (1-based). Output satu PDF baru.
  * Contoh: pages "1-3,5,7-9" → halaman 1,2,3,5,7,8,9.
  */
 export async function splitPdf(file: File, range: string): Promise<void> {
@@ -185,7 +185,7 @@ export async function compressPdf(file: File): Promise<void> {
   saveAs(new Blob([out as BlobPart], { type: "application/pdf" }), "compressed.pdf");
 }
 
-/** Crop PDF — ambil area tertentu per halaman (semua halaman dipotong sama). */
+/** Crop PDF, ambil area tertentu per halaman (semua halaman dipotong sama). */
 export async function cropPdf(
   file: File,
   opts: { x: number; y: number; width: number; height: number },

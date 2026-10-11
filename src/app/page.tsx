@@ -229,7 +229,7 @@ export default function Home() {
           Kumpulkan tugas, susun laporan, dan buat diagram tanpa ribet. Pilih yang kamu butuhkan di bawah.
         </p>
 
-        {/* Primary features — 3 yang paling sering diakses */}
+        {/* Primary features, 3 yang paling sering diakses */}
         <section className="w-full max-w-6xl mb-16 md:mb-24 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 w-full">
             {PRIMARY_FEATURES.map((card) => (
@@ -238,7 +238,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Utility features — sisanya, dikasih section header biar jelas. */}
+        {/* Utility features, sisanya, dikasih section header biar jelas. */}
         <section className="w-full max-w-6xl animate-in fade-in slide-in-from-bottom-12 duration-700 delay-500">
           <div className="mb-8 md:mb-10">
             <h2 className="text-2xl md:text-3xl font-bold text-slate-900">

@@ -6,7 +6,7 @@
  * Admin AI Tugas).
  *
  * Flow:
- *   1. Auth + rate limit (8 per 10 menit — extraction mahal).
+ *   1. Auth + rate limit (8 per 10 menit, extraction mahal).
  *   2. Parse multipart form, validasi size & nama.
  *   3. Ekstrak via lib.
  *   4. Save file ke disk (SHA256 dedup).

@@ -178,10 +178,10 @@ function checkLinks(p: ProviderPaper): { label: string; url: string }[] {
   const issn = p.issn?.[0];
   const venue = (p.venue || "").trim();
   if (issn) {
-    links.push({ label: "Cek Scimago (Q1–Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(issn)}` });
+    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(issn)}` });
     links.push({ label: "Cek SINTA", url: `https://sinta.kemdikbud.go.id/journals?q=${encodeURIComponent(issn)}` });
   } else if (venue) {
-    links.push({ label: "Cek Scimago (Q1–Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(venue)}` });
+    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(venue)}` });
     links.push({ label: "Cek SINTA", url: `https://sinta.kemdikbud.go.id/journals?q=${encodeURIComponent(venue)}` });
   }
   return links;
@@ -217,7 +217,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     searchCrossref(query, searchOptions),
   ]);
   const merged = mergeAndDeduplicate([ss, oa, cr]).filter((p) => p.title && (options.requireDoi === false || p.doi));
-  progress(`${merged.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}) — memverifikasi DOI…`);
+  progress(`${merged.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}), memverifikasi DOI…`);
 
   const doiChecked = await Promise.all(
     merged.slice(0, Math.min(limit * 2, 20)).map(async (paper) => {
@@ -240,7 +240,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     .sort((a, b) => Number(b.citationCount || 0) - Number(a.citationCount || 0))
     .slice(0, limit);
 
-  progress(`${eligible.length} lolos verifikasi DOI & syarat jurnal — mengecek ketersediaan PDF…`);
+  progress(`${eligible.length} lolos verifikasi DOI & syarat jurnal, mengecek ketersediaan PDF…`);
   const pdfStatuses = await verifyPdfUrls(eligible.map((p) => p.pdfUrl));
 
   return eligible.map((p, i) => {
@@ -276,9 +276,9 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
 
 export const JOURNAL_REQUIREMENT_LABEL: Record<JournalRequirement, string> = {
   "bebas": "Bebas (DOI valid)",
-  "sinta-1-2": "SINTA 1–2 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
-  "sinta-1-4": "SINTA 1–4 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
-  "scopus-q1-q2": "Scopus Q1–Q2 (ISSN + DOI; kuartil dicek user via Scimago)",
+  "sinta-1-2": "SINTA 1-2 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
+  "sinta-1-4": "SINTA 1-4 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
+  "scopus-q1-q2": "Scopus Q1-Q2 (ISSN + DOI; kuartil dicek user via Scimago)",
   "scopus-any": "Scopus (ISSN + DOI; indeks dicek user)",
   "internasional-bereputasi": "Internasional bereputasi (ISSN + DOI; dicek user)",
 };

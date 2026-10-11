@@ -5,6 +5,7 @@
  * mengirim tautan unduhan langsung di chat saat job selesai / setelah revisi.
  */
 import { Packer } from "docx";
+import { stripDashes } from "@/lib/ai/client";
 import { prisma } from "@/lib/db/prisma";
 import { listImageJobs } from "@/lib/server/image-jobs";
 import { readUpload, saveUpload } from "@/lib/storage/upload";
@@ -34,6 +35,8 @@ export interface SessionDocxResult {
 
 export async function exportSessionDocx(input: SessionDocxInput): Promise<SessionDocxResult> {
   const images: Record<string, Uint8Array> = {};
+  // Kunci gambar disamakan dengan draft yang sudah dibersihkan dari em/en dash.
+  const imageKey = (title: string) => stripDashes(title).trim().toLowerCase();
   const [user, imageJobs] = await Promise.all([
     prisma.user.findUnique({ where: { id: input.ownerId }, select: { name: true } }),
     listImageJobs(input.ownerId, { sessionId: input.sessionId, limit: 40 }).catch(() => []),
@@ -41,19 +44,20 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
 
   await Promise.all(imageJobs.filter((job) => job.status === "done" && job.fileId && job.title).map(async (job) => {
     const bytes = await readUpload(job.fileId!, input.ownerId).catch(() => null);
-    if (bytes) images[job.title.trim().toLowerCase()] = new Uint8Array(bytes);
+    if (bytes) images[imageKey(job.title)] = new Uint8Array(bytes);
   }));
   // Rasterisasi berurutan: WASM single-thread, hindari lonjakan memori.
   for (const diagram of input.diagrams) {
     if (!diagram.svg || !diagram.title) continue;
     try {
-      images[diagram.title.trim().toLowerCase()] = await svgToPngServer(diagram.svg);
+      images[imageKey(diagram.title)] = await svgToPngServer(diagram.svg);
     } catch (error) {
       console.warn("[laporan] rasterisasi diagram gagal:", diagram.title, error instanceof Error ? error.message : error);
     }
   }
 
-  const placeholders = Array.from(input.draft.matchAll(/^\[Gambar:\s*(.+?)\]\s*$/gim)).map((m) => {
+  const draft = stripDashes(input.draft);
+  const placeholders = Array.from(draft.matchAll(/^\[Gambar:\s*(.+?)\]\s*$/gim)).map((m) => {
     const inner = m[1].trim();
     const sep = inner.lastIndexOf(" - ");
     return (sep > 0 ? inner.slice(0, sep) : inner).trim().toLowerCase();
@@ -61,8 +65,8 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
   const missingImages = placeholders.filter((key) => !images[key]).length;
   const pendingFigures = imageJobs.filter((job) => job.status === "queued" || job.status === "running").length;
 
-  const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` — ${input.brief.course}` : ""}` : undefined;
-  const doc = buildDocxDocument(input.draft, {
+  const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` (${input.brief.course})` : ""}` : undefined;
+  const doc = buildDocxDocument(draft, {
     profile: {
       ...DOCX_PRESETS.kampus4433.profile,
       cover: { title: input.title, subtitle, author: user?.name || undefined, institution: input.brief.institution || undefined, year: String(new Date().getFullYear()) },

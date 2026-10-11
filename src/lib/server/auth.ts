@@ -170,7 +170,7 @@ async function setSessionCookie(token: string) {
 }
 
 /**
- * Buat session untuk user — bikin JWT, catat di DB, set cookie.
+ * Buat session untuk user, bikin JWT, catat di DB, set cookie.
  *
  * @param userId - id user yang baru login
  * @param email - email (untuk payload JWT, agar logout bisa jalan tanpa DB lookup)
@@ -268,7 +268,7 @@ export async function authenticateRequestFromCookie(): Promise<AuthGuardResult> 
 
 /**
  * Hapus session saat ini: hapus row DB + clear cookie.
- * Idempotent — kalau tidak ada session, tetap return tanpa error.
+ * Idempotent, kalau tidak ada session, tetap return tanpa error.
  */
 export async function destroySession() {
   const cookieStore = await cookies();

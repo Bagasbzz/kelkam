@@ -3,17 +3,17 @@
  * -----------------------------------------------------------------------------
  * Single Studio Project CRUD.
  *
- * GET — ambil project + semua relasi (sources, questions, decisions, artifacts, revisions).
+ * GET, ambil project + semua relasi (sources, questions, decisions, artifacts, revisions).
  *   Dipakai oleh Studio page untuk hydrate state dari cloud.
  *
- * PUT — update field tertentu.
+ * PUT, update field tertentu.
  *   Body: { name?, revision?, importedFromLegacy?, intake?, specification?, formatProfile?, readiness? }
  *   - Hanya field yang didefine di schema yang akan di-update.
  *   - revision di-increment otomatis kalau dikirim (untuk version tracking).
  *
- * DELETE — hapus project (cascade ke sources/questions/decisions/artifacts/revisions).
+ * DELETE, hapus project (cascade ke sources/questions/decisions/artifacts/revisions).
  *
- * Semua endpoint ownership-checked (loadOwned) — return 404 kalau bukan milik user.
+ * Semua endpoint ownership-checked (loadOwned), return 404 kalau bukan milik user.
  * -----------------------------------------------------------------------------
  */
 
@@ -35,7 +35,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ project
   const project = await loadOwned(projectId, auth.user.id);
   if (!project) return NextResponse.json({ success: false, error: "Proyek tidak ditemukan." }, { status: 404 });
 
-  // Parallel fetch semua relasi — hemat latency.
+  // Parallel fetch semua relasi, hemat latency.
   const [sources, questions, decisions, artifacts, revisions] = await Promise.all([
     prisma.studioSource.findMany({ where: { projectId, ownerId: auth.user.id }, orderBy: { createdAt: "asc" } }),
     prisma.studioQuestion.findMany({ where: { projectId, ownerId: auth.user.id }, orderBy: [{ priority: "asc" }, { createdAt: "asc" }] }),
@@ -56,7 +56,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectI
 
   try {
     const body = await req.json().catch(() => ({})) as Record<string, unknown>;
-    // Hanya set field yang dikirim — sisanya undefined biar Prisma skip.
+    // Hanya set field yang dikirim, sisanya undefined biar Prisma skip.
     const updated = await prisma.studioProject.update({
       where: { projectId },
       data: {

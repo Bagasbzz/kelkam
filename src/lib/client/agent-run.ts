@@ -173,9 +173,9 @@ export async function fetchActiveRun(url: string): Promise<AgentRunPublic | null
 export function describeRunStatus(run: AgentRunPublic | null): string {
   if (!run) return "Menghubungkan…";
   switch (run.status) {
-    case "queued": return "Antre — melanjutkan…";
+    case "queued": return "Antre, melanjutkan…";
     case "running": return `Berjalan (langkah ${run.stepCount}/${run.maxSteps})`;
-    case "paused": return "Dijeda — ketik \"lanjut\" untuk meneruskan";
+    case "paused": return "Dijeda, ketik \"lanjut\" untuk meneruskan";
     case "waiting_user": return "Menunggu jawaban Anda";
     case "done": return "Selesai";
     case "failed": return "Gagal";

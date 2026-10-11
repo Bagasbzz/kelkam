@@ -1,7 +1,7 @@
 /**
  * src/lib/errors.ts
  * -----------------------------------------------------------------------------
- * Helper error universal — SEMUA pesan yang tampil ke user lewat sini.
+ * Helper error universal, SEMUA pesan yang tampil ke user lewat sini.
  *
  * `getErrorMessage(error, fallback)` mengembalikan pesan yang AMAN untuk
  * ditampilkan: error teknis (network, HTTP 5xx, Prisma, provider AI, nama
@@ -67,7 +67,7 @@ export function getErrorMessage(error: unknown, fallback = "Terjadi kesalahan. C
 /** Alias server-side untuk pesan yang masuk ke event/log yang dilihat klien. */
 export const toPublicErrorMessage = getErrorMessage;
 
-/** Pesan mentah (untuk console/log server saja — JANGAN dikirim ke klien). */
+/** Pesan mentah (untuk console/log server saja, JANGAN dikirim ke klien). */
 export function getRawErrorMessage(error: unknown, fallback = "unknown error") {
   return rawMessage(error) || fallback;
 }

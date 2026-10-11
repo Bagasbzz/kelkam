@@ -5,9 +5,9 @@
  * actor-matrix, use-case diagram, activity diagram, sequence diagram, test-cases,
  * outline, report-draft, format-profile, final-docx).
  *
- * Composite primary key (projectId, artifactId) — composite uniqueness.
+ * Composite primary key (projectId, artifactId), composite uniqueness.
  *
- * POST — upsert artifact (insert kalau baru, update kalau sudah ada).
+ * POST, upsert artifact (insert kalau baru, update kalau sudah ada).
  *   Body: { artifactId, kind, title, description?, status?, dependencyIds?, decisionIds?, currentVersion?, approvedVersion?, payload?, validationIssues? }
  *   - artifactId WAJIB diisi (composite PK).
  *   - status: "not_started" | "draft" | "stale" | "ready" | "approved" | "locked"

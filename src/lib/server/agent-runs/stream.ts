@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Response NDJSON untuk run agent: heartbeat tiap 5 s (LiteSpeed tidak memutus
  * koneksi idle), event progres real-time, dan event `result` di akhir dengan
- * flag `continue` — klien otomatis menyambung ulang kalau run belum selesai.
+ * flag `continue`, klien otomatis menyambung ulang kalau run belum selesai.
  */
 import { serveAgentRun, runNeedsContinue, type AgentStreamEvent } from "@/lib/server/agent-runs/engine";
 import { toPublicErrorMessage } from "@/lib/errors";

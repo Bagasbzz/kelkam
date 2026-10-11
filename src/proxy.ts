@@ -31,7 +31,7 @@
  * CATATAN KOMPABILITITAS:
  *   - Proxy.js jalan di Edge runtime, jadi TIDAK bisa pakai Node.js modules
  *     (fs, crypto native, dll). Pakai `jose` untuk JWT (web-crypto friendly).
- *   - DB lookup TIDAK dilakukan di sini — terlalu mahal untuk setiap request.
+ *   - DB lookup TIDAK dilakukan di sini, terlalu mahal untuk setiap request.
  *     Validasi DB (session row exist) dilakukan di `getCurrentUser()` saat
  *     API route handler jalan. Proxy cukup decode JWT signature.
  * -----------------------------------------------------------------------------
@@ -70,7 +70,7 @@ const PROTECTED_API_PREFIXES = [
 /**
  * Path API yang publik (skip auth check).
  * `/api/tugas/courses/by-token` dipakai mahasiswa untuk lihat detail course
- * pakai token — sengaja publik, tapi di-handler tetap rate-limit per-IP.
+ * pakai token, sengaja publik, tapi di-handler tetap rate-limit per-IP.
  */
 const PUBLIC_API_EXACT_PATHS = [
   "/api/tugas/courses/by-token",
@@ -94,7 +94,7 @@ function isPollingEndpoint(pathname: string) {
  * Path page (UI) yang WAJIB login.
  * User yang belum login akan di-redirect ke /login?redirect=<path>.
  *
- * Tugas pages tidak di-protect di sini — banyak path yang read-only untuk
+ * Tugas pages tidak di-protect di sini, banyak path yang read-only untuk
  * publik (mis. /tugas/[token] view course). Page handler masing-masing
  * handle auth state sendiri. `/tugas/admin694` juga dicek di page level.
  */
@@ -106,7 +106,7 @@ const PROTECTED_PAGE_PREFIXES = [
 
 /**
  * Secret HARUS sama dengan yang di src/lib/server/auth.ts.
- * Duplikasi ini disengaja — proxy.js jalan di Edge runtime yang tidak bisa
+ * Duplikasi ini disengaja, proxy.js jalan di Edge runtime yang tidak bisa
  * import dari kode yg pakai Prisma/argon2 (Node-only modules).
  */
 let cachedJwtSecret: Uint8Array | null = null;

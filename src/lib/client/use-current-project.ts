@@ -16,7 +16,7 @@
  *   }
  *
  * Event yang di-monitor:
- *   - `researchProjectChanged` — di-dispatch ketika project ID diubah di
+ *   - `researchProjectChanged`, di-dispatch ketika project ID diubah di
  *     tempat lain (lihat project-store.ts).
  * -----------------------------------------------------------------------------
  */

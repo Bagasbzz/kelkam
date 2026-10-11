@@ -1,7 +1,7 @@
 /**
  * src/lib/report/report-jobs.ts
  * -----------------------------------------------------------------------------
- * Report generation job — persistent, per-BAB (step-based), resumable.
+ * Report generation job, persistent, per-BAB (step-based), resumable.
  *
  * ARSITEKTUR:
  *   - Job disimpan di `report_jobs`, tiap section outline jadi 1 row di
@@ -101,9 +101,9 @@ export interface ReportJob {
   createdAt: string;
   updatedAt: string;
   heartbeatAt?: string;
-  /** Jam server saat respons dibuat — UI pakai untuk hitung durasi tanpa tergantung jam klien. */
+  /** Jam server saat respons dibuat, UI pakai untuk hitung durasi tanpa tergantung jam klien. */
   serverNow: string;
-  /** Detik sejak heartbeat terakhir — UI pakai untuk deteksi macet. */
+  /** Detik sejak heartbeat terakhir, UI pakai untuk deteksi macet. */
   idleSeconds: number;
   /** true kalau job belum selesai dan tidak ada step yang sedang hidup. */
   needsResume: boolean;
@@ -281,7 +281,7 @@ async function appendLog(jobId: string, current: ReportJobEvent[], level: Report
 }
 
 // ---------------------------------------------------------------------------
-// Public API — read / list
+// Public API, read / list
 // ---------------------------------------------------------------------------
 
 /** Baca status job tanpa memicu step. */
@@ -331,11 +331,11 @@ export async function findActiveReportJob(ownerId: string, mode?: ReportMode) {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — mutations
+// Public API, mutations
 // ---------------------------------------------------------------------------
 
 /**
- * Buat job + steps dari outline. Tidak memanggil AI di sini — step pertama
+ * Buat job + steps dari outline. Tidak memanggil AI di sini, step pertama
  * dijalankan oleh polling status (atau panggil advanceReportJob setelah ini).
  */
 export async function startReportJob(project: unknown, ownerId: string, mode: ReportMode = "lengkap") {

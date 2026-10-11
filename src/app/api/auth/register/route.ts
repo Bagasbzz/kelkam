@@ -13,10 +13,10 @@
  *
  * Response shape:
  *   - 200 { success: true, user: { id, email, name } }
- *   - 400 { success: false, error } — validasi gagal
- *   - 409 { success: false, error } — email sudah ada
- *   - 429 { success: false, error } — rate limit (otomatis dari enforceRateLimit)
- *   - 500 { success: false, error } — server error (DB down, dll)
+ *   - 400 { success: false, error }, validasi gagal
+ *   - 409 { success: false, error }, email sudah ada
+ *   - 429 { success: false, error }, rate limit (otomatis dari enforceRateLimit)
+ *   - 500 { success: false, error }, server error (DB down, dll)
  *
  * Catatan:
  *   - Password di-hash dengan argon2id, BUKAN bcrypt/MD5/SHA (lihat auth.ts).
@@ -32,7 +32,7 @@ import { prisma } from "@/lib/db/prisma";
 import { createSession, hashPassword } from "@/lib/server/auth";
 import { enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
 
-/** Schema input — semua field di-sanitize otomatis oleh zod (lowercase + trim email). */
+/** Schema input, semua field di-sanitize otomatis oleh zod (lowercase + trim email). */
 const registerSchema = z.object({
   email: z.string().email().max(254).transform((v) => v.toLowerCase().trim()),
   password: z.string().min(8).max(200),
@@ -73,7 +73,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // argon2id dengan default cost — produksi-ready.
+    // argon2id dengan default cost, produksi-ready.
     const passwordHash = await hashPassword(password);
     const user = await prisma.user.create({
       data: { email, passwordHash, name: name || null },

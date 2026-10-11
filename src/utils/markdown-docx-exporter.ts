@@ -1,4 +1,4 @@
-﻿/**
+/**
  * src/utils/markdown-docx-exporter.ts
  * -----------------------------------------------------------------------------
  * Export markdown laporan → DOCX dengan profil format kampus.
@@ -6,7 +6,7 @@
  * Fitur:
  *   - Profil format: margin (preset 4/4/3/3 cm, 3/3/3/3, custom), font, ukuran,
  *     spasi baris, halaman sampul opsional.
- *   - Daftar isi otomatis (TOC field — Word minta "update field" saat dibuka).
+ *   - Daftar isi otomatis (TOC field, Word minta "update field" saat dibuka).
  *   - Nomor halaman di footer.
  *   - Heading H1-H4, paragraf justified, bullet/numbered list, tabel dengan
  *     caption "Tabel N." otomatis.
@@ -142,8 +142,8 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       const title = (sep > 0 ? inner.slice(0, sep) : inner).trim();
       const captionFromInner = sep > 0 ? inner.slice(sep + 3).trim() : "";
       const trailing = (figure[2] || "").replace(/^caption:\s*/i, "").trim();
-      // Buang nomor manual dari AI ("Gambar 2.", "Gambar 3.1:") — penomoran dilakukan exporter.
-      const caption = (captionFromInner || trailing || title).replace(/^(gambar|figure)\s*[\d.]*\s*[:.\-–]?\s*/i, "").trim() || title;
+      // Buang nomor manual dari AI ("Gambar 2.", "Gambar 3.1:"), penomoran dilakukan exporter.
+      const caption = (captionFromInner || trailing || title).replace(/^(gambar|figure)\s*[\d.]*\s*[:.\-\u2013]?\s*/i, "").trim() || title;
       blocks.push({ type: "figure", title, caption });
       return;
     }

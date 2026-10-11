@@ -23,10 +23,10 @@
  *
  * Response shape:
  *   - 200 { success: true, job: ReportJob }
- *   - 400 — payload invalid
- *   - 401 — belum login
- *   - 429 — rate limit
- *   - 500 — server error
+ *   - 400, payload invalid
+ *   - 401, belum login
+ *   - 429, rate limit
+ *   - 500, server error
  * -----------------------------------------------------------------------------
  */
 
@@ -39,7 +39,7 @@ import {
   readJsonBody,
 } from "@/lib/server/request-guards";
 
-/** Timeout 60 detik — job sendiri jalan di background, ini cuma kickoff. */
+/** Timeout 60 detik, job sendiri jalan di background, ini cuma kickoff. */
 export const maxDuration = 60;
 
 /**
@@ -70,7 +70,7 @@ export async function POST(req: Request) {
   if (rateLimit) return rateLimit;
 
   try {
-    // 1.5MB max — handle project dengan banyak source + outline + diagram.
+    // 1.5MB max, handle project dengan banyak source + outline + diagram.
     const { project, mode } = await readJsonBody<{ project?: unknown; mode?: unknown }>(req, 1_500_000);
     const validationError = validateProject(project);
     if (validationError) return NextResponse.json({ success: false, error: validationError }, { status: 400 });

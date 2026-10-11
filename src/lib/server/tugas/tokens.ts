@@ -7,12 +7,12 @@
  * Format: 8 char alphanumeric TANPA karakter membingungkan
  * (0/O, 1/I/L, U/V/Y) supaya mudah dibaca & diketik.
  *
- * Pakai `crypto.randomBytes` (built-in Node) — tidak butuh dependency
+ * Pakai `crypto.randomBytes` (built-in Node), tidak butuh dependency
  * tambahan seperti nanoid.
  *
  * Catatan: alphabet di sini exclude chars yang sering bikin ambigu
  * (0/O/1/I/L/U/V/Y). Sisanya ≈ 23 char uppercase + 8 digit = 31 char.
- * Entropy ≈ log2(31^8) = 39.7 bits — cukup untuk shared link + rate-limit.
+ * Entropy ≈ log2(31^8) = 39.7 bits, cukup untuk shared link + rate-limit.
  * -----------------------------------------------------------------------------
  */
 
@@ -39,7 +39,7 @@ export function generateCourseToken(): string {
   const bytes = randomBytes(TOKEN_LENGTH * 2);
   let out = "";
   for (let i = 0; i < bytes.length && out.length < TOKEN_LENGTH; i += 1) {
-    // Skip byte yang >= 248 (biar modulo 31 adil) — rare (< 3% byte).
+    // Skip byte yang >= 248 (biar modulo 31 adil), rare (< 3% byte).
     if (bytes[i] >= 248) continue;
     out += ALPHABET[bytes[i] % ALPHABET.length];
   }

@@ -4,8 +4,8 @@
  * React Context untuk autentikasi user.
  *
  * Provider ini membungkus seluruh app (lihat src/app/layout.tsx) dan menyediakan:
- *   - `user`: SessionUser | null — siapa yang sedang login
- *   - `loading`: boolean — apakah initial fetch masih jalan
+ *   - `user`: SessionUser | null, siapa yang sedang login
+ *   - `loading`: boolean, apakah initial fetch masih jalan
  *   - `refresh()`: panggil ulang /api/auth/me
  *   - `login(email, password)`: hit /api/auth/login
  *   - `register(email, password, name?)`: hit /api/auth/register
@@ -24,7 +24,7 @@
  * waitlist). credentials: "same-origin" supaya cookie terkirim.
  *
  * Karena pakai cookie httpOnly (bukan Authorization header), TIDAK ada Bearer
- * token yang perlu di-include — browser otomatis kirim cookie kalau
+ * token yang perlu di-include, browser otomatis kirim cookie kalau
  * credentials="same-origin".
  * -----------------------------------------------------------------------------
  */
@@ -42,7 +42,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
  * Event emitter supaya komponen manapun bisa minta buka modal login,
  * tanpa harus nge-bubble callback lewat props.
  *
- * AuthMenu subscribe ke ini (lihat useEffect di bawah) — dia satu-satunya
+ * AuthMenu subscribe ke ini (lihat useEffect di bawah), dia satu-satunya
  * yang render modal login (state-nya lokal supaya gak re-render seluruh app).
  */
 let loginModalListeners = new Set<() => void>();
@@ -81,7 +81,7 @@ interface AuthContextValue {
    * "Login untuk submit" di halaman Tugas yang posisinya di luar Navbar.
    *
    * Implementasi: AuthMenu subscribe ke event ini via state global (lihat
-   * file ini — kita pakai `authModalOpen` setter yang di-share lewat
+   * file ini, kita pakai `authModalOpen` setter yang di-share lewat
    * module-level event emitter supaya AuthMenu bisa re-render).
    */
   openLoginModal: () => void;

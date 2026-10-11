@@ -10,7 +10,7 @@
  *   400 catatan kosong / terlalu panjang
  *   401 belum login   403 bukan admin course   404 pengumpulan tidak ditemukan
  *
- * `updatedAt` milik mahasiswa TIDAK disentuh — label "Diubah" di UI hanya
+ * `updatedAt` milik mahasiswa TIDAK disentuh, label "Diubah" di UI hanya
  * mencerminkan perubahan oleh mahasiswa.
  */
 import { NextResponse } from "next/server";

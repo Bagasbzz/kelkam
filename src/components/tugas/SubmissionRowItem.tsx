@@ -84,7 +84,7 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
     const nilaiStr = nilaiDraft.trim();
     const nilai = nilaiStr === "" ? null : Number(nilaiStr);
     if (nilai !== null && (!Number.isInteger(nilai) || nilai < 0 || nilai > 100)) {
-      setError("Nilai harus bilangan bulat 0–100.");
+      setError("Nilai harus bilangan bulat 0-100.");
       return;
     }
     if (!text && nilai === null) {
@@ -227,7 +227,7 @@ export default function SubmissionRowItem({ submission, onChanged, onDeleted }: 
               pengumpulannya.
             </p>
             <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
-              Nilai (0–100, kosongkan jika belum dinilai)
+              Nilai (0-100, kosongkan jika belum dinilai)
               <input
                 type="number"
                 min={0}

@@ -5,11 +5,11 @@
  *
  * Strategi 2 lapis (defense-in-depth):
  *
- *   1. Schema: `@@unique([tugasId, position])` di TugasSubmission — DB yang
+ *   1. Schema: `@@unique([tugasId, position])` di TugasSubmission, DB yang
  *      menjamin tidak ada dua submission di posisi sama dalam 1 tugas.
  *
  *   2. App-level: `assignPositionWithRetry()` retry sampai 5x kalau kena
- *      P2002 (unique constraint) — artinya ada submission lain yang dapat
+ *      P2002 (unique constraint), artinya ada submission lain yang dapat
  *      posisi yang sama di antara `findFirst` dan `create` kita.
  *
  * Single-instance JKC + index ini = cukup untuk handle 2 mahasiswa klik
@@ -33,7 +33,7 @@ const MAX_RETRIES = 5;
 
 /**
  * Hitung posisi berikutnya: max existing position + 1.
- * Tidak atomic dengan insert — pakai versi ini hanya kalau caller SUDAH
+ * Tidak atomic dengan insert, pakai versi ini hanya kalau caller SUDAH
  * handle race (mis. unique constraint).
  *
  * @param tx - Prisma transaction client
@@ -64,7 +64,7 @@ export async function assignPositionWithRetry(
   while (true) {
     attempts += 1;
     const position = await assignPosition(tx, tugasId);
-    // Cek dulu apakah posisi ini sudah ada — kalau iya, retry dengan +1.
+    // Cek dulu apakah posisi ini sudah ada, kalau iya, retry dengan +1.
     // Ini cara sederhana untuk anti race; query-nya cheap karena ada index.
     const conflict = await tx.tugasSubmission.findFirst({
       where: { tugasId, position },
@@ -76,7 +76,7 @@ export async function assignPositionWithRetry(
         `Gagal assign posisi antrian setelah ${MAX_RETRIES} percobaan (tugas ${tugasId}).`,
       );
     }
-    // Loop lagi — next iteration akan query max position lagi dan +1 dari yang baru.
+    // Loop lagi, next iteration akan query max position lagi dan +1 dari yang baru.
   }
 }
 

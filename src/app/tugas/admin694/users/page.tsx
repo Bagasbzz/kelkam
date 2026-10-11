@@ -27,7 +27,7 @@ function generatePassword(): string {
 }
 
 /**
- * /tugas/admin694/users — super admin: daftar akun + reset sandi.
+ * /tugas/admin694/users, super admin: daftar akun + reset sandi.
  * Use case: mahasiswa lupa sandi → admin set sandi baru tanpa hapus akun
  * (riwayat pengumpulan tetap utuh).
  */
@@ -140,14 +140,14 @@ export default function AdminUsersPage() {
           </div>
           <h1 className="mt-2 text-3xl font-black tracking-tight">Daftar akun</h1>
           <p className="mt-2 text-sm text-slate-300">
-            Reset sandi mahasiswa yang lupa tanpa menghapus akun — riwayat pengumpulan tetap aman.
+            Reset sandi mahasiswa yang lupa tanpa menghapus akun, riwayat pengumpulan tetap aman.
           </p>
         </div>
 
         {result && (
           <Card className="border-emerald-200 bg-emerald-50">
             <p className="text-sm font-bold text-emerald-900">Sandi baru untuk {result.email}</p>
-            <p className="mt-1 text-xs text-emerald-800">Simpan sekarang — tidak akan ditampilkan lagi.</p>
+            <p className="mt-1 text-xs text-emerald-800">Simpan sekarang, tidak akan ditampilkan lagi.</p>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <code className="rounded-lg bg-white px-3 py-2 font-mono text-base font-bold tracking-wider text-slate-900">{result.password}</code>
               <Button onClick={copyResult} variant="primary" size="sm">
@@ -203,7 +203,7 @@ export default function AdminUsersPage() {
                 {!loading && users.map((u) => (
                   <tr key={u.id} className="border-b last:border-0">
                     <td className="py-2 pr-3 font-mono text-xs">{u.email}</td>
-                    <td className="py-2 pr-3">{u.name || <span className="text-slate-400">—</span>}</td>
+                    <td className="py-2 pr-3">{u.name || <span className="text-slate-400">-</span>}</td>
                     <td className="py-2 pr-3">
                       <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${u.role === "ADMIN" ? "bg-violet-100 text-violet-800" : "bg-slate-100 text-slate-700"}`}>{u.role}</span>
                     </td>

@@ -9,7 +9,7 @@
  *   - Tombol logout untuk user yang sudah login.
  *
  * State lokal (tidak di-context supaya modal UI tidak re-render seluruh app):
- *   - open: boolean — modal terbuka?
+ *   - open: boolean, modal terbuka?
  *   - mode: "login" | "register"
  *   - email, password, name: form values
  *   - status: pesan error/info

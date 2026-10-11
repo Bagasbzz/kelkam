@@ -8,10 +8,10 @@
  *
  * Status lifecycle: "suggested" → "draft" → "confirmed" → "locked" (atau "superseded" / "rejected").
  *
- * POST — tambah decision baru.
+ * POST, tambah decision baru.
  *   Body: { decisionKey?, category, statement, value, rationale?, status?, origin?, questionId?, sourceIds?, affectedArtifactIds?, history? }
  *
- * PUT — update decision berdasarkan decisionKey.
+ * PUT, update decision berdasarkan decisionKey.
  *   Body: { decisionKey: string, patch: { status?, value?, rationale? } }
  * -----------------------------------------------------------------------------
  */

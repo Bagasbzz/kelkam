@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Menghapus session user saat ini.
  *
- * - Hapus row di tabel `sessions` (DB) — supaya token tidak bisa dipakai ulang.
+ * - Hapus row di tabel `sessions` (DB), supaya token tidak bisa dipakai ulang.
  * - Hapus cookie `keluhkampus_session` di browser.
  *
  * Endpoint ini idempotent: kalau tidak ada session, tetap return 200.

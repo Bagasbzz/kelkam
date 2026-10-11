@@ -4,11 +4,11 @@
  * Lookup course publik by token. Dipakai mahasiswa yang belum login untuk
  * preview halaman course. Return:
  *   - 200 { success: true, course: {...}, tugases: [...] }
- *   - 400 — token tidak ada / kosong
- *   - 404 — token tidak ditemukan
- *   - 429 — rate limit (30 req / menit / IP)
+ *   - 400, token tidak ada / kosong
+ *   - 404, token tidak ditemukan
+ *   - 429, rate limit (30 req / menit / IP)
  *
- * Auth: publik (proxy skip path ini — lihat PUBLIC_API_EXACT_PATHS).
+ * Auth: publik (proxy skip path ini, lihat PUBLIC_API_EXACT_PATHS).
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
@@ -44,7 +44,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ success: false, error: "Course tidak ditemukan." }, { status: 404 });
     }
 
-    // List tugases (urut by deadline asc — yang paling dekat duluan).
+    // List tugases (urut by deadline asc, yang paling dekat duluan).
     const tugases = await prisma.tugas.findMany({
       where: { courseId: course.id },
       orderBy: { deadline: "asc" },

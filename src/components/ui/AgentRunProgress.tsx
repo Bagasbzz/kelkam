@@ -43,7 +43,7 @@ export default function AgentRunProgress({ run, events, startedAt, lastBeatAt, o
         {stale && live && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">menyambung ulang…</span>}
         <span className="ml-auto flex gap-1">
           {onPause && live && (
-            <button type="button" onClick={onPause} disabled={busy} className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Jeda — bisa dilanjutkan dengan mengetik 'lanjut'">
+            <button type="button" onClick={onPause} disabled={busy} className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50" title="Jeda, bisa dilanjutkan dengan mengetik 'lanjut'">
               <Pause className="h-3 w-3" /> Jeda
             </button>
           )}

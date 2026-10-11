@@ -1,8 +1,8 @@
 /**
  * /api/tugas/tugas/[id]/submit
  * -----------------------------------------------------------------------------
- * POST  — mahasiswa mengumpulkan tugas (pertama kali).
- * PATCH — mahasiswa mengubah pengumpulannya sendiri selama deadline belum lewat.
+ * POST, mahasiswa mengumpulkan tugas (pertama kali).
+ * PATCH, mahasiswa mengubah pengumpulannya sendiri selama deadline belum lewat.
  *         Urutan (position) dan status TIDAK berubah; hanya isi yang diganti dan
  *         `updatedAt` diisi supaya UI bisa menampilkan "Diubah <waktu>".
  *
@@ -12,7 +12,7 @@
  *   400 : input tidak valid / (POST) sudah pernah mengumpulkan
  *   401 : belum login
  *   404 : tugas / (PATCH) pengumpulan tidak ditemukan
- *   410 : (PATCH) deadline sudah lewat — tidak bisa diubah lagi
+ *   410 : (PATCH) deadline sudah lewat, tidak bisa diubah lagi
  *
  * Position di-assign atomic di dalam transaction (lihat position.ts).
  * Kalau POST datang setelah deadline, status jadi 'LATE' tapi tetap disimpan.

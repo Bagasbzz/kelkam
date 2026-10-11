@@ -34,7 +34,7 @@ import { NextResponse } from "next/server";
  *     return publicErrorResponse(error, "Gagal memproses.");
  *   }
  *
- * `publicMessage` WAJIB aman untuk ditampilkan ke user — JANGAN masukin info
+ * `publicMessage` WAJIB aman untuk ditampilkan ke user, JANGAN masukin info
  * sensitif di sini (path DB, query, dll).
  */
 export class ApiRequestError extends Error {
@@ -73,7 +73,7 @@ const MAX_RATE_LIMIT_KEYS = 5_000;
 
 /**
  * Hapus entry yang sudah expired, lalu trim kalau masih overflow.
- * Dipanggil tiap enforceRateLimit() — biaya O(N) tapi N kecil.
+ * Dipanggil tiap enforceRateLimit(), biaya O(N) tapi N kecil.
  */
 function pruneRateLimits(now: number) {
   for (const [key, value] of rateLimits) {

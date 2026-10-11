@@ -1,7 +1,7 @@
 "use client";
 
 interface KelasPickerProps {
-  /** Available options — list of { id, name }. */
+  /** Available options, list of { id, name }. */
   options: { id: string; name: string }[];
   /** Selected id, atau null/undefined untuk "none". */
   value: string | null | undefined;
@@ -13,7 +13,7 @@ interface KelasPickerProps {
 }
 
 /**
- * Radio card pattern untuk pilih kelas. BUKAN dropdown — UX lebih cepet
+ * Radio card pattern untuk pilih kelas. BUKAN dropdown, UX lebih cepet
  * karena user lihat semua opsi sekaligus.
  *
  * Aksesibilitas: pakai `aria-pressed` (toggle button), bukan `role="radio"`

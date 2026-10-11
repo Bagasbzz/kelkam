@@ -26,7 +26,7 @@ import type OpenAI from "openai";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { aiClient, stripDashes, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
 import { toPublicErrorMessage } from "@/lib/errors";
 
 export type AgentKind = "laporan" | "tugas";
@@ -82,7 +82,7 @@ export interface AgentDriver {
   describeToolCall?(name: string, args: Record<string, unknown>): string | null;
   /** Nama tool yang berarti "tanya user lalu berhenti" (status waiting_user). */
   askUserTool?: string;
-  /** Dipanggil SEKALI saat run berakhir (done/waiting_user/failed/cancelled) — simpan ke riwayat chat. */
+  /** Dipanggil SEKALI saat run berakhir (done/waiting_user/failed/cancelled), simpan ke riwayat chat. */
   onFinish(run: AgentRunPublic & { meta: Record<string, unknown> }): Promise<void>;
   temperature?: number;
   maxTokens?: number;
@@ -211,7 +211,7 @@ function compactMessages(messages: Msg[], force = false): Msg[] {
   });
 }
 
-/** Deskripsi default pemanggilan tool bila driver tidak menyediakan — tanpa nama/argumen teknis. */
+/** Deskripsi default pemanggilan tool bila driver tidak menyediakan, tanpa nama/argumen teknis. */
 function defaultDescribe() {
   return "Mengumpulkan data…";
 }
@@ -223,7 +223,7 @@ function describeTool(driver: AgentDriver, name: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — baca
+// Public API, baca
 // ---------------------------------------------------------------------------
 
 export async function getAgentRun(runId: string, ownerId: string): Promise<AgentRunPublic | null> {
@@ -231,7 +231,7 @@ export async function getAgentRun(runId: string, ownerId: string): Promise<Agent
   return row ? toPublic(row) : null;
 }
 
-/** Run yang belum selesai (queued/running/paused) untuk sesi ini — dipakai UI untuk auto-resume. */
+/** Run yang belum selesai (queued/running/paused) untuk sesi ini, dipakai UI untuk auto-resume. */
 export async function findActiveAgentRun(ownerId: string, kind: AgentKind, sessionId: string): Promise<AgentRunPublic | null> {
   const row = await prisma.agentRun.findFirst({
     where: { ownerId, kind, sessionId, status: { in: ["queued", "running", "paused"] }, createdAt: { gte: new Date(Date.now() - RUN_TTL_MS) } },
@@ -245,7 +245,7 @@ export function isRunLive(run: AgentRunPublic) {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — mutasi
+// Public API, mutasi
 // ---------------------------------------------------------------------------
 
 export async function createAgentRun(input: {
@@ -475,7 +475,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           aiClient.chat.completions.create({ model: m, messages: base, temperature: 0.2, max_tokens: FINAL_ANSWER_MAX_TOKENS }, { timeout: 80_000, maxRetries: 0 }),
           82_000,
         );
-        const text = stripThinking(r.choices[0]?.message?.content);
+        const text = stripDashes(stripThinking(r.choices[0]?.message?.content));
         if (text) return text;
       } catch { /* coba model berikutnya */ }
     }
@@ -490,7 +490,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       if (ctl.control === "cancel") {
         return finish({ status: "cancelled", reply: `Dihentikan oleh user setelah ${stepCount} langkah. Aktivitas: ${events.filter((e) => e.level === "tool").map((e) => e.text).slice(-8).join("; ") || "-"}.` });
       }
-      if (ctl.control === "pause") return release("paused", "Dijeda oleh user — ketik \"lanjut\" untuk meneruskan dari langkah terakhir.");
+      if (ctl.control === "pause") return release("paused", "Dijeda oleh user, ketik \"lanjut\" untuk meneruskan dari langkah terakhir.");
 
       // 2. Batas langkah → jawaban akhir.
       if (stepCount >= row0.maxSteps) {
@@ -500,7 +500,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
 
       // 3. Budget segmen habis → lepas lock, status queued (klien/cron melanjutkan).
       const remaining = opts.budgetMs - (Date.now() - startedAt);
-      if (remaining < MIN_STEP_BUDGET_MS) return release("queued", "Segmen waktu server habis — melanjutkan otomatis di segmen berikutnya…");
+      if (remaining < MIN_STEP_BUDGET_MS) return release("queued", "Segmen waktu server habis, melanjutkan otomatis di segmen berikutnya…");
 
       // 4. Panggil model.
       const isLast = stepCount === row0.maxSteps - 1;
@@ -532,7 +532,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           const next = alternateModel(model);
           const nextWait = Math.max(0, (availableAt.get(next) ?? 0) - Date.now());
           if (nextWait === 0) {
-            emit(`Kuota AI penuh (reset ±${Math.ceil(waitMs / 1000)}s) — beralih ke jalur cadangan…`, "warn");
+            emit(`Kuota AI penuh (reset ±${Math.ceil(waitMs / 1000)}s), beralih ke jalur cadangan…`, "warn");
             model = next;
             await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
             continue;
@@ -543,15 +543,15 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           model = waitMs <= nextWait ? model : next;
           await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { model } }).catch(() => undefined);
           if (wait <= Math.min(left, RATE_LIMIT_MAX_WAIT_MS)) {
-            emit(`Kuota AI penuh — menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut…`, "warn");
+            emit(`Kuota AI penuh, menunggu ±${Math.ceil(wait / 1000)}s lalu lanjut…`, "warn");
             await sleep(wait);
           } else {
-            return release("queued", `Kuota AI sedang dibatasi (±${Math.ceil(wait / 1000)}s) — dilanjutkan otomatis setelah pulih…`);
+            return release("queued", `Kuota AI sedang dibatasi (±${Math.ceil(wait / 1000)}s), dilanjutkan otomatis setelah pulih…`);
           }
           continue;
         }
         consecutiveErrors += 1;
-        emit(`AI belum merespons — percobaan ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`, "warn");
+        emit(`AI belum merespons, percobaan ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}`, "warn");
         if (/context|token|length|too large|maximum/i.test(msg)) messages = compactMessages(messages, true);
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           const reply = (await forceFinalAnswer("AI berulang kali gagal.")) || "";
@@ -567,7 +567,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
 
       // 5. Jawaban akhir.
       if (!calls.length) {
-        let reply = stripThinking(msg.content);
+        let reply = stripDashes(stripThinking(msg.content));
         // Respons kosong/terpotong (model berpikir sampai habis token) bukan kesimpulan → dorong lanjut.
         if ((!reply || truncated) && emptyReplies < MAX_EMPTY_REPLIES) {
           emptyReplies += 1;
@@ -626,13 +626,13 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
 
       if (pending) {
         emit(`Bertanya ke user: ${pending.question.slice(0, 120)}`);
-        return finish({ status: "waiting_user", reply: stripThinking(msg.content) || pending.question, pendingQuestion: pending });
+        return finish({ status: "waiting_user", reply: stripDashes(stripThinking(msg.content)) || pending.question, pendingQuestion: pending });
       }
     }
   } catch (err) {
     console.error(`[agent-run ${runId}] loop error:`, err instanceof Error ? err.message : err);
     const message = toPublicErrorMessage(err, "Terjadi kesalahan tak terduga.");
-    emit(`${message} — run disimpan, bisa dilanjutkan.`, "error");
+    emit(`${message}, run disimpan, bisa dilanjutkan.`, "error");
     await flushing;
     await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { status: "queued", lockToken: null, error: message.slice(0, 300), events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue } });
     return (await getAgentRun(runId, ref.ownerId)) as AgentRunPublic;
@@ -713,7 +713,7 @@ export async function tickAgentRuns(limit = 1, budgetMs = 80_000) {
   return { scanned: candidates.length, processed };
 }
 
-/** Kata kunci "lanjutkan saja" — tidak perlu ditambahkan sebagai pesan baru. */
+/** Kata kunci "lanjutkan saja", tidak perlu ditambahkan sebagai pesan baru. */
 export function isContinueKeyword(text: string) {
   return /^(lanjut(kan)?|terus(kan)?|continue|resume|ok(e|ay)?|go|ya|yes|sip|gas)\W*$/i.test(text.trim());
 }

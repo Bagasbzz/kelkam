@@ -1,4 +1,4 @@
-import { aiClient, AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW, assertAiConfigured, stripDashes, stripThinking } from "@/lib/ai/client";
 import { isAbortLikeError } from "@/lib/errors";
 
 const REPORT_TIMEOUT_MS = Number(process.env.AI_REPORT_TIMEOUT_MS || 25000);
@@ -215,7 +215,7 @@ Aturan kualitas wajib:
 export type ReportMode = "ringkas" | "lengkap";
 
 export interface ChapterInput {
-  /** Index section (0-based) dan total section — untuk konteks posisi. */
+  /** Index section (0-based) dan total section, untuk konteks posisi. */
   index: number;
   total: number;
   section: { id?: string; title: string; purpose: string; requiredDiagrams: string[] };
@@ -224,7 +224,7 @@ export interface ChapterInput {
   mode: ReportMode;
   /** Callback event detail untuk log job (opsional). */
   onEvent?: (message: string) => void;
-  /** Teks parsial dari percobaan sebelumnya yang timeout — dilanjutkan, bukan ditulis ulang. */
+  /** Teks parsial dari percobaan sebelumnya yang timeout, dilanjutkan, bukan ditulis ulang. */
   partial?: string;
   /** Dipanggil tiap ada potongan teks baru (untuk simpan parsial + heartbeat). */
   onPartial?: (text: string) => void;
@@ -259,12 +259,80 @@ export const CHAPTER_STEP_BUDGET_MS = Number(process.env.AI_CHAPTER_BUDGET_MS ||
 const AUDIT_TIMEOUT_MS = Number(process.env.AI_AUDIT_TIMEOUT_MS || 150_000);
 const MAX_CONTINUATIONS = 3;
 
-/** Hapus heading level-1 dan code fence yang kadang disisipkan model. */
+/** Hapus code fence, kalimat pembuka, dan em/en dash yang kadang disisipkan model. */
 function cleanChapterOutput(raw: string) {
   let output = String(raw || "").trim();
   output = output.replace(/^```(?:markdown|md)?\s*/i, "").replace(/\s*```$/i, "").trim();
   output = output.replace(/^(berikut|tentu|baik)[^\n]*\n+/i, "").trim();
-  return output;
+  return stripDashes(output);
+}
+
+// ---------------------------------------------------------------------------
+// Pengurang kemiripan (heuristik lokal, bukan Turnitin): cek n-gram kata yang
+// identik dengan abstrak referensi / bahan user.
+// ---------------------------------------------------------------------------
+
+const OVERLAP_NGRAM = 8;
+
+function normalizeForOverlap(text: string) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\[gambar:[^\]]*\]/g, " ")
+    .replace(/[^a-z0-9\u00C0-\u024F\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function ngramSet(words: string[], n: number) {
+  const set = new Set<string>();
+  for (let i = 0; i + n <= words.length; i += 1) set.add(words.slice(i, i + n).join(" "));
+  return set;
+}
+
+export interface OverlapResult {
+  /** Persentase kata bab yang masuk n-gram identik dengan sumber (0-100). */
+  percent: number;
+  /** Cuplikan kalimat yang mirip sumber (maks 8), untuk dikirim ke audit. */
+  snippets: string[];
+}
+
+/**
+ * Hitung persentase kata dalam `markdown` yang berada di dalam n-gram (8 kata)
+ * yang persis sama dengan salah satu teks sumber. Teks sumber = abstrak
+ * referensi + bahan user. Hasil dipakai untuk log dan instruksi parafrase ke
+ * model audit; bukan pengganti pemeriksaan Turnitin.
+ */
+export function detectSourceOverlap(markdown: string, sourceTexts: string[], n = OVERLAP_NGRAM): OverlapResult {
+  const words = normalizeForOverlap(markdown);
+  if (words.length < n) return { percent: 0, snippets: [] };
+  const sourceGrams = new Set<string>();
+  for (const text of sourceTexts) {
+    const sourceWords = normalizeForOverlap(text);
+    if (sourceWords.length < n) continue;
+    for (const gram of ngramSet(sourceWords, n)) sourceGrams.add(gram);
+  }
+  if (!sourceGrams.size) return { percent: 0, snippets: [] };
+
+  const flagged = new Array<boolean>(words.length).fill(false);
+  const snippets: string[] = [];
+  let lastHit = -n;
+  for (let i = 0; i + n <= words.length; i += 1) {
+    if (!sourceGrams.has(words.slice(i, i + n).join(" "))) continue;
+    for (let k = i; k < i + n; k += 1) flagged[k] = true;
+    // Satu cuplikan per rentang berurutan supaya daftar tidak meledak.
+    if (i - lastHit >= n && snippets.length < 8) snippets.push(words.slice(i, Math.min(words.length, i + n + 4)).join(" "));
+    lastHit = i;
+  }
+  const hits = flagged.filter(Boolean).length;
+  return { percent: Math.round((hits / words.length) * 1000) / 10, snippets };
+}
+
+/** Kumpulkan teks sumber (abstrak referensi + bahan) dari proyek untuk cek kemiripan. */
+function overlapCorpus(compact: CompactProject) {
+  return [
+    ...compact.references.map((reference) => reference.abstract),
+    ...compact.sources.map((source) => source.content),
+  ].filter((text) => text && text.length >= 80);
 }
 
 /**
@@ -404,7 +472,7 @@ function pickReferences(compact: CompactProject, section: ChapterInput["section"
   return scored.slice(0, limit).map((item) => item.reference);
 }
 
-/** Placeholder BAB kalau AI gagal/timeout — tetap valid markdown. */
+/** Placeholder BAB kalau AI gagal/timeout, tetap valid markdown. */
 export function fallbackChapter(input: ChapterInput, project?: unknown): ChapterOutput {
   const { section } = input;
   const compact = project ? compactProject(project) : null;
@@ -533,13 +601,18 @@ ATURAN STRUKTUR:
 ATURAN SITASI (wajib):
 5. Gunakan referensi yang diberikan secara nyata: minimal ${minCitations} referensi BERBEDA disitasi in-text gaya ${compact.citationStyle || "APA"} (Nama, Tahun). Sintesis antar-sumber (bandingkan/kontraskan temuan), bukan sekadar menyebut. Hanya sitasi referensi yang ada di daftar "referensi"; bila topik tak tercakup, tulis [butuh referensi: topik]. Gunakan abstrak referensi untuk mengisi substansi.
 
+ATURAN ANTI-PLAGIARISME (wajib, untuk menekan skor kemiripan):
+6. Parafrase total: jangan menyalin kalimat dari abstrak referensi atau bahan user. Ubah struktur kalimat, urutan ide, dan pilihan kata; dilarang ada 8 kata berurutan yang sama dengan sumber. Kutipan langsung hanya bila benar-benar perlu, maksimal 1 per bab, pendek (< 25 kata), dalam tanda kutip dan disitasi dengan nomor halaman bila ada.
+7. Hindari kalimat definisi klise yang generik ("X adalah suatu ..."); jelaskan dengan kata-kata sendiri dan hubungkan ke konteks proyek ini. Variasikan panjang dan pola kalimat.
+
 ATURAN GAMBAR/TABEL:
-6. ${mandatoryPlaceholders.length ? `Placeholder gambar berikut WAJIB muncul PERSIS (tulis apa adanya, masing-masing di baris sendiri, di posisi yang paling relevan), lalu jelaskan isinya secara naratif minimal 1 paragraf memakai ringkasan alurnya:\n${mandatoryPlaceholders.map((item) => `   ${item}`).join("\n")}` : "Jangan membuat placeholder gambar baru."} Format umum placeholder gambar: [Gambar: Judul - caption].
-7. ${sectionTables.length ? `Tabel berikut WAJIB dibuat di bagian ini sebagai tabel markdown sesuai rencana kolom (isi dengan data dari bahan/referensi; bila belum ada data tulis [ISI ...]), didahului baris "**Tabel: Judul Tabel**" dan diikuti paragraf penjelasan:\n${sectionTables.map((table) => `   - ${table.title}: ${table.purpose}`).join("\n")}` : "Jangan membuat tabel kecuali benar-benar perlu."}
+8. ${mandatoryPlaceholders.length ? `Placeholder gambar berikut WAJIB muncul PERSIS (tulis apa adanya, masing-masing di baris sendiri, di posisi yang paling relevan), lalu jelaskan isinya secara naratif minimal 1 paragraf memakai ringkasan alurnya:\n${mandatoryPlaceholders.map((item) => `   ${item}`).join("\n")}` : "Jangan membuat placeholder gambar baru."} Format umum placeholder gambar: [Gambar: Judul - caption].
+9. ${sectionTables.length ? `Tabel berikut WAJIB dibuat di bagian ini sebagai tabel markdown sesuai rencana kolom (isi dengan data dari bahan/referensi; bila belum ada data tulis [ISI ...]), didahului baris "**Tabel: Judul Tabel**" dan diikuti paragraf penjelasan:\n${sectionTables.map((table) => `   - ${table.title}: ${table.purpose}`).join("\n")}` : "Jangan membuat tabel kecuali benar-benar perlu."}
 
 ATURAN TIPOGRAFI:
-8. Istilah asing/bahasa Inggris dan nama latin ditulis miring dengan *...* (contoh: *framework*, *machine learning*, *end-to-end*). Singkatan diperkenalkan sekali dengan kepanjangannya.
-9. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan. Pastikan kalimat terakhir utuh.`;
+10. Istilah asing/bahasa Inggris dan nama latin ditulis miring dengan *...* (contoh: *framework*, *machine learning*, *end-to-end*). Singkatan diperkenalkan sekali dengan kepanjangannya.
+11. DILARANG memakai tanda em dash (\u2014) atau en dash (\u2013) di mana pun. Pakai koma, titik, titik dua, tanda kurung, atau tanda hubung biasa (-) untuk rentang angka.
+12. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan. Pastikan kalimat terakhir utuh.`;
 
   const userPayload = {
     laporan: {
@@ -654,6 +727,8 @@ ATURAN TIPOGRAFI:
   }
   const citationCount = countDistinctCitations(content);
   emit(`Sitasi terdeteksi: ${citationCount}${citationCount < minCitations ? ` (target ${minCitations}, akan dilengkapi saat audit)` : ""}`);
+  const overlap = detectSourceOverlap(content, overlapCorpus(compact));
+  if (overlap.percent > 0) emit(`Kemiripan dengan sumber (cek lokal, 8 kata berurutan): ${overlap.percent}%${overlap.percent >= 3 ? ", akan diparafrase saat audit" : ""}`);
   if (looksTruncated(content)) emit("Catatan: akhir bab masih terlihat terpotong, akan dirapikan saat audit");
 
   return { content, summary: summarizeChapter(content), source: "ai", finishReason, tokensUsed, model };
@@ -683,7 +758,7 @@ export interface AuditChapterResult {
   issues: string[];
 }
 
-/** Cek heuristik lokal (0 token) — dipakai untuk log dan memutuskan perlu audit AI. */
+/** Cek heuristik lokal (0 token), dipakai untuk log dan memutuskan perlu audit AI. */
 export function detectChapterIssues(markdown: string, minCitations: number) {
   const issues: string[] = [];
   const lines = markdown.split("\n");
@@ -700,6 +775,7 @@ export function detectChapterIssues(markdown: string, minCitations: number) {
   const citations = countDistinctCitations(markdown);
   if (citations < minCitations) issues.push(`sitasi ${citations} < ${minCitations}`);
   if (/^#\s+/m.test(markdown)) issues.push("ada heading level-1");
+  if (/[\u2013\u2014]/.test(markdown)) issues.push("ada em/en dash");
   return issues;
 }
 
@@ -721,6 +797,8 @@ export async function auditChapter(project: unknown, input: {
   const isRingkas = input.mode === "ringkas";
   const minCitations = isRingkas ? 2 : Math.min(6, compact.references.length);
   const issues = detectChapterIssues(input.content, minCitations);
+  const overlap = detectSourceOverlap(input.content, overlapCorpus(compact));
+  if (overlap.snippets.length) issues.push(`kemiripan dengan sumber ${overlap.percent}% (${overlap.snippets.length} cuplikan)`);
   const model = AI_MODEL_REVIEW;
   const placeholders = input.content.match(/\[Gambar:[^\]]+\]/g) || [];
 
@@ -731,16 +809,19 @@ export async function auditChapter(project: unknown, input: {
 Periksa dan perbaiki:
 1. Struktur: heading "## ${input.sectionTitle}" tetap di awal; sub-bagian "### ${input.index + 1}.N Judul" bernomor berurutan; tidak ada heading kosong; tidak ada paragraf/kalimat terputus; tidak ada heading "#".
 2. Kedalaman: paragraf yang dangkal (<3 kalimat) diperkaya dengan penjelasan mekanisme, contoh penerapan pada proyek ini, atau sintesis antar-referensi. Jangan memangkas isi yang sudah baik. ${isRingkas ? "" : "Panjang akhir minimal sama dengan versi awal."}
-3. Sitasi: gaya ${compact.citationStyle || "APA"} konsisten (Nama, Tahun). Hanya referensi dalam daftar "referensi" yang boleh disitasi — ganti sitasi yang tidak ada di daftar dengan referensi yang sesuai atau [butuh referensi: topik]. Target minimal ${minCitations} referensi berbeda.
+3. Sitasi: gaya ${compact.citationStyle || "APA"} konsisten (Nama, Tahun). Hanya referensi dalam daftar "referensi" yang boleh disitasi, ganti sitasi yang tidak ada di daftar dengan referensi yang sesuai atau [butuh referensi: topik]. Target minimal ${minCitations} referensi berbeda.
 4. Tipografi: istilah asing/bahasa Inggris & nama latin ditulis *miring*; tabel markdown valid dengan baris "**Tabel: Judul**" di atasnya; angka & singkatan konsisten.
 5. Placeholder gambar berikut HARUS tetap ada PERSIS tanpa diubah: ${placeholders.length ? placeholders.join(" | ") : "(tidak ada)"}.
 6. Hapus kalimat meta ("berikut adalah", "demikian bab ini"), pengulangan, dan klaim tanpa dasar (ganti dengan placeholder [ISI DATA ...] bila perlu).
+7. Anti-plagiarisme: setiap kalimat dalam "kalimatMiripSumber" (dan kalimat lain yang menyalin abstrak referensi/bahan) WAJIB diparafrase total dengan struktur kalimat dan pilihan kata berbeda, makna dan sitasi tetap. Tidak boleh ada 8 kata berurutan yang sama dengan sumber.
+8. DILARANG memakai tanda em dash (\u2014) atau en dash (\u2013); ganti dengan koma, titik, tanda kurung, atau tanda hubung biasa (-).
 Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
 
   const userPayload = {
     laporan: { judul: compact.title || compact.topic, topik: compact.topic, jenis: compact.projectType },
     posisi: `BAB ${input.index + 1} dari ${input.total}`,
     masalahTerdeteksi: issues,
+    kalimatMiripSumber: overlap.snippets,
     referensi: compact.references.slice(0, 40).map((reference) => ({ citation: reference.citation, abstract: reference.abstract.slice(0, 500) })),
     bab: input.content,
   };
@@ -767,7 +848,8 @@ Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
     const tokensUsed = response.usage?.total_tokens ?? 0;
     const originalWords = input.content.split(/\s+/).length;
     const words = content.split(/\s+/).length;
-    emit(`Audit selesai: ${originalWords} → ${words} kata`);
+    const overlapAfter = overlap.snippets.length ? detectSourceOverlap(content, overlapCorpus(compact)) : null;
+    emit(`Audit selesai: ${originalWords} → ${words} kata${overlapAfter ? `, kemiripan ${overlap.percent}% → ${overlapAfter.percent}%` : ""}`);
 
     // Guard: hasil audit terpotong/menyusut drastis/kehilangan placeholder → pakai asli.
     const lostPlaceholder = placeholders.some((placeholder) => !content.includes(placeholder));
@@ -822,7 +904,7 @@ export function assembleReport(project: unknown, chapters: string[]) {
   const audit = auditCitations(body, compact);
   const notes = [...audit.notes];
   if (cited.length && uncited.length) {
-    notes.push(`> **Catatan referensi tak terpakai:** ${uncited.length} referensi terverifikasi belum disitasi sehingga tidak dimasukkan ke Daftar Pustaka — ${uncited.slice(0, 4).map((item) => item.slice(0, 60)).join("; ")}${uncited.length > 4 ? "; ..." : ""}. Gunakan revisi "Tambah sitasi" bila ingin memakainya.`);
+    notes.push(`> **Catatan referensi tak terpakai:** ${uncited.length} referensi terverifikasi belum disitasi sehingga tidak dimasukkan ke Daftar Pustaka, ${uncited.slice(0, 4).map((item) => item.slice(0, 60)).join("; ")}${uncited.length > 4 ? "; ..." : ""}. Gunakan revisi "Tambah sitasi" bila ingin memakainya.`);
   }
   if (notes.length) output += `\n${notes.join("\n")}\n`;
   return output;
@@ -851,7 +933,7 @@ export function auditCitations(markdown: string, compact: CompactProject) {
   const placeholders = (markdown.match(/\[butuh referensi:[^\]]*\]/gi) || []).length;
   const notes: string[] = [];
   if (unmatched.length) {
-    notes.push(`> **Catatan sitasi:** ${unmatched.length} sitasi belum ada di Daftar Pustaka — ${unmatched.slice(0, 8).join("; ")}${unmatched.length > 8 ? "; ..." : ""}. Tambahkan referensinya atau hapus sitasi.`);
+    notes.push(`> **Catatan sitasi:** ${unmatched.length} sitasi belum ada di Daftar Pustaka, ${unmatched.slice(0, 8).join("; ")}${unmatched.length > 8 ? "; ..." : ""}. Tambahkan referensinya atau hapus sitasi.`);
   }
   if (placeholders) {
     notes.push(`> **Catatan referensi:** ${placeholders} bagian masih bertanda [butuh referensi]. Cari jurnal di Research lalu jalankan revisi "Tambah sitasi".`);
