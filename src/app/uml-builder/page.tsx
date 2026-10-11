@@ -15,6 +15,8 @@ interface DiagramMeta {
   title?: string;
   lanes: string[];
   reportDiagramId?: string;
+  /** Sesi penyusun laporan (server) asal diagram; jika ada, persetujuan dikirim ke server. */
+  reportSessionId?: string;
   reportContext?: {
     studioProjectId?: string;
     reportTitle?: string;
@@ -284,6 +286,7 @@ export default function UMLBuilder() {
   const [umlReferenceImage, setUmlReferenceImage] = useState<File | null>(null);
   const [isAiModalOpen, setIsAiModalOpen] = useState(false);
   const [diagramMeta, setDiagramMeta] = useState<DiagramMeta>({ lanes: [] });
+  const [isApprovingToReport, setIsApprovingToReport] = useState(false);
   const [isStorageHydrated, setIsStorageHydrated] = useState(false);
   const loadedPrefillRef = useRef(false);
   const diagramTypeRef = useRef<DiagramType>(diagramType);
@@ -627,6 +630,7 @@ export default function UMLBuilder() {
           title: parsed.diagramData?.meta?.title || parsed.title,
           lanes: restoredLanes,
           reportDiagramId: parsed.reportDiagramId,
+          reportSessionId: typeof parsed.reportSessionId === 'string' ? parsed.reportSessionId : undefined,
           reportContext: parsed.reportContext,
         });
         setIsAiModalOpen(restoredNodes.length === 0);
@@ -842,6 +846,46 @@ export default function UMLBuilder() {
     const overlapWarning = approvalValidation.warnings.find((warning) => warning.includes('bertumpuk'));
     if (overlapWarning) {
       showToast('Masih ada elemen bertumpuk. Klik Rapikan Diagram sebelum menyetujui.');
+      return;
+    }
+
+    // Diagram berasal dari sesi penyusun laporan (server) → simpan langsung ke sesi.
+    if (diagramMeta.reportSessionId) {
+      const sessionId = diagramMeta.reportSessionId;
+      const lanes = diagramMeta.lanes.length
+        ? diagramMeta.lanes
+        : (Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[]);
+      setIsApprovingToReport(true);
+      void (async () => {
+        try {
+          const res = await authenticatedFetch(`/api/laporan/sessions/${encodeURIComponent(sessionId)}/diagrams`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              diagramId: diagramMeta.reportDiagramId,
+              diagramType,
+              title: diagramMeta.title,
+              nodes,
+              edges,
+              lanes,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.success) {
+            showToast(data?.error || 'Gagal menyimpan diagram ke laporan.');
+            return;
+          }
+          showToast(
+            data.placedInSection && data.placedInSection !== '(placeholder sudah ada)'
+              ? `Diagram masuk ke laporan (bab "${data.placedInSection}"). Kembali ke dashboard untuk lihat hasilnya.`
+              : 'Diagram disetujui dan tersimpan ke laporan. Kembali ke dashboard untuk lihat hasilnya.',
+          );
+        } catch {
+          showToast('Gagal terhubung ke server. Coba lagi.');
+        } finally {
+          setIsApprovingToReport(false);
+        }
+      })();
       return;
     }
 
@@ -1635,7 +1679,7 @@ export default function UMLBuilder() {
         {diagramMeta.reportDiagramId && (
           <button
             onClick={handleApproveToReport}
-            disabled={nodes.length === 0 || edges.length === 0}
+            disabled={nodes.length === 0 || edges.length === 0 || isApprovingToReport}
             style={{
               height: '44px',
               borderRadius: '999px',
@@ -1653,7 +1697,7 @@ export default function UMLBuilder() {
             }}
             title="Setujui diagram dan masukkan ke Laporan Builder"
           >
-            <CheckCircle2 size={18} /> Setujui ke Laporan
+            <CheckCircle2 size={18} /> {isApprovingToReport ? 'Menyimpan…' : 'Setujui ke Laporan'}
           </button>
         )}
         <div style={{ background: 'white', padding: '8px 16px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)', fontSize: '0.85rem', fontWeight: 700, color: '#4f46e5', border: '1px solid #e0e7ff', animation: 'bounce 2s infinite' }}>

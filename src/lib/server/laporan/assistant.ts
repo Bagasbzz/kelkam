@@ -15,6 +15,9 @@ import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
 import { startReportJob, getReportJob, extractDiagramArtifacts, type ReportJob, type ReportDiagramArtifact } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
+import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
+import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { exportSessionDocx } from "./export-docx";
 import {
   appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
   type AgentDriver, type AgentRunPublic, type AgentToolContext,
@@ -242,7 +245,7 @@ ALUR:
 1. INTAKE — ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru → panggil updateBrief.
 2. PLANNED — bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
 3. EXECUTING — hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
-4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik.
+4. DRAFTED — user bisa minta revisi bagian tertentu → panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat — jangan membuat ulang kecuali diminta.
 5. VISUAL — laporan tidak boleh polos. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
    a) diagrams type flowchart/usecase/activity/sequence → dibuat otomatis oleh engine UML Builder (vektor, bisa diedit user).
    b) diagrams type arsitektur/erd/class/konsep/kerangka → dibuat otomatis sebagai diagram vektor terstruktur (kotak komponen + relasi), BUKAN gambar AI.
@@ -336,6 +339,14 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: "reviseSection",
       description: "Tulis ulang satu bagian draft (berdasarkan judul heading) sesuai instruksi. Hanya saat stage=drafted.",
       parameters: { type: "object", properties: { sectionTitle: { type: "string" }, instruction: { type: "string" } }, required: ["sectionTitle", "instruction"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "exportDocx",
+      description: "Bangun file DOCX terbaru dari draft (termasuk diagram & ilustrasi yang sudah jadi) dan kembalikan tautan unduhan. Panggil setelah reviseSection atau saat user minta file. Hanya saat stage=drafted.",
+      parameters: { type: "object", properties: {} },
     },
   },
   {
@@ -506,7 +517,28 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       state.draft = next;
       await persist(state);
       events.push(`Bagian "${sec.title}" direvisi`);
-      return { ok: true, section: sec.title, preview: out.content.slice(0, 600) };
+      return { ok: true, section: sec.title, preview: out.content.slice(0, 600), next: "Panggil exportDocx agar user menerima file terbaru." };
+    }
+    case "exportDocx": {
+      if (!state.draft) return { error: "Belum ada draft." };
+      emit("Menyusun file DOCX (diagram & ilustrasi disertakan)…");
+      const title = state.title || state.brief.title || state.brief.topic || "Laporan";
+      const exported = await exportSessionDocx({
+        sessionId: state.id,
+        ownerId: state.ownerId,
+        title,
+        draft: state.draft,
+        brief: state.brief,
+        diagrams: (state.plan?.diagrams || []).map((d) => ({ title: d.title, svg: d.svg })),
+      });
+      events.push(`File ${exported.name} siap diunduh`);
+      return {
+        ok: true,
+        downloadMarkdown: `📄 **[Unduh ${exported.name}](${exported.url})** (${Math.max(1, Math.round(exported.size / 1024))} KB)`,
+        pendingFigures: exported.pendingFigures,
+        missingImages: exported.missingImages,
+        note: "Tempel downloadMarkdown apa adanya di jawaban. Ingatkan user melakukan Update Field di Word untuk daftar isi/gambar/tabel.",
+      };
     }
     case "generateFigure": {
       const title = asStr(args.title, 160);
@@ -571,13 +603,101 @@ export async function syncJobIntoSession(state: SessionState): Promise<ReportJob
     state.draft = job.result;
     state.stage = "drafted";
     await persist(state);
+    void announceJobDone(state, job);
   } else if ((job.status === "failed" || job.status === "cancelled") && state.stage === "executing") {
     state.stage = "planned";
     await persist(state);
+    void announceJobFailed(state, job);
   } else if (synced) {
     await persist(state);
   }
   return job;
+}
+
+/** Session yang sedang dibuatkan pesan selesai (cegah pesan ganda dari polling paralel). */
+const announcing = new Set<string>();
+
+async function alreadyAnnounced(sessionId: string, jobId: string) {
+  const existing = await prisma.reportMessage.findFirst({
+    where: { sessionId, role: "assistant", toolCalls: { path: ["jobDone"], equals: jobId } },
+    select: { id: true },
+  });
+  return Boolean(existing);
+}
+
+/**
+ * Job selesai → balas otomatis di chat: file DOCX siap unduh (dibangun di
+ * server, termasuk diagram & ilustrasi), ringkasan singkat, dan tawaran revisi.
+ */
+async function announceJobDone(state: SessionState, job: ReportJob) {
+  const key = `${state.id}:${job.id}`;
+  if (announcing.has(key)) return;
+  announcing.add(key);
+  try {
+    if (await alreadyAnnounced(state.id, job.id)) return;
+    const title = state.title || state.brief.title || state.brief.topic || "Laporan";
+    const chapters = job.steps.filter((s) => s.kind === "chapter");
+    const placeholderChapters = chapters.filter((s) => s.status === "fallback").map((s) => s.title);
+    const diagramsDone = (state.plan?.diagrams || []).filter((d) => d.svg).length;
+    const words = (state.draft || "").split(/\s+/).filter(Boolean).length;
+
+    let fileLine: string;
+    let pendingNote = "";
+    try {
+      const exported = await exportSessionDocx({
+        sessionId: state.id,
+        ownerId: state.ownerId,
+        title,
+        draft: state.draft || "",
+        brief: state.brief,
+        diagrams: (state.plan?.diagrams || []).map((d) => ({ title: d.title, svg: d.svg })),
+      });
+      fileLine = `📄 **[Unduh ${exported.name}](${exported.url})** (${Math.max(1, Math.round(exported.size / 1024))} KB)`;
+      if (exported.pendingFigures) pendingNote = `\n- ${exported.pendingFigures} ilustrasi masih diproses; minta "kirim file lagi" setelah muncul di tab Gambar agar ikut terpasang.`;
+      if (exported.missingImages) pendingNote += `\n- ${exported.missingImages} gambar belum punya sumber (ditandai catatan di dokumen).`;
+    } catch (error) {
+      console.error("[laporan] export DOCX otomatis gagal:", error);
+      fileLine = "File DOCX otomatis gagal dibuat; gunakan tombol **Unduh DOCX** di tab Draft.";
+    }
+
+    const content = [
+      `Laporan **${title}** selesai disusun: ${chapters.length} bab, ${diagramsDone} diagram, ±${words.toLocaleString("id-ID")} kata.`,
+      "",
+      fileLine,
+      "",
+      "Catatan:",
+      `- Daftar isi/gambar/tabel di Word perlu *update field* (klik kanan → Update Field) saat pertama dibuka.`,
+      ...(placeholderChapters.length ? [`- Bab yang belum lengkap dan perlu revisi: ${placeholderChapters.join(", ")}.`] : []),
+      ...(pendingNote ? [pendingNote.trim().split("\n").map((l) => l.trim()).join("\n")] : []),
+      "",
+      "Ada bagian yang mau direvisi? Sebutkan bab + instruksinya (misal: \"perdalam metode penelitian, tambah justifikasi sampel\"), nanti saya tulis ulang bagian itu dan kirim file terbaru.",
+    ].join("\n");
+
+    await prisma.reportMessage.create({
+      data: { sessionId: state.id, role: "assistant", content, toolCalls: { tools: ["exportDocx"], jobDone: job.id } },
+    });
+  } catch (error) {
+    console.error("[laporan] announceJobDone gagal:", error);
+  } finally {
+    announcing.delete(key);
+  }
+}
+
+async function announceJobFailed(state: SessionState, job: ReportJob) {
+  const key = `${state.id}:${job.id}`;
+  if (announcing.has(key)) return;
+  announcing.add(key);
+  try {
+    if (await alreadyAnnounced(state.id, job.id)) return;
+    const content = job.status === "cancelled"
+      ? "Penulisan dibatalkan. Rencana dan sumber masih tersimpan; klik **Setujui & eksekusi** atau ketik \"eksekusi\" untuk memulai lagi."
+      : `Penulisan berhenti: ${job.error || "terjadi kesalahan"}. Ketik "eksekusi" untuk mencoba lagi — bagian yang sudah jadi tidak diulang.`;
+    await prisma.reportMessage.create({ data: { sessionId: state.id, role: "assistant", content, toolCalls: { tools: [], jobDone: job.id } } });
+  } catch (error) {
+    console.error("[laporan] announceJobFailed gagal:", error);
+  } finally {
+    announcing.delete(key);
+  }
 }
 
 /** Salin artefak diagram dari payload job ke plan.diagrams. Return true bila ada perubahan. */
@@ -619,6 +739,109 @@ export async function addSessionMaterial(sessionId: string, ownerId: string, mat
   return item;
 }
 
+export interface ApproveDiagramInput {
+  diagramId: string;
+  diagramType: string;
+  title?: string;
+  nodes: DiagramNode[];
+  edges: DiagramEdge[];
+  lanes: string[];
+}
+
+/**
+ * "Setujui ke Laporan" dari UML Builder: simpan diagram hasil edit user ke
+ * rencana sesi (server), render SVG, dan pastikan placeholder gambar ada di
+ * bab tujuan draft (bila draft sudah ada) sehingga ikut terekspor rapi.
+ */
+export async function approveDiagramToSession(sessionId: string, ownerId: string, input: ApproveDiagramInput) {
+  const row = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId } });
+  if (!row) throw new Error("Sesi tidak ditemukan.");
+  const state = loadState(row);
+  if (!state.plan) throw new Error("Sesi belum punya rencana.");
+  const idx = state.plan.diagrams.findIndex((d) => d.id === input.diagramId);
+  if (idx < 0) throw new Error("Diagram tidak ada di rencana sesi ini.");
+  const planned = state.plan.diagrams[idx];
+  const title = (input.title || planned.title).trim().slice(0, 160) || planned.title;
+  const lanes = input.lanes.length ? input.lanes : Array.from(new Set(input.nodes.map((n) => n.lane).filter((l): l is string => Boolean(l))));
+  const svg = diagramToSvg({ nodes: input.nodes, edges: input.edges, lanes, title });
+  const flowSummary = summarizeDiagram({ nodes: input.nodes, edges: input.edges, lanes });
+  state.plan.diagrams[idx] = {
+    ...planned,
+    title,
+    type: input.diagramType || planned.type,
+    status: "approved",
+    diagramData: { nodes: input.nodes, edges: input.edges, meta: { title, lanes, diagramType: input.diagramType || planned.type } },
+    svg,
+    flowSummary,
+  };
+
+  // Sinkronkan ke payload job agar hasil edit user tidak ditimpa sinkronisasi artefak berikutnya.
+  if (state.jobId) {
+    const jobRow = await prisma.reportJob.findFirst({ where: { id: state.jobId, ownerId }, select: { payload: true } });
+    const payload = asObj(jobRow?.payload);
+    if (jobRow && Array.isArray(payload.diagrams)) {
+      const diagrams = payload.diagrams.map((d) => {
+        const dobj = asObj(d);
+        if (dobj.id !== input.diagramId) return d;
+        return { ...dobj, title, status: "approved", diagramData: state.plan!.diagrams[idx].diagramData, svg, flowSummary, error: undefined };
+      });
+      await prisma.reportJob.update({ where: { id: state.jobId }, data: { payload: { ...payload, diagrams } as object } });
+    }
+  }
+
+  // Draft sudah ada → pastikan placeholder dengan judul ini ada di bab tujuan.
+  let placedInSection: string | null = null;
+  if (state.draft) {
+    const { lines, sections } = splitSections(state.draft);
+    const oldKey = planned.title.trim().toLowerCase();
+    const newKey = title.toLowerCase();
+    const placeholderRe = /^\[Gambar:\s*(.+?)\]\s*$/i;
+    let found = false;
+    const updated = lines.map((line) => {
+      const m = placeholderRe.exec(line.trim());
+      if (!m) return line;
+      const inner = m[1].trim();
+      const sep = inner.lastIndexOf(" - ");
+      const key = (sep > 0 ? inner.slice(0, sep) : inner).trim().toLowerCase();
+      if (key !== oldKey && key !== newKey) return line;
+      found = true;
+      const caption = sep > 0 ? inner.slice(sep + 3).trim() : planned.purpose || title;
+      return `[Gambar: ${title} - ${caption}]`;
+    });
+    if (!found) {
+      const targetSection = state.plan.outline.find((s) => s.id === planned.sectionId);
+      const targetTitle = targetSection?.title.toLowerCase();
+      let secIdx = targetTitle ? sections.findIndex((s) => s.title.toLowerCase() === targetTitle || s.title.toLowerCase().includes(targetTitle)) : -1;
+      if (secIdx < 0) {
+        const body = sections.filter((s) => !/daftar pustaka|referensi/i.test(s.title));
+        const last = body[body.length - 1];
+        secIdx = last ? sections.indexOf(last) : -1;
+      }
+      if (secIdx >= 0) {
+        const sec = sections[secIdx];
+        // Sisipkan sebelum sub-heading berikutnya di dalam bab, setelah paragraf terakhir yang tidak kosong.
+        let insertAt = sec.end;
+        while (insertAt > sec.start + 1 && !updated[insertAt - 1].trim()) insertAt -= 1;
+        updated.splice(insertAt, 0, "", `[Gambar: ${title} - ${planned.purpose || title}]`, "");
+        placedInSection = sec.title;
+      }
+    } else {
+      placedInSection = "(placeholder sudah ada)";
+    }
+    state.draft = updated.join("\n");
+  }
+  await persist(state);
+  await prisma.reportMessage.create({
+    data: {
+      sessionId,
+      role: "assistant",
+      content: `Diagram **${title}** sudah disetujui dari UML Builder dan masuk ke laporan${placedInSection && placedInSection !== "(placeholder sudah ada)" ? ` (bab "${placedInSection}")` : ""}. ${state.draft ? "Ketik \"kirim file\" untuk mendapatkan DOCX terbaru dengan diagram ini." : "Diagram akan dipakai saat penulisan dimulai."}`,
+      toolCalls: { tools: ["approveDiagram"] },
+    },
+  });
+  return { title, placedInSection, stage: state.stage };
+}
+
 /** Eksekusi dari tombol UI (tanpa lewat AI). Mengembalikan jobId atau error. */
 export async function executeSession(sessionId: string, ownerId: string, opts: { ignoreMinSources?: boolean } = {}) {
   const row = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId } });
@@ -646,6 +869,7 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
     case "findSources": return `Mencari sumber: "${asStr(args.query, 80)}"`;
     case "startExecution": return "Memulai penulisan penuh…";
     case "reviseSection": return `Merevisi bagian "${asStr(args.sectionTitle, 80)}"…`;
+    case "exportDocx": return "Menyusun file DOCX terbaru…";
     case "generateFigure": return `Membuat gambar "${asStr(args.title, 80)}"…`;
     default: return null;
   }

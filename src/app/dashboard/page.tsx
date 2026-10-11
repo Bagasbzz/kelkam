@@ -353,6 +353,7 @@ export default function LaporanPage() {
       diagramType: d.type,
       title: d.title,
       reportDiagramId: d.id,
+      reportSessionId: activeId,
       diagramData: d.diagramData ? { nodes: d.diagramData.nodes, edges: d.diagramData.edges, meta: { title: d.diagramData.meta?.title || d.title, lanes: d.diagramData.meta?.lanes || [] } } : undefined,
     }));
     window.open("/uml-builder", "_blank", "noopener");

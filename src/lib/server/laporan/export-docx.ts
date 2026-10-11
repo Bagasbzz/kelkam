@@ -1,0 +1,76 @@
+/**
+ * Ekspor DOCX laporan di server: draft markdown sesi + diagram (SVG → PNG via
+ * resvg) + ilustrasi (image job selesai) → file DOCX tersimpan sebagai
+ * FileUpload milik user, diunduh lewat /api/files/[fileId]. Dipakai untuk
+ * mengirim tautan unduhan langsung di chat saat job selesai / setelah revisi.
+ */
+import { Packer } from "docx";
+import { prisma } from "@/lib/db/prisma";
+import { listImageJobs } from "@/lib/server/image-jobs";
+import { readUpload, saveUpload } from "@/lib/storage/upload";
+import { buildDocxDocument, docxFileName, DOCX_PRESETS } from "@/utils/markdown-docx-exporter";
+import { svgToPngServer } from "./svg-raster";
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+export interface SessionDocxInput {
+  sessionId: string;
+  ownerId: string;
+  title: string;
+  draft: string;
+  brief: { documentType?: string; course?: string; institution?: string };
+  diagrams: { title: string; svg?: string }[];
+}
+
+export interface SessionDocxResult {
+  url: string;
+  name: string;
+  size: number;
+  /** Ilustrasi yang masih diproses saat ekspor (belum ikut di file). */
+  pendingFigures: number;
+  /** Placeholder gambar yang tidak punya sumber gambar. */
+  missingImages: number;
+}
+
+export async function exportSessionDocx(input: SessionDocxInput): Promise<SessionDocxResult> {
+  const images: Record<string, Uint8Array> = {};
+  const [user, imageJobs] = await Promise.all([
+    prisma.user.findUnique({ where: { id: input.ownerId }, select: { name: true } }),
+    listImageJobs(input.ownerId, { sessionId: input.sessionId, limit: 40 }).catch(() => []),
+  ]);
+
+  await Promise.all(imageJobs.filter((job) => job.status === "done" && job.fileId && job.title).map(async (job) => {
+    const bytes = await readUpload(job.fileId!, input.ownerId).catch(() => null);
+    if (bytes) images[job.title.trim().toLowerCase()] = new Uint8Array(bytes);
+  }));
+  // Rasterisasi berurutan: WASM single-thread, hindari lonjakan memori.
+  for (const diagram of input.diagrams) {
+    if (!diagram.svg || !diagram.title) continue;
+    try {
+      images[diagram.title.trim().toLowerCase()] = await svgToPngServer(diagram.svg);
+    } catch (error) {
+      console.warn("[laporan] rasterisasi diagram gagal:", diagram.title, error instanceof Error ? error.message : error);
+    }
+  }
+
+  const placeholders = Array.from(input.draft.matchAll(/^\[Gambar:\s*(.+?)\]\s*$/gim)).map((m) => {
+    const inner = m[1].trim();
+    const sep = inner.lastIndexOf(" - ");
+    return (sep > 0 ? inner.slice(0, sep) : inner).trim().toLowerCase();
+  });
+  const missingImages = placeholders.filter((key) => !images[key]).length;
+  const pendingFigures = imageJobs.filter((job) => job.status === "queued" || job.status === "running").length;
+
+  const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` — ${input.brief.course}` : ""}` : undefined;
+  const doc = buildDocxDocument(input.draft, {
+    profile: {
+      ...DOCX_PRESETS.kampus4433.profile,
+      cover: { title: input.title, subtitle, author: user?.name || undefined, institution: input.brief.institution || undefined, year: String(new Date().getFullYear()) },
+    },
+    images,
+  });
+  const buffer = await Packer.toBuffer(doc);
+  const name = docxFileName(input.title);
+  const saved = await saveUpload({ ownerId: input.ownerId, buffer, originalName: name, mime: DOCX_MIME });
+  return { url: `/api/files/${saved.id}`, name, size: buffer.length, pendingFigures, missingImages };
+}

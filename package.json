@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.0.1",
+    "@resvg/resvg-wasm": "^2.6.2",
     "@tiptap/core": "^3.20.2",
     "@tiptap/extension-bold": "^3.20.1",
     "@tiptap/extension-bubble-menu": "^3.20.2",
@@ -39,6 +40,7 @@
     "@types/tippy.js": "^6.3.0",
     "argon2": "^0.41.1",
     "browser-image-compression": "^2.0.2",
+    "dejavu-fonts-ttf": "^2.37.3",
     "docx": "^9.6.1",
     "file-saver": "^2.0.5",
     "jose": "^5.9.6",

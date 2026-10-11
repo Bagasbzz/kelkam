@@ -43,7 +43,6 @@ import {
   convertMillimetersToTwip,
   type ISectionOptions,
 } from "docx";
-import { saveAs } from "file-saver";
 
 // ---------------------------------------------------------------------------
 // Profil format
@@ -304,7 +303,8 @@ export interface ExportOptions {
   autoItalic?: boolean;
 }
 
-export async function buildDocxBlob(markdown: string, options: ExportOptions = {}) {
+/** Bangun objek Document (dipakai klien via toBlob dan server via toBuffer). */
+export function buildDocxDocument(markdown: string, options: ExportOptions = {}): Document {
   const profile: DocxFormatProfile = { ...DEFAULT_DOCX_PROFILE, ...options.profile, margin: { ...DEFAULT_DOCX_PROFILE.margin, ...options.profile?.margin } };
   const images = options.images || {};
   const autoItalic = options.autoItalic !== false;
@@ -590,10 +590,20 @@ export async function buildDocxBlob(markdown: string, options: ExportOptions = {
     sections,
   });
 
-  return Packer.toBlob(doc);
+  return doc;
+}
+
+export async function buildDocxBlob(markdown: string, options: ExportOptions = {}) {
+  return Packer.toBlob(buildDocxDocument(markdown, options));
+}
+
+export function docxFileName(title?: string) {
+  return `${sanitizeFileName(title || "laporan-akademik")}.docx`;
 }
 
 export async function exportMarkdownToDocx(markdown: string, title?: string, options: ExportOptions = {}) {
   const blob = await buildDocxBlob(markdown, options);
-  saveAs(blob, `${sanitizeFileName(title || "laporan-akademik")}.docx`);
+  // Dynamic import: modul ini juga dipakai di server (file-saver butuh DOM).
+  const { saveAs } = await import("file-saver");
+  saveAs(blob, docxFileName(title));
 }

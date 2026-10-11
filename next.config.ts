@@ -94,6 +94,12 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   /** Build sebagai standalone → .next/standalone/ siap di-deploy ke JKC. */
   output: "standalone",
+  /** resvg (WASM) dimuat via fs saat runtime, jangan dibundel webpack. */
+  serverExternalPackages: ["@resvg/resvg-wasm"],
+  /** File yang dibaca via fs (bukan import) harus ikut ditrace ke standalone. */
+  outputFileTracingIncludes: {
+    "/**": ["./node_modules/@resvg/resvg-wasm/**", "./node_modules/dejavu-fonts-ttf/ttf/DejaVuSans*.ttf", "./node_modules/dejavu-fonts-ttf/package.json"],
+  },
   /** Hilangkan header "X-Powered-By: Next.js" (info disclosure). */
   poweredByHeader: false,
   /** Pasang security headers di semua response. */
