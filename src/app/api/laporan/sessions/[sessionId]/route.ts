@@ -1,7 +1,8 @@
 /**
  * /api/laporan/sessions/[sessionId]
  *   GET    → state sesi (brief/plan/sources/materials/draft/job) + riwayat pesan
- *   PATCH  → update draft manual { draft } (hasil edit user) atau title
+ *   PATCH  → update draft manual { draft } (hasil edit user), title, atau
+ *            centang sumber { sources: [{ id, selected }] }
  *   DELETE → hapus sesi
  */
 import { NextResponse } from "next/server";
@@ -10,6 +11,7 @@ import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { getSessionState } from "@/lib/server/laporan/assistant";
 import { listImageJobs } from "@/lib/server/image-jobs";
+import type { VerifiedSource } from "@/lib/references/find-sources";
 
 export const runtime = "nodejs";
 
@@ -43,7 +45,12 @@ export async function GET(_req: Request, context: Ctx) {
       stage: state.stage,
       brief: state.brief,
       plan: state.plan,
-      sources: state.sources,
+      // fullText tidak dikirim ke klien (besar); cukup jumlah karakternya.
+      sources: state.sources.map((s) => {
+        const copy: VerifiedSource = { ...s };
+        delete copy.fullText;
+        return copy;
+      }),
       materials: state.materials.map((m) => ({ id: m.id, kind: m.kind, title: m.title, fileName: m.fileName, chars: m.content.length })),
       jobId: state.jobId,
       draft: state.draft,
@@ -60,10 +67,25 @@ export async function PATCH(req: Request, context: Ctx) {
     if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
     const { sessionId } = await context.params;
 
-    const body = await readJsonBody<{ draft?: unknown; title?: unknown }>(req, 1_500_000);
-    const data: { draft?: string; title?: string } = {};
+    const body = await readJsonBody<{ draft?: unknown; title?: unknown; sources?: unknown }>(req, 1_500_000);
+    const data: { draft?: string; title?: string; sources?: object } = {};
     if (typeof body.draft === "string") data.draft = body.draft.slice(0, 1_200_000);
     if (typeof body.title === "string") data.title = body.title.trim().slice(0, 120);
+    if (Array.isArray(body.sources)) {
+      // Centang/lepas centang sumber: hanya field `selected` yang boleh diubah klien.
+      const toggles = new Map<string, boolean>();
+      for (const item of body.sources.slice(0, 200)) {
+        if (item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string") {
+          toggles.set((item as { id: string }).id, (item as { selected?: unknown }).selected !== false);
+        }
+      }
+      if (toggles.size) {
+        const row = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId: auth.user.id }, select: { sources: true } });
+        if (!row) return NextResponse.json({ success: false, error: "Sesi tidak ditemukan." }, { status: 404 });
+        const sources = (Array.isArray(row.sources) ? row.sources : []) as unknown as VerifiedSource[];
+        data.sources = sources.map((s) => (toggles.has(s.id) ? { ...s, selected: toggles.get(s.id) } : s));
+      }
+    }
     if (!Object.keys(data).length) return NextResponse.json({ success: false, error: "Tidak ada perubahan." }, { status: 400 });
 
     const result = await prisma.reportSession.updateMany({ where: { id: sessionId, ownerId: auth.user.id }, data });

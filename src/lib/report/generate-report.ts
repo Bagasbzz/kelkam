@@ -86,6 +86,9 @@ export function compactProject(project: unknown) {
       url: truncate(reference.url, 1000),
       pdfUrl: truncate(reference.pdfUrl, 1000),
       abstract: truncate(reference.abstract, 1400),
+      readLevel: truncate(reference.readLevel, 20) || "abstract",
+      /** Teks penuh PDF OA (pertahankan baris baru agar bisa dipecah per paragraf). */
+      fullText: String(reference.fullText || "").slice(0, 45_000),
     })),
   };
 }
@@ -327,10 +330,11 @@ export function detectSourceOverlap(markdown: string, sourceTexts: string[], n =
   return { percent: Math.round((hits / words.length) * 1000) / 10, snippets };
 }
 
-/** Kumpulkan teks sumber (abstrak referensi + bahan) dari proyek untuk cek kemiripan. */
+/** Kumpulkan teks sumber (abstrak + teks penuh referensi + bahan) dari proyek untuk cek kemiripan. */
 function overlapCorpus(compact: CompactProject) {
   return [
     ...compact.references.map((reference) => reference.abstract),
+    ...compact.references.map((reference) => reference.fullText),
     ...compact.sources.map((source) => source.content),
   ].filter((text) => text && text.length >= 80);
 }
@@ -454,22 +458,56 @@ export function diagramsForSection(compact: CompactProject, section: ChapterInpu
 
 /**
  * Pilih referensi yang relevan untuk satu section: cocokkan kata kunci judul/
- * purpose dengan query/purpose/abstract referensi. Fallback: 6 referensi pertama.
+ * purpose dengan query/purpose/abstract/teks penuh referensi. Fallback: N pertama.
+ * Untuk referensi berteks penuh, sertakan kutipan paragraf paling relevan
+ * (`kutipanRelevan`) dalam budget karakter agar model membaca isi, bukan abstrak saja.
  */
-function pickReferences(compact: CompactProject, section: ChapterInput["section"], limit: number) {
+function pickReferences(compact: CompactProject, section: ChapterInput["section"], limit: number, excerptBudgetChars = 0) {
   const keywords = `${section.title} ${section.purpose}`
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter((word) => word.length > 4);
-  if (!keywords.length) return compact.references.slice(0, limit);
 
   const scored = compact.references.map((reference) => {
-    const haystack = `${reference.query} ${reference.purpose} ${reference.abstract}`.toLowerCase();
-    const score = keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+    const haystack = `${reference.query} ${reference.purpose} ${reference.abstract} ${reference.fullText.slice(0, 8_000)}`.toLowerCase();
+    const score = keywords.length ? keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0) : 0;
     return { reference, score };
   });
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, limit).map((item) => item.reference);
+  if (keywords.length) scored.sort((a, b) => b.score - a.score);
+  const picked = scored.slice(0, limit).map((item) => item.reference);
+
+  // Kutipan relevan dari teks penuh (maks 3 chunk per referensi, budget total).
+  const chunkKeywords = keywordsOf(`${section.title} ${section.purpose}`);
+  const candidates: Array<{ index: number; chunk: string; score: number }> = [];
+  if (excerptBudgetChars > 0) {
+    picked.forEach((reference, index) => {
+      if (!reference.fullText) return;
+      for (const chunk of chunkText(reference.fullText)) {
+        const haystack = chunk.toLowerCase();
+        const score = chunkKeywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+        if (score > 0) candidates.push({ index, chunk, score });
+      }
+    });
+    candidates.sort((a, b) => b.score - a.score);
+  }
+  const excerpts = new Map<number, string[]>();
+  let used = 0;
+  for (const item of candidates) {
+    if (used + item.chunk.length > excerptBudgetChars) break;
+    const list = excerpts.get(item.index) || [];
+    if (list.length >= 3) continue;
+    list.push(item.chunk);
+    excerpts.set(item.index, list);
+    used += item.chunk.length;
+  }
+
+  return picked.map((reference, index) => ({
+    citation: reference.citation,
+    url: reference.url,
+    abstract: reference.abstract,
+    dibaca: reference.readLevel === "fulltext" ? "teks penuh" : "abstrak",
+    kutipanRelevan: excerpts.get(index) || [],
+  }));
 }
 
 /** Placeholder BAB kalau AI gagal/timeout, tetap valid markdown. */
@@ -580,7 +618,7 @@ export async function generateChapter(project: unknown, input: ChapterInput): Pr
   const firstBodySectionIndex = Math.min(1, Math.max(0, total - 1));
   const sectionFigures = compact.figures.filter((figure) => (figure.sectionId && section.id ? figure.sectionId === section.id : index === firstBodySectionIndex));
   const sectionTables = compact.tables.filter((table) => !table.sectionId || !section.id || table.sectionId === section.id);
-  const references = pickReferences(compact, section, isRingkas ? 6 : 16);
+  const references = pickReferences(compact, section, isRingkas ? 6 : 16, isRingkas ? 4_000 : 14_000);
   const minCitations = isRingkas ? Math.min(3, references.length) : Math.min(8, references.length);
   // Bahan: head tiap sumber + chunk paling relevan untuk BAB ini (budget char).
   const sources = selectSourceMaterial(project, section, isRingkas ? 6_000 : 16_000);
@@ -599,7 +637,7 @@ ATURAN STRUKTUR:
 4. Jangan mengarang data, angka, nama institusi, nama jurnal, atau link. Pakai placeholder spesifik seperti [ISI DATA ...] bila belum ada.
 
 ATURAN SITASI (wajib):
-5. Gunakan referensi yang diberikan secara nyata: minimal ${minCitations} referensi BERBEDA disitasi in-text gaya ${compact.citationStyle || "APA"} (Nama, Tahun). Sintesis antar-sumber (bandingkan/kontraskan temuan), bukan sekadar menyebut. Hanya sitasi referensi yang ada di daftar "referensi"; bila topik tak tercakup, tulis [butuh referensi: topik]. Gunakan abstrak referensi untuk mengisi substansi.
+5. Gunakan referensi yang diberikan secara nyata: minimal ${minCitations} referensi BERBEDA disitasi in-text gaya ${compact.citationStyle || "APA"} (Nama, Tahun). Sintesis antar-sumber (bandingkan/kontraskan temuan), bukan sekadar menyebut. Hanya sitasi referensi yang ada di daftar "referensi"; bila topik tak tercakup, tulis [butuh referensi: topik]. Gunakan abstrak dan "kutipanRelevan" (potongan isi PDF yang sudah dibaca sistem) untuk mengisi substansi: metode, temuan, angka, dan keterbatasan yang disebut sumber. Jangan mengarang isi untuk referensi yang hanya punya abstrak.
 
 ATURAN ANTI-PLAGIARISME (wajib, untuk menekan skor kemiripan):
 6. Parafrase total: jangan menyalin kalimat dari abstrak referensi atau bahan user. Ubah struktur kalimat, urutan ide, dan pilihan kata; dilarang ada 8 kata berurutan yang sama dengan sumber. Kutipan langsung hanya bila benar-benar perlu, maksimal 1 per bab, pendek (< 25 kata), dalam tanda kutip dan disitasi dengan nomor halaman bila ada.
@@ -644,7 +682,8 @@ ATURAN TIPOGRAFI:
   const onPartial = input.onPartial ?? (() => {});
 
   const chunkCount = sources.reduce((acc, source) => acc + source.kutipanRelevan.length, 0);
-  emit(`Menyiapkan bahan: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi, ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
+  const excerptCount = references.reduce((acc, reference) => acc + reference.kutipanRelevan.length, 0);
+  emit(`Menyiapkan bahan: ${sources.length} sumber, ${chunkCount} kutipan relevan, ${references.length} referensi (${excerptCount} kutipan dari teks penuh), ${sectionDiagrams.length} diagram, ${sectionFigures.length} gambar`);
 
   const baseMessages: ChatMessage[] = [
     { role: "system", content: systemPrompt },

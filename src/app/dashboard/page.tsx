@@ -43,7 +43,7 @@ const TABS: ReadonlyArray<[Tab, string, typeof ListChecks]> = [
 const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
-const PDF_LABEL: Record<string, string> = { verified: "PDF ✓", landing_page: "Halaman", closed: "Berbayar", broken: "Rusak", unknown: "?" };
+const PDF_LABEL: Record<string, string> = { verified: "PDF terbuka", landing_page: "Halaman penerbit", closed: "Berbayar", broken: "Tautan rusak", unknown: "PDF ?" };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
@@ -348,6 +348,19 @@ export default function LaporanPage() {
     } catch (e) { setError(getErrorMessage(e)); }
   };
 
+  /** Centang/lepas centang sumber (optimistic, lalu simpan ke server). */
+  const toggleSources = async (ids: string[], selected: boolean) => {
+    if (!activeId || !ids.length) return;
+    const set = new Set(ids);
+    setDetail((prev) => prev ? { ...prev, sources: prev.sources.map((s) => (set.has(s.id) ? { ...s, selected } : s)) } : prev);
+    try {
+      await api(`/api/laporan/sessions/${activeId}`, { method: "PATCH", body: JSON.stringify({ sources: ids.map((id) => ({ id, selected })) }) });
+    } catch (e) {
+      setError(getErrorMessage(e));
+      await loadDetail(activeId).catch(() => { /* abaikan */ });
+    }
+  };
+
   const exportDocx = async () => {
     if (!detail?.draft) return;
     setExporting(true);
@@ -411,7 +424,7 @@ export default function LaporanPage() {
 
   const tabCount: Record<Tab, number | null> = {
     rencana: detail?.plan ? detail.plan.outline.length : null,
-    sumber: detail?.sources.length ?? null,
+    sumber: detail ? detail.sources.filter((s) => s.selected !== false).length : null,
     bahan: detail?.materials.length ?? null,
     gambar: detail ? (detail.plan?.diagrams.length ?? 0) + figures.length : null,
     draft: detail?.draft ? draftSections.length : null,
@@ -471,7 +484,7 @@ export default function LaporanPage() {
 
   const panelBody = (
     <>
-              {!detail && <p className="text-xs text-slate-500">Belum ada sesi aktif.</p>}
+              {!detail && <p className="text-sm text-slate-500">Belum ada sesi aktif.</p>}
 
               {detail && tab === "rencana" && (
                 <div className="space-y-3">
@@ -479,64 +492,85 @@ export default function LaporanPage() {
                   {detail.plan ? (
                     <>
                       <div>
-                        <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><ListChecks className="h-3.5 w-3.5" /> Outline ({detail.plan.outline.length})</div>
+                        <div className="mb-1 flex items-center gap-1 text-sm font-bold text-slate-700"><ListChecks className="h-4 w-4" /> Outline ({detail.plan.outline.length})</div>
                         <ol className="space-y-1">
                           {detail.plan.outline.map((s, i) => (
-                            <li key={s.id} className="rounded-lg bg-slate-50 px-2 py-1.5">
+                            <li key={s.id} className="rounded-lg bg-slate-50 px-2.5 py-2">
                               <div className="font-semibold text-slate-900">{i + 1}. {s.title}</div>
-                              {s.purpose && <div className="text-sm text-slate-600">{s.purpose}</div>}
+                              {s.purpose && <div className="text-[15px] text-slate-600">{s.purpose}</div>}
                             </li>
                           ))}
                         </ol>
                       </div>
                       {detail.plan.diagrams.length > 0 && (
                         <div>
-                          <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan.diagrams.length})</div>
-                          <ul className="space-y-1 text-xs">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{d.title}</b> <span className="text-slate-500">({d.type}{d.svg ? " · sudah dibuat" : ""})</span>, {d.purpose}</li>)}</ul>
+                          <div className="mb-1 flex items-center gap-1 text-sm font-bold text-slate-700"><Workflow className="h-4 w-4" /> Diagram ({detail.plan.diagrams.length})</div>
+                          <ul className="space-y-1 text-sm">{detail.plan.diagrams.map((d) => <li key={d.id} className="rounded-lg bg-slate-50 px-2.5 py-1.5"><b>{d.title}</b> <span className="text-slate-500">({d.type}{d.svg ? " · sudah dibuat" : ""})</span>, {d.purpose}</li>)}</ul>
                         </div>
                       )}
                       {detail.plan.tables.length > 0 && (
                         <div>
-                          <div className="mb-1 flex items-center gap-1 text-xs font-bold text-slate-700"><Table2 className="h-3.5 w-3.5" /> Tabel ({detail.plan.tables.length})</div>
-                          <ul className="space-y-1 text-xs">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{t.title}</b>, {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
+                          <div className="mb-1 flex items-center gap-1 text-sm font-bold text-slate-700"><Table2 className="h-4 w-4" /> Tabel ({detail.plan.tables.length})</div>
+                          <ul className="space-y-1 text-sm">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2.5 py-1.5"><b>{t.title}</b>, {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
                         </div>
                       )}
                       <p className="text-sm text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
                     </>
-                  ) : <p className="text-xs text-slate-500">Rencana muncul setelah asisten cukup paham kebutuhanmu.</p>}
+                  ) : <p className="text-sm text-slate-500">Rencana muncul setelah asisten cukup paham kebutuhanmu.</p>}
                 </div>
               )}
 
-              {detail && tab === "sumber" && (
+              {detail && tab === "sumber" && (() => {
+                const selectedCount = detail.sources.filter((s) => s.selected !== false).length;
+                const fullCount = detail.sources.filter((s) => s.readLevel === "fulltext").length;
+                return (
                 <div className="space-y-2">
-                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis, cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
-                  {!detail.sources.length && <p className="text-xs text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
-                  {detail.sources.map((s) => (
-                    <div key={s.id} className="rounded-xl border border-slate-100 p-2">
-                      <div className="text-xs leading-snug text-slate-900">{s.citationApa}</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {s.qualitySignals.map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{q}</span>)}
-                        {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-xs ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap gap-2 text-sm font-semibold">
-                        {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"><ExternalLink className="h-3 w-3" />DOI</a>}
-                        {s.pdfUrl && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><Download className="h-3 w-3" />PDF</a>}
-                        {s.checkLinks.map((c) => <a key={c.url} href={c.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>)}
+                  <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis, cek lewat tautan di tiap sumber. PDF open access diunduh dan dibaca penuh oleh sistem; sumber lain hanya abstrak. Centang sumber yang mau dipakai; yang tidak dicentang tidak dikutip.</p>
+                  {detail.sources.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
+                      <span><b>{selectedCount}</b> dari {detail.sources.length} dipakai, <b>{fullCount}</b> dibaca penuh</span>
+                      <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua</button>
+                      <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan</button>
+                    </div>
+                  )}
+                  {!detail.sources.length && <p className="text-sm text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
+                  {detail.sources.map((s) => {
+                    const on = s.selected !== false;
+                    return (
+                    <div key={s.id} className={`flex gap-2 rounded-xl border p-2.5 ${on ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-70"}`}>
+                      <input type="checkbox" checked={on} onChange={(e) => toggleSources([s.id], e.target.checked)} className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-blue-600" aria-label="Pakai sumber ini" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm leading-snug text-slate-900">{s.citationApa}</div>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          {s.readLevel === "fulltext"
+                            ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[13px] font-semibold text-blue-700">Teks penuh dibaca{s.fullTextChars ? ` (${Math.round(s.fullTextChars / 1000)}k karakter)` : ""}</span>
+                            : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">Hanya abstrak</span>}
+                          {typeof s.relevance === "number" && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">Relevansi {s.relevance}</span>}
+                          {s.qualitySignals.filter((q) => q !== "Teks penuh dibaca AI").map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">{q}</span>)}
+                          {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-[13px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-3 text-sm font-semibold">
+                          {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" />DOI</a>}
+                          {s.pdfUrl && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline"><Download className="h-3.5 w-3.5" />Unduh PDF</a>}
+                          {s.checkLinks.map((c) => <a key={c.url} href={c.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>)}
+                        </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              )}
+                );
+              })()}
 
               {detail && tab === "bahan" && (
                 <div className="space-y-2">
                   <p className="text-sm text-slate-500">Unggah ZIP kode, PDF panduan, DOCX contoh, atau data mentah lewat tombol “Unggah bahan”. Isinya dipakai sebagai konteks penulisan.</p>
-                  {!detail.materials.length && <p className="text-xs text-slate-500">Belum ada bahan.</p>}
+                  {!detail.materials.length && <p className="text-sm text-slate-500">Belum ada bahan.</p>}
                   {detail.materials.map((m) => (
-                    <div key={m.id} className="flex items-center gap-2 rounded-xl border border-slate-100 px-2 py-1.5 text-xs">
-                      <FileText className="h-3.5 w-3.5 text-slate-400" />
-                      <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-xs text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
-                      <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
+                    <div key={m.id} className="flex items-center gap-2 rounded-xl border border-slate-100 px-2.5 py-2 text-sm">
+                      <FileText className="h-4 w-4 text-slate-400" />
+                      <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-[13px] text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
+                      <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" /></button>
                     </div>
                   ))}
                 </div>
@@ -547,43 +581,43 @@ export default function LaporanPage() {
                   <p className="text-sm text-slate-500">Diagram (UML & konsep/arsitektur) dan ilustrasi dari rencana dibuat otomatis saat eksekusi dan masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code>. Ilustrasi tambahan bisa diminta di chat, mis. “buatkan ilustrasi proses X untuk BAB III”.</p>
                   {(detail.plan?.diagrams ?? []).length > 0 && (
                     <div className="space-y-2">
-                      <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan!.diagrams.length})</div>
+                      <div className="flex items-center gap-1 text-sm font-bold text-slate-700"><Workflow className="h-4 w-4" /> Diagram ({detail.plan!.diagrams.length})</div>
                       {detail.plan!.diagrams.map((d) => (
-                        <div key={d.id} className="rounded-xl border border-slate-100 p-2 text-xs">
+                        <div key={d.id} className="rounded-xl border border-slate-100 p-2.5 text-sm">
                           <div className="flex items-center gap-2">
                             {d.svg ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : d.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <span className="h-3.5 w-3.5 rounded-full bg-slate-300" />}
                             <div className="min-w-0 flex-1 truncate font-semibold">{d.title} <span className="font-normal text-slate-500">({d.type})</span></div>
-                            <span className="text-xs text-slate-500">{d.svg ? "selesai" : d.status === "failed" ? "gagal" : jobActive ? "dibuat…" : "belum dibuat"}</span>
+                            <span className="text-[13px] text-slate-500">{d.svg ? "selesai" : d.status === "failed" ? "gagal" : jobActive ? "dibuat…" : "belum dibuat"}</span>
                           </div>
                           {d.svg && (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.svg)}`} alt={d.title} className="mt-2 w-full rounded-lg border border-slate-100 bg-white" />
                           )}
                           <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="text-xs text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
+                            <span className="text-[13px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
                             {((d.diagramData?.nodes?.length ?? 0) > 0 || (!jobActive && !d.svg)) && (
-                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3 w-3" /> Buka di UML Builder</button>
+                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-[13px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" /> Buka di UML Builder</button>
                             )}
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
-                  {!figures.length && !(detail.plan?.diagrams ?? []).length && <p className="text-xs text-slate-500">Belum ada gambar.</p>}
-                  {figures.length > 0 && <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><ImageIcon className="h-3.5 w-3.5" /> Ilustrasi AI ({figures.length})</div>}
+                  {!figures.length && !(detail.plan?.diagrams ?? []).length && <p className="text-sm text-slate-500">Belum ada gambar.</p>}
+                  {figures.length > 0 && <div className="flex items-center gap-1 text-sm font-bold text-slate-700"><ImageIcon className="h-4 w-4" /> Ilustrasi AI ({figures.length})</div>}
                   {figures.map((f) => (
-                    <div key={f.id} className="rounded-xl border border-slate-100 p-2 text-xs">
+                    <div key={f.id} className="rounded-xl border border-slate-100 p-2.5 text-sm">
                       <div className="flex items-center gap-2">
                         {f.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : f.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
                         <div className="min-w-0 flex-1 truncate font-semibold">{f.title || "Gambar"}</div>
-                        <span className="text-xs text-slate-500">{f.status === "queued" ? "antre" : f.status === "running" ? "diproses" : f.status === "done" ? "selesai" : "gagal"}</span>
+                        <span className="text-[13px] text-slate-500">{f.status === "queued" ? "antre" : f.status === "running" ? "diproses" : f.status === "done" ? "selesai" : "gagal"}</span>
                       </div>
                       {f.status === "failed" && f.error && <div className="mt-1 text-sm text-red-600">{f.error}</div>}
                       {f.status === "done" && f.url && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <a href={f.url} target="_blank" rel="noreferrer"><img src={f.url} alt={f.title} className="mt-2 w-full rounded-lg border border-slate-100" /></a>
                       )}
-                      {f.status === "done" && <div className="mt-1 text-xs text-slate-500">Placeholder: <code>[Gambar: {f.title} - keterangan]</code></div>}
+                      {f.status === "done" && <div className="mt-1 text-[13px] text-slate-500">Placeholder: <code>[Gambar: {f.title} - keterangan]</code></div>}
                     </div>
                   ))}
                 </div>
@@ -591,17 +625,17 @@ export default function LaporanPage() {
 
               {detail && tab === "draft" && (
                 <div className="space-y-2">
-                  {!detail.draft && <p className="text-xs text-slate-500">{jobActive ? "Sedang ditulis… pantau progres di atas." : "Draft muncul setelah eksekusi selesai."}</p>}
+                  {!detail.draft && <p className="text-sm text-slate-500">{jobActive ? "Sedang ditulis… pantau progres di atas." : "Draft muncul setelah eksekusi selesai."}</p>}
                   {detail.draft && (
                     <>
                       <div className="flex items-center gap-2">
-                        <select value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof DOCX_PRESETS)} className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs">
+                        <select value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof DOCX_PRESETS)} className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm">
                           {Object.entries(DOCX_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                         </select>
                         <Button onClick={exportDocx} variant="primary" size="sm" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
                       </div>
                       <div className="flex items-center gap-1 text-sm text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
-                      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-2 text-sm leading-relaxed text-slate-800">{detail.draft}</pre>
+                      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-[15px] leading-relaxed text-slate-800">{detail.draft}</pre>
                       <p className="text-sm text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>
                     </>
                   )}
@@ -674,14 +708,14 @@ export default function LaporanPage() {
               {messages.map((m) => (
                 m.role === "user" ? (
                   <div key={m.id} className="flex justify-end">
-                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-slate-900 px-4 py-2.5 text-sm text-white">{m.content}</div>
+                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-slate-900 px-4 py-2.5 text-[15px] text-white">{m.content}</div>
                   </div>
                 ) : (
                   <div key={m.id} className="flex gap-3">
                     <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white"><Bot className="h-4 w-4" /></div>
-                    <div className="min-w-0 flex-1 text-sm leading-relaxed text-slate-900">
+                    <div className="min-w-0 flex-1 text-[15px] leading-relaxed text-slate-900">
                       <SimpleMarkdown text={m.content} />
-                      {m.toolCalls?.tools?.length ? <div className="mt-1 text-xs text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
+                      {m.toolCalls?.tools?.length ? <div className="mt-1 text-[13px] text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
                     </div>
                   </div>
                 )
@@ -694,7 +728,7 @@ export default function LaporanPage() {
           {/* ------------------------------------------------- komposer */}
           <div className="border-t border-slate-200 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:px-6">
             <div className="mx-auto max-w-3xl">
-              {error && <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+              {error && <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
               {detail && (
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
@@ -702,8 +736,8 @@ export default function LaporanPage() {
                   {canExecute && !jobActive && <Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip>}
                   {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
                   {detail.draft && <Chip onClick={() => send("Kirim file DOCX laporan terbaru.")}>Kirim file DOCX</Chip>}
-                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                    {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />} Unggah bahan
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Unggah bahan
                     <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
                   </label>
                   <label className="ml-auto inline-flex items-center gap-1 text-sm text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
@@ -718,7 +752,7 @@ export default function LaporanPage() {
                   placeholder={activeId ? "Tulis pesan… (Enter kirim, Shift+Enter baris baru)" : "Buat sesi dulu"}
                   disabled={!activeId || sending}
                   rows={1}
-                  className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+                  className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[15px] outline-none"
                   onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; }}
                 />
                 <Button type="submit" variant="primary" size="sm" disabled={!activeId || sending || !input.trim()}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
@@ -728,7 +762,7 @@ export default function LaporanPage() {
         </section>
 
         {/* ------------------------------------ desktop: panel kanan (drawer) */}
-        <aside className={`hidden shrink-0 flex-col border-l border-slate-200 bg-white transition-[width] lg:flex ${panelOpen ? "w-[420px] xl:w-[480px]" : "w-0 border-0"}`}>
+        <aside className={`hidden shrink-0 flex-col border-l border-slate-200 bg-white transition-[width] lg:flex ${panelOpen ? "w-[460px] xl:w-[520px]" : "w-0 border-0"}`}>
           {panelOpen && (
             <>
               <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
@@ -736,7 +770,7 @@ export default function LaporanPage() {
                 <button type="button" onClick={() => setPanelOpen(false)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" title="Tutup panel"><PanelRightClose className="h-4 w-4" /></button>
               </div>
               {panelTabsBar}
-              <div className="min-h-0 flex-1 overflow-y-auto p-3 text-sm">
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 text-[15px]">
                 {jobCard && !jobActive && <div className="mb-3">{jobCard}</div>}
                 {panelBody}
               </div>
@@ -783,9 +817,9 @@ function BriefView({ brief }: { brief: ReportBrief }) {
     ["Format", brief.formatRules], ["Target", brief.targetLength],
   ];
   const filled = rows.filter(([, v]) => v);
-  if (!filled.length) return <p className="text-xs text-slate-500">Brief masih kosong, ceritakan tugasmu di chat.</p>;
+  if (!filled.length) return <p className="text-sm text-slate-500">Brief masih kosong, ceritakan tugasmu di chat.</p>;
   return (
-    <dl className="grid grid-cols-[90px_1fr] gap-x-2 gap-y-1 text-xs">
+    <dl className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1.5 text-sm">
       {filled.map(([k, v]) => <FragmentRow key={k} k={k} v={v!} />)}
       {brief.notes?.length ? <FragmentRow k="Catatan" v={brief.notes.join("; ")} /> : null}
     </dl>

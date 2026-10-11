@@ -13,6 +13,7 @@ import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripDashes, stripThinking } from "@/lib/ai/client";
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { findVerifiedSources, JOURNAL_REQUIREMENT_LABEL, type JournalRequirement, type VerifiedSource } from "@/lib/references/find-sources";
+import { enrichSourcesWithFullText } from "@/lib/references/fetch-fulltext";
 import { startReportJob, getReportJob, extractDiagramArtifacts, type ReportJob, type ReportDiagramArtifact } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
 import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
@@ -25,6 +26,15 @@ import {
 
 const HISTORY_LIMIT = 16;
 const MAX_STEPS = 60;
+/** Batas daftar sumber per sesi (termasuk yang tidak dicentang). */
+const MAX_SESSION_SOURCES = 80;
+/** Budget waktu unduh+baca PDF per panggilan findSources (muat di segmen agent). */
+const FULLTEXT_DEADLINE_MS = 40_000;
+
+/** Sumber yang dipakai menulis: selected !== false. */
+export function selectedSources(sources: VerifiedSource[]) {
+  return sources.filter((s) => s.selected !== false);
+}
 
 type Msg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 
@@ -225,7 +235,7 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
     })),
     figures,
     tables: session.plan.tables.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose, columns: t.columns, sectionId: t.sectionId })),
-    references: session.sources.map((s) => ({
+    references: selectedSources(session.sources).map((s) => ({
       query: s.title,
       purpose: s.venue,
       citation: s.citationApa,
@@ -233,6 +243,7 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
       pdfUrl: s.pdfUrl || "",
       abstract: s.abstract,
       readLevel: s.readLevel,
+      fullText: s.fullText || "",
     })),
   };
 }
@@ -247,7 +258,7 @@ function systemPrompt(state: { stage: string; brief: ReportBrief; plan: ReportPl
 
 ALUR:
 1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru, panggil updateBrief.
-2. PLANNED: bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk tiap query utama. Tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi.
+2. PLANNED: bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk SETIAP query (minimal 3 query berbeda, campur Inggris dan Indonesia, limit 8-10 per query) agar literatur luas dan mendalam. Hasil otomatis diurutkan paling relevan dan terbaru, dan PDF open access dibaca penuh oleh sistem. Setelah itu panggil selectSources untuk mencentang sumber yang paling relevan dengan topik (buang yang melenceng), lalu tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi. User juga bisa mencentang sendiri di panel Sumber.
    JUMLAH BAB (wajib ikuti kecuali ketentuan format kampus user menyebut lain): makalah/paper/laporan praktikum/laporan tugas = 3-4 bab (Pendahuluan, Landasan Teori/Tinjauan Pustaka, Pembahasan, Penutup); laporan proyek/PKL/magang = 4-5 bab; skripsi/tugas akhir/tesis = 5 bab (Pendahuluan, Tinjauan Pustaka, Metode, Hasil dan Pembahasan, Penutup). Maksimal 6 bab hanya bila formatRules user menyebut eksplisit. Daftar Pustaka dan Lampiran BUKAN bab, jangan masukkan ke outline. Gabungkan materi ke sub-bab, bukan menambah bab baru.
 3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED: user bisa minta revisi bagian tertentu, panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat, jangan membuat ulang kecuali diminta.
@@ -258,9 +269,10 @@ ALUR:
    Target: tiap bab inti (landasan teori, metode/perancangan, hasil) punya minimal 1 visual; bab pendahuluan boleh 1 ilustrasi; semua diberi sectionId. Setelah drafted, bila user minta gambar tambahan, pakai generateFigure (ilustrasi), jangan untuk diagram.
 
 ATURAN KEJUJURAN (mutlak):
-- Sumber hanya dari hasil findSources (DOI terverifikasi Crossref). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
+- Sumber hanya dari hasil findSources (DOI terverifikasi Crossref) yang tercentang (selected). Jangan pernah menyebut/menyitir jurnal yang tidak ada di daftar sources.
 - Peringkat SINTA/Scimago TIDAK bisa dipastikan otomatis; katakan bahwa sistem menyaring (ISSN/DOAJ/DOI) dan user memverifikasi tier lewat tautan "Cek Scimago/SINTA" yang disediakan. Jangan mengklaim "Q1" atau "SINTA 2" sebagai fakta.
-- Sistem hanya membaca ABSTRAK sumber (readLevel=abstract), bukan teks penuh. Jangan bilang sudah membaca isi jurnal.
+- Sistem membaca TEKS PENUH hanya untuk sumber berlabel readLevel=fulltext (PDF open access yang berhasil diunduh); sumber lain hanya abstrak (readLevel=abstract). Sebutkan apa adanya, jangan mengaku membaca isi jurnal yang hanya abstrak.
+- Sistem hanya memakai sumber legal (penerbit, repositori, Unpaywall/DOAJ). Jangan menyarankan situs bajakan.
 - Jangan janji lolos Turnitin/deteksi AI. Sistem hanya menekan kemiripan lewat parafrase dan cek n-gram lokal; hasil Turnitin kampus tetap bisa berbeda.
 - Jangan mengarang isi bahan user; jika bahan belum diunggah, minta.
 
@@ -269,7 +281,7 @@ GAYA JAWABAN: Bahasa Indonesia, hangat tapi padat, markdown ringan. Jangan perna
 STATE SAAT INI (sumber kebenaran, bukan riwayat chat):
 stage=${state.stage}; brief=${JSON.stringify(state.brief)}; briefKurang=${missing.join(", ") || "-"};
 plan=${state.plan ? `${state.plan.outline.length} bab, ${state.plan.diagrams.length} diagram, ${state.plan.tables.length} tabel, ${state.plan.figures?.length || 0} ilustrasi` : "belum ada"};
-sources=${state.sources.length} terverifikasi${state.sources.length ? ` (${state.sources.slice(0, 6).map((s) => `${s.authors[0] || "?"} ${s.year || ""}`).join("; ")})` : ""};
+sources=${state.sources.length} terverifikasi, ${selectedSources(state.sources).length} tercentang, ${state.sources.filter((s) => s.readLevel === "fulltext").length} teks penuh${state.sources.length ? ` (${state.sources.slice(0, 8).map((s) => `${s.id}: ${s.authors[0] || "?"} ${s.year || ""}${s.selected === false ? " [tidak dicentang]" : ""}`).join("; ")})` : ""};
 materials=${state.materials.length ? state.materials.map((m) => `${m.kind}:${m.title} (${m.content.length} char)`).join(", ") : "belum ada"};
 job=${state.jobId || "-"}; draft=${state.hasDraft ? "ada" : "belum"}.${state.summary ? `\nRINGKASAN PERCAKAPAN LAMA: ${state.summary.slice(0, 1500)}` : ""}`;
 }
@@ -318,15 +330,31 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "findSources",
-      description: "Cari & verifikasi referensi nyata (DOI Crossref, PDF). Hasil ditambahkan ke sources sesi. Gunakan syarat jurnal dari brief.",
+      description: "Cari & verifikasi referensi nyata (Semantic Scholar, OpenAlex, Crossref, Unpaywall; DOI Crossref; PDF open access diunduh dan dibaca penuh). Hasil diurutkan paling relevan + terbaru dan ditambahkan ke sources sesi (tercentang). Gunakan syarat jurnal dari brief.",
       parameters: {
         type: "object",
         properties: {
           query: { type: "string" },
-          limit: { type: "number", description: "default 6, maks 12" },
+          limit: { type: "number", description: "default 8, maks 15" },
           replace: { type: "boolean", description: "true = ganti seluruh daftar sumber" },
         },
         required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "selectSources",
+      description: "Centang/lepas centang sumber yang dipakai menulis. Sumber tidak tercentang tetap tampil di panel (user bisa mengubah) tetapi tidak dikutip. Gunakan id sumber dari hasil findSources/state.",
+      parameters: {
+        type: "object",
+        properties: {
+          ids: { type: "array", items: { type: "string" }, description: "Daftar id sumber." },
+          selected: { type: "boolean", description: "true = pakai, false = jangan pakai." },
+          reason: { type: "string", description: "Alasan singkat (ditampilkan ke user)." },
+        },
+        required: ["ids", "selected"],
       },
     },
   },
@@ -454,8 +482,8 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
     case "findSources": {
       const query = asStr(args.query, 300);
       if (!query) return { error: "Query kosong." };
-      const limit = Math.min(12, Math.max(1, Number(args.limit) || 6));
-      emit(`Mencari literatur "${query}" di Semantic Scholar, OpenAlex, Crossref…`);
+      const limit = Math.min(15, Math.max(1, Number(args.limit) || 8));
+      emit(`Mencari literatur "${query}" di Semantic Scholar, OpenAlex, Crossref, Unpaywall…`);
       const found = await findVerifiedSources(query, {
         limit,
         requirement: state.brief.journalRequirement,
@@ -464,25 +492,51 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       });
       const existing = args.replace ? [] : state.sources;
       const seen = new Set(existing.map((s) => s.id));
-      const added = found.filter((s) => !seen.has(s.id));
-      state.sources = [...existing, ...added].slice(0, 60);
+      const addedRaw = found.filter((s) => !seen.has(s.id));
+      // Baca teks penuh PDF open access (dibatasi waktu agar muat di segmen agent).
+      const openCount = addedRaw.filter((s) => s.pdfStatus === "verified").length;
+      if (openCount) emit(`Mengunduh dan membaca ${openCount} PDF open access…`);
+      const enriched = openCount
+        ? await enrichSourcesWithFullText(addedRaw, { deadlineMs: FULLTEXT_DEADLINE_MS, onProgress: emit })
+        : { sources: addedRaw, read: 0, skipped: 0 };
+      const added = enriched.sources;
+      state.sources = [...existing, ...added].slice(0, MAX_SESSION_SOURCES);
       await persist(state);
-      emit(`Ditemukan ${added.length} sumber baru terverifikasi (total ${state.sources.length})${added[0] ? `: ${added[0].authors[0] || "?"} ${added[0].year || ""}` : ""}`);
-      events.push(`Sumber "${query}": ${added.length} baru (${state.sources.length} total)`);
+      emit(`Ditemukan ${added.length} sumber baru terverifikasi, ${enriched.read} dibaca penuh (total ${state.sources.length})${added[0] ? `: ${added[0].authors[0] || "?"} ${added[0].year || ""}` : ""}`);
+      events.push(`Sumber "${query}": ${added.length} baru, ${enriched.read} teks penuh (${state.sources.length} total)`);
       return {
         ok: true,
         query,
-        added: added.map((s) => ({ id: s.id, apa: s.citationApa, doi: s.doiUrl, pdf: s.pdfStatus, signals: s.qualitySignals })),
+        added: added.map((s) => ({ id: s.id, apa: s.citationApa, year: s.year, relevance: s.relevance, readLevel: s.readLevel, doi: s.doiUrl, pdf: s.pdfStatus, signals: s.qualitySignals })),
         total: state.sources.length,
-        note: "Peringkat SINTA/Scimago belum diverifikasi otomatis; user cek lewat tautan.",
+        selected: selectedSources(state.sources).length,
+        note: "Peringkat SINTA/Scimago belum diverifikasi otomatis; user cek lewat tautan. readLevel=fulltext berarti isi PDF sudah dibaca sistem.",
       };
+    }
+    case "selectSources": {
+      const ids = Array.isArray(args.ids) ? args.ids.map((v) => asStr(v, 200)).filter(Boolean) : [];
+      if (!ids.length) return { error: "ids kosong." };
+      const selected = args.selected !== false;
+      const set = new Set(ids);
+      let changed = 0;
+      state.sources = state.sources.map((s) => {
+        if (!set.has(s.id)) return s;
+        changed += 1;
+        return { ...s, selected };
+      });
+      await persist(state);
+      const reason = asStr(args.reason, 200);
+      events.push(`${selected ? "Centang" : "Lepas centang"} ${changed} sumber${reason ? `: ${reason}` : ""}`);
+      emit(`${selected ? "Mencentang" : "Melepas centang"} ${changed} sumber (${selectedSources(state.sources).length} dipakai)`);
+      return { ok: true, changed, selectedTotal: selectedSources(state.sources).length, total: state.sources.length };
     }
     case "startExecution": {
       if (!args.confirm) return { error: "Butuh konfirmasi user." };
       if (!state.plan?.outline.length) return { error: "Belum ada rencana." };
       const minSources = state.brief.minSources || 0;
-      if (minSources && state.sources.length < minSources) {
-        return { error: `Sumber terverifikasi baru ${state.sources.length}, syarat minimal ${minSources}. Cari lagi dengan findSources atau minta user menurunkan syarat.` };
+      const usable = selectedSources(state.sources).length;
+      if (minSources && usable < minSources) {
+        return { error: `Sumber tercentang baru ${usable} (dari ${state.sources.length}), syarat minimal ${minSources}. Cari lagi dengan findSources, centang lebih banyak lewat selectSources, atau minta user menurunkan syarat.` };
       }
       const payload = await buildProjectPayload({ id: state.id, ownerId: state.ownerId, brief: state.brief, plan: state.plan, sources: state.sources, materials: state.materials });
       const job = await startReportJob(payload, state.ownerId, "lengkap");
@@ -872,6 +926,7 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
     case "updateBrief": return "Mencatat kebutuhan laporan…";
     case "proposePlan": return "Menyusun rencana outline, diagram, dan tabel…";
     case "findSources": return `Mencari sumber: "${asStr(args.query, 80)}"`;
+    case "selectSources": return `${args.selected === false ? "Melepas centang" : "Mencentang"} sumber referensi…`;
     case "startExecution": return "Memulai penulisan penuh…";
     case "reviseSection": return `Merevisi bagian "${asStr(args.sectionTitle, 80)}"…`;
     case "exportDocx": return "Menyusun file DOCX terbaru…";

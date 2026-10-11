@@ -15,6 +15,7 @@ import { searchSemanticScholar } from "./semantic-scholar";
 import { searchOpenAlex } from "./openalex";
 import { searchCrossref, verifyCrossrefDoi } from "./crossref";
 import { verifyPdfUrls, type PdfStatus } from "./verify-pdf";
+import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import type { ProviderPaper, SearchOptions } from "./types";
 
 export type JournalRequirement =
@@ -50,8 +51,16 @@ export interface VerifiedSource {
   qualitySignals: string[];
   /** Tautan untuk user mengecek sendiri peringkat jurnal. */
   checkLinks: { label: string; url: string }[];
-  /** Seberapa isi yang kami baca: hanya abstrak (belum ada full-text ingest). */
-  readLevel: "abstract" | "none";
+  /** Seberapa isi yang kami baca: teks penuh (PDF OA terunduh), abstrak, atau tidak ada. */
+  readLevel: "fulltext" | "abstract" | "none";
+  /** Skor relevansi 0-100 terhadap query (overlap kata kunci + kebaruan + sitasi). */
+  relevance: number;
+  /** Dipakai sebagai referensi penulisan? Default true; user/AI bisa mencentang. */
+  selected?: boolean;
+  /** Teks penuh hasil ekstraksi PDF (dipotong), hanya bila readLevel=fulltext. */
+  fullText?: string;
+  /** Jumlah karakter teks penuh asli sebelum dipotong. */
+  fullTextChars?: number;
 }
 
 export interface FindSourcesOptions extends SearchOptions {
@@ -187,6 +196,63 @@ function checkLinks(p: ProviderPaper): { label: string; url: string }[] {
   return links;
 }
 
+/**
+ * Cari PDF open access legal via Unpaywall (berdasarkan DOI). Dipakai bila provider
+ * utama tidak memberi pdfUrl. Butuh email kontak (syarat API Unpaywall).
+ */
+async function unpaywallPdf(doi: string): Promise<string | null> {
+  const email = process.env.UNPAYWALL_EMAIL || process.env.CONTACT_EMAIL || "";
+  if (!email) return null;
+  try {
+    const data = await fetchWithRetryAndCache(
+      `https://api.unpaywall.org/v2/${encodeURIComponent(doi)}?email=${encodeURIComponent(email)}`,
+      { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6_000) },
+      1,
+      300,
+    );
+    if (!isRecord(data)) return null;
+    const best = isRecord(data.best_oa_location) ? data.best_oa_location : null;
+    const locations = Array.isArray(data.oa_locations) ? data.oa_locations.filter(isRecord) : [];
+    for (const loc of [best, ...locations]) {
+      const url = loc && typeof loc.url_for_pdf === "string" ? loc.url_for_pdf : null;
+      if (url && /^https?:\/\//i.test(url)) return url;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const STOPWORDS = new Set([
+  "the", "and", "for", "with", "from", "that", "this", "are", "was", "were", "into", "using", "based", "study", "analysis",
+  "dan", "yang", "untuk", "dengan", "pada", "dari", "dalam", "terhadap", "atau", "oleh", "sebagai", "studi", "analisis", "sistem",
+]);
+
+function queryTerms(query: string) {
+  return Array.from(new Set(
+    query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w)),
+  ));
+}
+
+/**
+ * Skor 0-100: relevansi kata kunci (judul berbobot 2x, abstrak 1x) ~60%,
+ * kebaruan tahun ~30%, sitasi (log) ~10%. Dipakai untuk urutan prioritas.
+ */
+export function scoreSource(p: ProviderPaper, terms: string[], nowYear = new Date().getFullYear()) {
+  const title = normalizeTitle(p.title);
+  const abstract = String(p.abstract || "").toLowerCase();
+  let hit = 0;
+  for (const term of terms) {
+    if (title.includes(term)) hit += 2;
+    else if (abstract.includes(term)) hit += 1;
+  }
+  const relevance = terms.length ? Math.min(1, hit / (terms.length * 2)) : 0.5;
+  const age = p.year ? Math.max(0, nowYear - Number(p.year)) : 12;
+  const recency = Math.max(0, 1 - age / 12); // 0 tahun = 1, >=12 tahun = 0
+  const citations = Math.min(1, Math.log10(1 + Number(p.citationCount || 0)) / 3); // 1000 sitasi = 1
+  return Math.round((relevance * 0.6 + recency * 0.3 + citations * 0.1) * 100);
+}
+
 /** Filter keras berdasarkan syarat yang bisa kami pastikan; tier dicek user via link. */
 function passesRequirement(p: ProviderPaper, req: JournalRequirement | undefined) {
   if (!req || req === "bebas") return true;
@@ -205,7 +271,7 @@ function passesRequirement(p: ProviderPaper, req: JournalRequirement | undefined
 export async function findVerifiedSources(query: string, options: FindSourcesOptions = {}): Promise<VerifiedSource[]> {
   const limit = Math.min(Number(options.limit || 6), 25);
   const searchOptions: SearchOptions = {
-    limit: Math.min(limit * 2, 25),
+    limit: Math.min(limit * 3, 40),
     yearFrom: options.yearFrom ?? null,
     yearTo: options.yearTo ?? null,
     openAccessOnly: Boolean(options.openAccessOnly),
@@ -219,31 +285,48 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
   const merged = mergeAndDeduplicate([ss, oa, cr]).filter((p) => p.title && (options.requireDoi === false || p.doi));
   progress(`${merged.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}), memverifikasi DOI…`);
 
+  // Urutkan dulu berdasarkan relevansi + kebaruan supaya kandidat terbaik yang diverifikasi.
+  const terms = queryTerms(query);
+  const ranked = merged
+    .map((p) => ({ p, score: scoreSource(p, terms) }))
+    .sort((a, b) => b.score - a.score);
+
   const doiChecked = await Promise.all(
-    merged.slice(0, Math.min(limit * 2, 20)).map(async (paper) => {
-      if (!paper.doi) return paper;
+    ranked.slice(0, Math.min(limit * 3, 30)).map(async ({ p: paper, score }) => {
+      if (!paper.doi) return { paper, score };
       const check = await verifyCrossrefDoi(paper.doi);
       return {
-        ...paper,
-        doi: check.canonicalDoi || paper.doi,
-        doiVerified: check.verified,
-        url: paper.url || check.publisherUrl || null,
-        pdfUrl: paper.pdfUrl || check.pdfUrl || null,
-        venue: paper.venue || check.venue || "",
+        score,
+        paper: {
+          ...paper,
+          doi: check.canonicalDoi || paper.doi,
+          doiVerified: check.verified,
+          url: paper.url || check.publisherUrl || null,
+          pdfUrl: paper.pdfUrl || check.pdfUrl || null,
+          venue: paper.venue || check.venue || "",
+        },
       };
     }),
   );
 
-  const eligible = doiChecked
-    .filter((p) => (options.requireDoi === false ? true : p.doiVerified))
-    .filter((p) => passesRequirement(p, options.requirement))
-    .sort((a, b) => Number(b.citationCount || 0) - Number(a.citationCount || 0))
+  const eligibleRanked = doiChecked
+    .filter(({ paper: p }) => (options.requireDoi === false ? true : p.doiVerified))
+    .filter(({ paper: p }) => passesRequirement(p, options.requirement))
+    .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
-  progress(`${eligible.length} lolos verifikasi DOI & syarat jurnal, mengecek ketersediaan PDF…`);
-  const pdfStatuses = await verifyPdfUrls(eligible.map((p) => p.pdfUrl));
+  progress(`${eligibleRanked.length} lolos verifikasi DOI & syarat jurnal, mencari PDF open access…`);
+  // Lengkapi PDF OA legal via Unpaywall untuk yang belum punya pdfUrl.
+  const withOa = await Promise.all(eligibleRanked.map(async ({ paper, score }) => {
+    if (paper.pdfUrl || !paper.doi) return { paper, score };
+    const oaPdf = await unpaywallPdf(normalizeDoi(paper.doi) || paper.doi);
+    return { paper: oaPdf ? { ...paper, pdfUrl: oaPdf, isOpenAccess: true } : paper, score };
+  }));
 
-  return eligible.map((p, i) => {
+  progress("Mengecek ketersediaan PDF…");
+  const pdfStatuses = await verifyPdfUrls(withOa.map(({ paper }) => paper.pdfUrl));
+
+  return withOa.map(({ paper: p, score }, i) => {
     const doi = normalizeDoi(p.doi);
     const pdfStatus = pdfStatuses[i];
     return {
@@ -270,6 +353,8 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
       qualitySignals: qualitySignals(p, pdfStatus),
       checkLinks: checkLinks(p),
       readLevel: p.abstract ? "abstract" : "none",
+      relevance: score,
+      selected: true,
     };
   });
 }
