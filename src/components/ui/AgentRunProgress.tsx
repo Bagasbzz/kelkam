@@ -35,7 +35,7 @@ export default function AgentRunProgress({ run, events, startedAt, lastBeatAt, o
   const latest = shown[shown.length - 1];
 
   return (
-    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-slate-700">
+    <div className="rounded-2xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-slate-700">
       <div className="flex items-center gap-2">
         {live ? <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-600" /> : <Wifi className="h-3.5 w-3.5 text-slate-400" />}
         <span className="font-semibold text-slate-900">{describeRunStatus(run)}</span>

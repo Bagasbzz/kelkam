@@ -420,18 +420,18 @@ export default function LaporanPage() {
   // ------------------------------------------------- blok yang dipakai ulang
   const sessionList = (
     <>
-      <Button onClick={() => { createSession(); setSheet(null); }} variant="primary" size="sm" className="w-full"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
+      <Button onClick={() => { createSession(); setSheet(null); }} variant="primary" size="md" className="w-full"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
       <div className="mt-3 space-y-1">
         {sessions.map((s) => (
-          <div key={s.id} className={`group flex items-center gap-2 rounded-xl px-2 py-2 text-sm ${s.id === activeId ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
+          <div key={s.id} className={`group flex items-center gap-2 rounded-xl px-3 py-2.5 text-[15px] ${s.id === activeId ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
             <button type="button" onClick={() => { setActiveId(s.id); setSheet(null); }} className="min-w-0 flex-1 text-left">
               <div className="truncate font-semibold">{s.title || "Tanpa judul"}</div>
-              <div className={`text-[11px] ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
+              <div className={`text-xs ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
             </button>
-            <button type="button" onClick={() => deleteSession(s.id)} className="opacity-60 group-hover:opacity-100 lg:opacity-0" title="Hapus"><Trash2 className="h-3.5 w-3.5" /></button>
+            <button type="button" onClick={() => deleteSession(s.id)} className="opacity-60 group-hover:opacity-100 lg:opacity-0" title="Hapus"><Trash2 className="h-4 w-4" /></button>
           </div>
         ))}
-        {!sessions.length && <p className="px-2 py-4 text-xs text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
+        {!sessions.length && <p className="px-2 py-4 text-sm text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
       </div>
     </>
   );
@@ -449,19 +449,19 @@ export default function LaporanPage() {
 
   /** Deretan chip pembuka panel: jelas bisa diklik (border, ikon, jumlah, chevron). */
   const tabChips = (
-    <div className="flex gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:hidden">
-      <button type="button" onClick={() => setSheet("sesi")} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm active:scale-95">
-        <PanelLeft className="h-3.5 w-3.5" /> Sesi <span className="rounded-full bg-slate-100 px-1.5 text-[10px]">{sessions.length}</span><ChevronUp className="h-3 w-3 text-slate-400" />
+    <div className="flex gap-2 overflow-x-auto px-3 py-2.5 [scrollbar-width:none] lg:hidden">
+      <button type="button" onClick={() => setSheet("sesi")} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 py-2 text-sm font-bold text-slate-700 shadow-sm active:scale-95">
+        <PanelLeft className="h-4 w-4" /> Sesi <span className="rounded-full bg-slate-100 px-1.5 text-xs">{sessions.length}</span><ChevronUp className="h-3.5 w-3.5 text-slate-400" />
       </button>
       {TABS.map(([key, label, Icon]) => {
         const n = tabCount[key];
         const isFresh = fresh === key;
         return (
           <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail}
-            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 disabled:opacity-40 ${isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}>
-            <Icon className="h-3.5 w-3.5" /> {label}
-            {n != null && <span className={`rounded-full px-1.5 text-[10px] ${isFresh ? "bg-blue-600 text-white" : "bg-slate-100"}`}>{n}</span>}
-            <ChevronUp className="h-3 w-3 text-slate-400" />
+            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm font-bold shadow-sm transition active:scale-95 disabled:opacity-40 ${isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}>
+            <Icon className="h-4 w-4" /> {label}
+            {n != null && <span className={`rounded-full px-1.5 text-xs ${isFresh ? "bg-blue-600 text-white" : "bg-slate-100"}`}>{n}</span>}
+            <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
             {isFresh && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" />}
           </button>
         );
@@ -484,7 +484,7 @@ export default function LaporanPage() {
                           {detail.plan.outline.map((s, i) => (
                             <li key={s.id} className="rounded-lg bg-slate-50 px-2 py-1.5">
                               <div className="font-semibold text-slate-900">{i + 1}. {s.title}</div>
-                              {s.purpose && <div className="text-[11px] text-slate-600">{s.purpose}</div>}
+                              {s.purpose && <div className="text-sm text-slate-600">{s.purpose}</div>}
                             </li>
                           ))}
                         </ol>
@@ -501,7 +501,7 @@ export default function LaporanPage() {
                           <ul className="space-y-1 text-xs">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2 py-1"><b>{t.title}</b> — {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
                         </div>
                       )}
-                      <p className="text-[11px] text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
+                      <p className="text-sm text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
                     </>
                   ) : <p className="text-xs text-slate-500">Rencana muncul setelah asisten cukup paham kebutuhanmu.</p>}
                 </div>
@@ -509,16 +509,16 @@ export default function LaporanPage() {
 
               {detail && tab === "sumber" && (
                 <div className="space-y-2">
-                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis — cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
+                  <p className="rounded-lg bg-amber-50 px-2 py-1.5 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3 w-3" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis — cek lewat tautan di tiap sumber. Sistem hanya membaca abstrak.</p>
                   {!detail.sources.length && <p className="text-xs text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
                   {detail.sources.map((s) => (
                     <div key={s.id} className="rounded-xl border border-slate-100 p-2">
                       <div className="text-xs leading-snug text-slate-900">{s.citationApa}</div>
                       <div className="mt-1 flex flex-wrap gap-1">
-                        {s.qualitySignals.map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-600">{q}</span>)}
-                        {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-[10px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
+                        {s.qualitySignals.map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">{q}</span>)}
+                        {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-xs ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap gap-2 text-[11px] font-semibold">
+                      <div className="mt-1.5 flex flex-wrap gap-2 text-sm font-semibold">
                         {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-blue-600 hover:underline"><ExternalLink className="h-3 w-3" />DOI</a>}
                         {s.pdfUrl && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-emerald-700 hover:underline"><Download className="h-3 w-3" />PDF</a>}
                         {s.checkLinks.map((c) => <a key={c.url} href={c.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>)}
@@ -530,12 +530,12 @@ export default function LaporanPage() {
 
               {detail && tab === "bahan" && (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-500">Unggah ZIP kode, PDF panduan, DOCX contoh, atau data mentah lewat tombol “Unggah bahan”. Isinya dipakai sebagai konteks penulisan.</p>
+                  <p className="text-sm text-slate-500">Unggah ZIP kode, PDF panduan, DOCX contoh, atau data mentah lewat tombol “Unggah bahan”. Isinya dipakai sebagai konteks penulisan.</p>
                   {!detail.materials.length && <p className="text-xs text-slate-500">Belum ada bahan.</p>}
                   {detail.materials.map((m) => (
                     <div key={m.id} className="flex items-center gap-2 rounded-xl border border-slate-100 px-2 py-1.5 text-xs">
                       <FileText className="h-3.5 w-3.5 text-slate-400" />
-                      <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-[10px] text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
+                      <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-xs text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
                       <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-3.5 w-3.5 text-slate-400 hover:text-red-600" /></button>
                     </div>
                   ))}
@@ -544,7 +544,7 @@ export default function LaporanPage() {
 
               {detail && tab === "gambar" && (
                 <div className="space-y-2">
-                  <p className="text-[11px] text-slate-500">Diagram (UML & konsep/arsitektur) dan ilustrasi dari rencana dibuat otomatis saat eksekusi dan masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code>. Ilustrasi tambahan bisa diminta di chat, mis. “buatkan ilustrasi proses X untuk BAB III”.</p>
+                  <p className="text-sm text-slate-500">Diagram (UML & konsep/arsitektur) dan ilustrasi dari rencana dibuat otomatis saat eksekusi dan masuk DOCX lewat placeholder <code>[Gambar: Judul - keterangan]</code>. Ilustrasi tambahan bisa diminta di chat, mis. “buatkan ilustrasi proses X untuk BAB III”.</p>
                   {(detail.plan?.diagrams ?? []).length > 0 && (
                     <div className="space-y-2">
                       <div className="flex items-center gap-1 text-xs font-bold text-slate-700"><Workflow className="h-3.5 w-3.5" /> Diagram ({detail.plan!.diagrams.length})</div>
@@ -553,16 +553,16 @@ export default function LaporanPage() {
                           <div className="flex items-center gap-2">
                             {d.svg ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : d.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <span className="h-3.5 w-3.5 rounded-full bg-slate-300" />}
                             <div className="min-w-0 flex-1 truncate font-semibold">{d.title} <span className="font-normal text-slate-500">({d.type})</span></div>
-                            <span className="text-[10px] text-slate-500">{d.svg ? "selesai" : d.status === "failed" ? "gagal" : jobActive ? "dibuat…" : "belum dibuat"}</span>
+                            <span className="text-xs text-slate-500">{d.svg ? "selesai" : d.status === "failed" ? "gagal" : jobActive ? "dibuat…" : "belum dibuat"}</span>
                           </div>
                           {d.svg && (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.svg)}`} alt={d.title} className="mt-2 w-full rounded-lg border border-slate-100 bg-white" />
                           )}
                           <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="text-[10px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
+                            <span className="text-xs text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
                             {((d.diagramData?.nodes?.length ?? 0) > 0 || (!jobActive && !d.svg)) && (
-                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3 w-3" /> Buka di UML Builder</button>
+                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3 w-3" /> Buka di UML Builder</button>
                             )}
                           </div>
                         </div>
@@ -576,14 +576,14 @@ export default function LaporanPage() {
                       <div className="flex items-center gap-2">
                         {f.status === "done" ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" /> : f.status === "failed" ? <span className="h-3.5 w-3.5 rounded-full bg-red-500" /> : <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-400" />}
                         <div className="min-w-0 flex-1 truncate font-semibold">{f.title || "Gambar"}</div>
-                        <span className="text-[10px] text-slate-500">{f.status === "queued" ? "antre" : f.status === "running" ? "diproses" : f.status === "done" ? "selesai" : "gagal"}</span>
+                        <span className="text-xs text-slate-500">{f.status === "queued" ? "antre" : f.status === "running" ? "diproses" : f.status === "done" ? "selesai" : "gagal"}</span>
                       </div>
-                      {f.status === "failed" && f.error && <div className="mt-1 text-[11px] text-red-600">{f.error}</div>}
+                      {f.status === "failed" && f.error && <div className="mt-1 text-sm text-red-600">{f.error}</div>}
                       {f.status === "done" && f.url && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <a href={f.url} target="_blank" rel="noreferrer"><img src={f.url} alt={f.title} className="mt-2 w-full rounded-lg border border-slate-100" /></a>
                       )}
-                      {f.status === "done" && <div className="mt-1 text-[10px] text-slate-500">Placeholder: <code>[Gambar: {f.title} - keterangan]</code></div>}
+                      {f.status === "done" && <div className="mt-1 text-xs text-slate-500">Placeholder: <code>[Gambar: {f.title} - keterangan]</code></div>}
                     </div>
                   ))}
                 </div>
@@ -600,9 +600,9 @@ export default function LaporanPage() {
                         </select>
                         <Button onClick={exportDocx} variant="primary" size="sm" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
                       </div>
-                      <div className="flex items-center gap-1 text-[11px] text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
-                      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-800">{detail.draft}</pre>
-                      <p className="text-[11px] text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>
+                      <div className="flex items-center gap-1 text-sm text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
+                      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-2 text-sm leading-relaxed text-slate-800">{detail.draft}</pre>
+                      <p className="text-sm text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>
                     </>
                   )}
                 </div>
@@ -611,43 +611,43 @@ export default function LaporanPage() {
   );
 
   const panelTabsBar = (
-    <div className="flex border-b border-slate-100 text-xs font-bold">
+    <div className="flex border-b border-slate-100 text-sm font-bold">
       {TABS.map(([key, label, Icon]) => (
-        <button key={key} type="button" onClick={() => { setTab(key); setFresh((f) => (f === key ? null : f)); }} className={`flex flex-1 items-center justify-center gap-1 px-1 py-2 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}>
-          <Icon className="h-3.5 w-3.5" />{label}{tabCount[key] != null ? <span className="text-[10px] text-slate-400">{tabCount[key]}</span> : null}
+        <button key={key} type="button" onClick={() => { setTab(key); setFresh((f) => (f === key ? null : f)); }} className={`flex flex-1 items-center justify-center gap-1.5 px-1 py-3 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}>
+          <Icon className="h-4 w-4" />{label}{tabCount[key] != null ? <span className="text-xs text-slate-400">{tabCount[key]}</span> : null}
         </button>
       ))}
     </div>
   );
 
-  const stageBadge = detail && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>;
+  const stageBadge = detail && <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>;
 
   return (
     <div className="flex h-[100dvh] flex-col bg-slate-50 pt-[64px] md:pt-[72px]">
       <div className="flex min-h-0 flex-1">
         {/* ------------------------------------ desktop: daftar sesi (bisa dilipat) */}
-        <aside className={`hidden shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-3 transition-[width] lg:block ${sidebarOpen ? "w-[260px]" : "w-0 !p-0 border-0"}`}>
+        <aside className={`hidden shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-3 transition-[width] lg:block ${sidebarOpen ? "w-[300px]" : "w-0 !p-0 border-0"}`}>
           {sidebarOpen && sessionList}
         </aside>
 
         {/* ------------------------------------------------------------- chat */}
         <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 md:px-4">
-            <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 lg:inline-flex" title={sidebarOpen ? "Sembunyikan daftar sesi" : "Tampilkan daftar sesi"}><PanelLeft className="h-4 w-4" /></button>
-            <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-bold text-slate-900">
-              <Bot className="h-4 w-4 shrink-0 text-blue-600" />
+          <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-3 md:px-5">
+            <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:inline-flex" title={sidebarOpen ? "Sembunyikan daftar sesi" : "Tampilkan daftar sesi"}><PanelLeft className="h-5 w-5" /></button>
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-base font-bold text-slate-900">
+              <Bot className="h-5 w-5 shrink-0 text-blue-600" />
               <span className="truncate">{detail?.title || detail?.brief.title || "Asisten Laporan"}</span>
             </div>
             {stageBadge}
             {/* desktop: rail chip panel kanan */}
-            <div className="ml-1 hidden items-center gap-1 lg:flex">
+            <div className="ml-1 hidden items-center gap-1.5 lg:flex">
               {TABS.map(([key, label, Icon]) => {
                 const n = tabCount[key]; const isFresh = fresh === key; const activeTab = panelOpen && tab === key;
                 return (
                   <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail} title={label}
-                    className={`relative inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-bold transition disabled:opacity-40 ${activeTab ? "border-slate-900 bg-slate-900 text-white" : isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                    <Icon className="h-3.5 w-3.5" /> {label}{n != null ? <span className={`rounded px-1 text-[10px] ${activeTab ? "bg-white/20" : "bg-slate-100"}`}>{n}</span> : null}
-                    {isFresh && !activeTab && <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-blue-500" />}
+                    className={`relative inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-bold transition disabled:opacity-40 ${activeTab ? "border-slate-900 bg-slate-900 text-white" : isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    <Icon className="h-4 w-4" /> {label}{n != null ? <span className={`rounded-md px-1.5 text-xs ${activeTab ? "bg-white/20" : "bg-slate-100"}`}>{n}</span> : null}
+                    {isFresh && !activeTab && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" />}
                   </button>
                 );
               })}
@@ -681,7 +681,7 @@ export default function LaporanPage() {
                     <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white"><Bot className="h-4 w-4" /></div>
                     <div className="min-w-0 flex-1 text-sm leading-relaxed text-slate-900">
                       <SimpleMarkdown text={m.content} />
-                      {m.toolCalls?.tools?.length ? <div className="mt-1 text-[10px] text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
+                      {m.toolCalls?.tools?.length ? <div className="mt-1 text-xs text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
                     </div>
                   </div>
                 )
@@ -706,7 +706,7 @@ export default function LaporanPage() {
                     {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />} Unggah bahan
                     <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
                   </label>
-                  <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
+                  <label className="ml-auto inline-flex items-center gap-1 text-sm text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
                 </div>
               )}
               <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2 rounded-2xl border border-slate-300 bg-white p-2 shadow-sm focus-within:border-slate-500">
@@ -758,7 +758,7 @@ export default function LaporanPage() {
               <button type="button" onClick={() => setSheet(null)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Tutup"><X className="h-5 w-5" /></button>
             </div>
             {sheet === "panel" && panelTabsBar}
-            <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-sm">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-[15px]">
               {sheet === "sesi" ? sessionList : (<>{jobCard && !jobActive && <div className="mb-3">{jobCard}</div>}{panelBody}</>)}
             </div>
           </div>
@@ -770,7 +770,7 @@ export default function LaporanPage() {
 
 function Chip({ children, onClick, tone, disabled }: { children: React.ReactNode; onClick: () => void; tone?: "primary"; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-50 ${tone === "primary" ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
+    <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-50 ${tone === "primary" ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
       {children}
     </button>
   );

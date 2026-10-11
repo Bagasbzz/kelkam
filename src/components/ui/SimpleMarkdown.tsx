@@ -29,8 +29,8 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       const isFile = m[3].startsWith("/api/files/");
       out.push(
         href ? (
-          <a key={k} href={href} target={isFile ? undefined : "_blank"} rel="noopener noreferrer" download={isFile || undefined} className={isFile ? "my-1 inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 font-semibold text-blue-700 hover:bg-blue-100" : "font-semibold text-blue-700 underline hover:text-blue-900"}>
-            {isFile && <Download className="h-4 w-4" />}
+          <a key={k} href={href} target={isFile ? undefined : "_blank"} rel="noopener noreferrer" download={isFile || undefined} className={isFile ? "my-1.5 inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 font-semibold text-blue-700 hover:bg-blue-100" : "font-semibold text-blue-700 underline hover:text-blue-900"}>
+            {isFile && <Download className="h-5 w-5" />}
             {m[2]}
           </a>
         ) : (
@@ -60,13 +60,13 @@ export default function SimpleMarkdown({ text }: { text: string }) {
       i++;
       while (i < lines.length && !lines[i].trim().startsWith("```")) buf.push(lines[i++]);
       i++;
-      nodes.push(<pre key={key++} className="overflow-x-auto rounded-lg bg-slate-800 p-2 text-xs text-slate-100"><code>{buf.join("\n")}</code></pre>);
+      nodes.push(<pre key={key++} className="overflow-x-auto rounded-lg bg-slate-800 p-3 text-[0.85em] text-slate-100"><code>{buf.join("\n")}</code></pre>);
       continue;
     }
 
     const h = /^(#{1,4})\s+(.*)$/.exec(line);
     if (h) {
-      const cls = h[1].length <= 2 ? "mt-2 text-sm font-bold" : "mt-1.5 text-sm font-semibold";
+      const cls = h[1].length <= 2 ? "mt-3 text-[1.05em] font-bold" : "mt-2 font-semibold";
       nodes.push(<p key={key++} className={cls}>{inline(h[2], `h${key}`)}</p>);
       i++;
       continue;
@@ -80,7 +80,7 @@ export default function SimpleMarkdown({ text }: { text: string }) {
         const [head, ...body] = cells;
         nodes.push(
           <div key={key++} className="my-1 overflow-x-auto">
-            <table className="min-w-full border-collapse text-xs">
+            <table className="min-w-full border-collapse text-[0.9em]">
               <thead><tr>{head.map((c, ci) => <th key={ci} className="border border-slate-300 bg-slate-200/60 px-2 py-1 text-left font-semibold">{inline(c, `th${key}-${ci}`)}</th>)}</tr></thead>
               <tbody>{body.map((r, ri) => <tr key={ri}>{r.map((c, ci) => <td key={ci} className="border border-slate-300 px-2 py-1 align-top">{inline(c, `td${key}-${ri}-${ci}`)}</td>)}</tr>)}</tbody>
             </table>
@@ -105,7 +105,7 @@ export default function SimpleMarkdown({ text }: { text: string }) {
         i++;
       }
       const Tag = ordered ? "ol" : "ul";
-      nodes.push(<Tag key={key++} className={`my-1 space-y-0.5 pl-5 ${ordered ? "list-decimal" : "list-disc"}`}>{items.map((it, ii) => <li key={ii}>{inline(it, `li${key}-${ii}`)}</li>)}</Tag>);
+      nodes.push(<Tag key={key++} className={`my-2 space-y-1 pl-6 ${ordered ? "list-decimal" : "list-disc"}`}>{items.map((it, ii) => <li key={ii}>{inline(it, `li${key}-${ii}`)}</li>)}</Tag>);
       continue;
     }
 
@@ -113,8 +113,8 @@ export default function SimpleMarkdown({ text }: { text: string }) {
 
     const para: string[] = [];
     while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*[-*•]\s|\s*\d+[.)]\s|\||```)/.test(lines[i])) para.push(lines[i++]);
-    nodes.push(<p key={key++} className="my-1">{para.map((p, pi) => <span key={pi}>{pi > 0 && <br />}{inline(p, `p${key}-${pi}`)}</span>)}</p>);
+    nodes.push(<p key={key++} className="my-2">{para.map((p, pi) => <span key={pi}>{pi > 0 && <br />}{inline(p, `p${key}-${pi}`)}</span>)}</p>);
   }
 
-  return <div className="text-sm leading-relaxed">{nodes}</div>;
+  return <div className="leading-relaxed">{nodes}</div>;
 }

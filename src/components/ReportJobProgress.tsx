@@ -86,7 +86,7 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
 
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-slate-800">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-xs font-black text-blue-800">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-sm font-black text-blue-800">
         <span className="flex items-center gap-2">
           {active && <span className="inline-block h-2 w-2 animate-ping rounded-full bg-blue-500" />}
           {job.stage}
@@ -101,7 +101,7 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
       </div>
 
       {runningStep && active && (
-        <p className="mt-2 text-[11px] text-blue-700">
+        <p className="mt-2 text-sm text-blue-700">
           Sedang menulis <b>{runningStep.title}</b> — {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
           {runningStep.attempts > 1 ? ` (percobaan ${runningStep.attempts})` : ""}. Satu bagian biasanya 15-60 dtk.
         </p>
