@@ -818,7 +818,7 @@ export function assembleReport(project: unknown, chapters: string[]) {
       ? [...cited, ...uncited].sort(collator.compare).join("\n\n")
       : "[Tambahkan referensi/jurnal yang relevan]";
 
-  let output = `${body}\n\n## Daftar Pustaka\n\n${bibliography}\n`;
+  let output = `${body}\n\n# Daftar Pustaka\n\n${bibliography}\n`;
   const audit = auditCitations(body, compact);
   const notes = [...audit.notes];
   if (cited.length && uncited.length) {

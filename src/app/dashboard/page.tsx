@@ -8,8 +8,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Bot, CheckCircle2, Download, ExternalLink, FileText, Loader2, MessageSquarePlus,
-  Paperclip, Play, Send, ShieldCheck, Trash2, User as UserIcon, Upload, ListChecks, BookOpen, Table2, Workflow, Image as ImageIcon,
+  Bot, CheckCircle2, ChevronUp, Download, ExternalLink, FileText, Loader2, MessageSquarePlus, PanelLeft, PanelRightClose,
+  Paperclip, Play, Send, ShieldCheck, Trash2, Upload, ListChecks, BookOpen, Table2, Workflow, Image as ImageIcon, X,
 } from "lucide-react";
 import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
 import ReportJobProgress from "@/components/ReportJobProgress";
@@ -34,6 +34,13 @@ interface SessionDetail {
   sources: VerifiedSource[]; materials: MaterialSummary[]; jobId: string | null; draft: string | null;
 }
 type Tab = "rencana" | "sumber" | "bahan" | "gambar" | "draft";
+
+const TABS: ReadonlyArray<[Tab, string, typeof ListChecks]> = [
+  ["rencana", "Rencana", ListChecks], ["sumber", "Sumber", BookOpen], ["bahan", "Bahan", Upload], ["gambar", "Gambar", ImageIcon], ["draft", "Draft", FileText],
+];
+
+/** Breakpoint `lg` Tailwind — di bawah ini panel samping jadi bottom sheet. */
+const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF ✓", landing_page: "Halaman", closed: "Berbayar", broken: "Rusak", unknown: "?" };
@@ -89,11 +96,16 @@ export default function LaporanPage() {
   const [deep, setDeep] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("rencana");
+  const [panelOpen, setPanelOpen] = useState(false);   // desktop: panel kanan terbuka
+  const [sidebarOpen, setSidebarOpen] = useState(true); // desktop: daftar sesi terbuka
+  const [sheet, setSheet] = useState<"sesi" | "panel" | null>(null); // mobile: bottom sheet
+  const [fresh, setFresh] = useState<Tab | null>(null); // tab yang baru terisi → penanda di chip
   const [preset, setPreset] = useState<keyof typeof DOCX_PRESETS>("kampus4433");
   const [exporting, setExporting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [executing, setExecuting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Agent run (chat) yang sedang di-stream
   const [run, setRun] = useState<AgentRunPublic | null>(null);
@@ -102,6 +114,24 @@ export default function LaporanPage() {
   const [lastBeatAt, setLastBeatAt] = useState(0);
   const [runBusy, setRunBusy] = useState(false);
   const runAbortRef = useRef<AbortController | null>(null);
+
+  /** Dipanggil sistem (tool/job selesai): pilih tab, buka panel di desktop, tandai "baru" di mobile. */
+  const focusTab = useCallback((key: Tab) => {
+    setTab(key);
+    setFresh(key);
+    if (isDesktop()) setPanelOpen(true);
+  }, []);
+
+  /** Dipanggil user (klik chip/rail): toggle panel desktop atau buka sheet mobile. */
+  const openTab = (key: Tab) => {
+    setFresh((f) => (f === key ? null : f));
+    if (isDesktop()) {
+      if (panelOpen && tab === key) { setPanelOpen(false); return; }
+      setTab(key); setPanelOpen(true);
+    } else {
+      setTab(key); setSheet("panel");
+    }
+  };
 
   // ---------------------------------------------------------------- loaders
   const loadSessions = useCallback(async () => {
@@ -153,13 +183,13 @@ export default function LaporanPage() {
       const final = await runJobUntilDone(jobId, { onUpdate: setJob, signal: controller.signal, intervalMs: 1500 });
       setJob(final);
       if (activeId) await loadDetail(activeId);
-      if (final.status === "done") setTab("draft");
+      if (final.status === "done") focusTab("draft");
     } catch (e) {
       if (!controller.signal.aborted) setError(getErrorMessage(e));
     } finally {
       if (abortRef.current === controller) setPolling(false);
     }
-  }, [activeId, loadDetail]);
+  }, [activeId, loadDetail, focusTab]);
 
   useEffect(() => {
     if (!detail?.jobId || !job) return;
@@ -240,9 +270,9 @@ export default function LaporanPage() {
       const fresh = await loadDetail(sessionId);
       await loadSessions();
       const tools = final?.toolsUsed ?? [];
-      if (tools.includes("proposePlan") || tools.includes("findSources")) setTab(tools.includes("findSources") ? "sumber" : "rencana");
-      if (tools.includes("reviseSection")) setTab("draft");
-      if (tools.includes("generateFigure")) setTab("gambar");
+      if (tools.includes("proposePlan") || tools.includes("findSources")) focusTab(tools.includes("findSources") ? "sumber" : "rencana");
+      if (tools.includes("reviseSection")) focusTab("draft");
+      if (tools.includes("generateFigure") || tools.includes("approveDiagram")) focusTab("gambar");
       if (fresh.session.jobId && fresh.job && (fresh.job.status === "queued" || fresh.job.status === "running")) pollJob(fresh.session.jobId);
       if (final?.status === "failed") setError(final.error || "Proses gagal. Ketik \"lanjut\" untuk mencoba meneruskan.");
     } catch (e) {
@@ -256,6 +286,7 @@ export default function LaporanPage() {
     const message = (text ?? input).trim();
     if (!message || !activeId || sending) return;
     setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
     setError(null);
     setMessages((prev) => [...prev, { id: `u${Date.now()}`, role: "user", content: message }]);
     const sessionId = activeId;
@@ -304,7 +335,7 @@ export default function LaporanPage() {
         method: "POST", body: JSON.stringify({ kind: data.data.kind, title: data.data.title || file.name, content: data.data.content, fileName: data.data.fileName || file.name }),
       });
       await loadDetail(activeId);
-      setTab("bahan");
+      focusTab("bahan");
     } catch (e) { setError(getErrorMessage(e)); }
     finally { setUploading(false); }
   };
@@ -378,101 +409,68 @@ export default function LaporanPage() {
   const canExecute = detail && (detail.stage === "planned" || (detail.stage === "drafted")) && (detail.plan?.outline.length ?? 0) > 0;
   const jobActive = job && (job.status === "queued" || job.status === "running");
 
-  return (
-    <div className="min-h-screen bg-slate-50 px-3 pb-6 pt-20 md:px-6 md:pt-24">
-      <div className="mx-auto grid max-w-[1500px] gap-4 lg:grid-cols-[240px_minmax(0,1fr)_400px]">
-        {/* ------------------------------------------------ sidebar sesi */}
-        <aside className="rounded-2xl border border-slate-200 bg-white p-3">
-          <Button onClick={createSession} variant="primary" size="sm" className="w-full"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
-          <div className="mt-3 space-y-1">
-            {sessions.map((s) => (
-              <div key={s.id} className={`group flex items-center gap-2 rounded-xl px-2 py-2 text-sm ${s.id === activeId ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
-                <button type="button" onClick={() => setActiveId(s.id)} className="min-w-0 flex-1 text-left">
-                  <div className="truncate font-semibold">{s.title || "Tanpa judul"}</div>
-                  <div className={`text-[11px] ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
-                </button>
-                <button type="button" onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100" title="Hapus"><Trash2 className="h-3.5 w-3.5" /></button>
-              </div>
-            ))}
-            {!sessions.length && <p className="px-2 py-4 text-xs text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
+  const tabCount: Record<Tab, number | null> = {
+    rencana: detail?.plan ? detail.plan.outline.length : null,
+    sumber: detail?.sources.length ?? null,
+    bahan: detail?.materials.length ?? null,
+    gambar: detail ? (detail.plan?.diagrams.length ?? 0) + figures.length : null,
+    draft: detail?.draft ? draftSections.length : null,
+  };
+
+  // ------------------------------------------------- blok yang dipakai ulang
+  const sessionList = (
+    <>
+      <Button onClick={() => { createSession(); setSheet(null); }} variant="primary" size="sm" className="w-full"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
+      <div className="mt-3 space-y-1">
+        {sessions.map((s) => (
+          <div key={s.id} className={`group flex items-center gap-2 rounded-xl px-2 py-2 text-sm ${s.id === activeId ? "bg-slate-900 text-white" : "hover:bg-slate-100"}`}>
+            <button type="button" onClick={() => { setActiveId(s.id); setSheet(null); }} className="min-w-0 flex-1 text-left">
+              <div className="truncate font-semibold">{s.title || "Tanpa judul"}</div>
+              <div className={`text-[11px] ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
+            </button>
+            <button type="button" onClick={() => deleteSession(s.id)} className="opacity-60 group-hover:opacity-100 lg:opacity-0" title="Hapus"><Trash2 className="h-3.5 w-3.5" /></button>
           </div>
-        </aside>
+        ))}
+        {!sessions.length && <p className="px-2 py-4 text-xs text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
+      </div>
+    </>
+  );
 
-        {/* ------------------------------------------------------ chat */}
-        <section className="flex min-h-[70vh] flex-col rounded-2xl border border-slate-200 bg-white">
-          <header className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-bold text-slate-900"><Bot className="h-4 w-4 text-blue-600" /> Asisten Laporan</div>
-            {detail && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>}
-          </header>
+  const jobCard = detail?.jobId && job ? (
+    <ReportJobProgress
+      job={job}
+      polling={polling}
+      compact
+      onResume={() => detail.jobId && pollJob(detail.jobId)}
+      onRetry={(redo) => detail.jobId && jobAction(detail.jobId, "retry", redo).then((j) => { setJob(j); pollJob(j.id); }).catch((e) => setError(getErrorMessage(e)))}
+      onCancel={() => detail.jobId && jobAction(detail.jobId, "cancel").then(setJob).catch((e) => setError(getErrorMessage(e)))}
+    />
+  ) : null;
 
-          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-            {!activeId && <p className="text-sm text-slate-500">Pilih sesi atau buat “Laporan baru”. Asisten akan bertanya tentang jenis dokumen, topik, syarat jurnal (SINTA/Scopus), format kampus, lalu menyusun rencana dan sumber yang bisa kamu cek sendiri (DOI/PDF).</p>}
-            {messages.map((m) => (
-              <div key={m.id} className={`flex gap-2 ${m.role === "user" ? "justify-end" : ""}`}>
-                {m.role === "assistant" && <Bot className="mt-1 h-4 w-4 shrink-0 text-blue-600" />}
-                <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${m.role === "user" ? "whitespace-pre-wrap bg-slate-900 text-white" : "bg-slate-100 text-slate-900"}`}>
-                  {m.role === "assistant" ? <SimpleMarkdown text={m.content} /> : m.content}
-                  {m.toolCalls?.tools?.length ? <div className="mt-1 text-[10px] text-slate-500">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
-                </div>
-                {m.role === "user" && <UserIcon className="mt-1 h-4 w-4 shrink-0 text-slate-400" />}
-              </div>
-            ))}
-            {sending && <AgentRunProgress run={run} events={runEvents} startedAt={runStartedAt} lastBeatAt={lastBeatAt} onPause={pauseRun} onCancel={cancelRun} busy={runBusy} />}
-            <div ref={bottomRef} />
-          </div>
+  /** Deretan chip pembuka panel: jelas bisa diklik (border, ikon, jumlah, chevron). */
+  const tabChips = (
+    <div className="flex gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:hidden">
+      <button type="button" onClick={() => setSheet("sesi")} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm active:scale-95">
+        <PanelLeft className="h-3.5 w-3.5" /> Sesi <span className="rounded-full bg-slate-100 px-1.5 text-[10px]">{sessions.length}</span><ChevronUp className="h-3 w-3 text-slate-400" />
+      </button>
+      {TABS.map(([key, label, Icon]) => {
+        const n = tabCount[key];
+        const isFresh = fresh === key;
+        return (
+          <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail}
+            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold shadow-sm transition active:scale-95 disabled:opacity-40 ${isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}>
+            <Icon className="h-3.5 w-3.5" /> {label}
+            {n != null && <span className={`rounded-full px-1.5 text-[10px] ${isFresh ? "bg-blue-600 text-white" : "bg-slate-100"}`}>{n}</span>}
+            <ChevronUp className="h-3 w-3 text-slate-400" />
+            {isFresh && <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" />}
+          </button>
+        );
+      })}
+    </div>
+  );
 
-          {error && <div className="mx-4 mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
-
-          {detail && (
-            <div className="flex flex-wrap gap-2 border-t border-slate-100 px-4 py-2">
-              {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
-              {detail.stage === "planned" && <Chip onClick={() => send("Cari sumber tambahan yang lebih relevan dengan topik ini.")}>Cari sumber lagi</Chip>}
-              {canExecute && !jobActive && <Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip>}
-              {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
-              <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />} Unggah bahan
-                <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
-              </label>
-              <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti (lebih lambat)</label>
-            </div>
-          )}
-
-          <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2 border-t border-slate-100 px-4 py-3">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={activeId ? "Tulis pesan… (Enter kirim, Shift+Enter baris baru)" : "Buat sesi dulu"}
-              disabled={!activeId || sending}
-              rows={2}
-              className="flex-1 resize-none rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-slate-400"
-            />
-            <Button type="submit" variant="primary" size="sm" disabled={!activeId || sending || !input.trim()}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
-          </form>
-        </section>
-
-        {/* ------------------------------------------------- panel kanan */}
-        <aside className="space-y-3">
-          {detail?.jobId && job && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <ReportJobProgress
-                job={job}
-                polling={polling}
-                compact
-                onResume={() => detail.jobId && pollJob(detail.jobId)}
-                onRetry={(redo) => detail.jobId && jobAction(detail.jobId, "retry", redo).then((j) => { setJob(j); pollJob(j.id); }).catch((e) => setError(getErrorMessage(e)))}
-                onCancel={() => detail.jobId && jobAction(detail.jobId, "cancel").then(setJob).catch((e) => setError(getErrorMessage(e)))}
-              />
-            </div>
-          )}
-
-          <div className="rounded-2xl border border-slate-200 bg-white">
-            <div className="flex border-b border-slate-100 text-xs font-bold">
-              {([["rencana", "Rencana", ListChecks], ["sumber", `Sumber (${detail?.sources.length ?? 0})`, BookOpen], ["bahan", `Bahan (${detail?.materials.length ?? 0})`, Upload], ["gambar", `Gambar (${figures.length})`, ImageIcon], ["draft", "Draft", FileText]] as const).map(([key, label, Icon]) => (
-                <button key={key} type="button" onClick={() => setTab(key)} className={`flex flex-1 items-center justify-center gap-1 px-2 py-2 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}><Icon className="h-3.5 w-3.5" />{label}</button>
-              ))}
-            </div>
-            <div className="max-h-[70vh] overflow-y-auto p-3 text-sm">
+  const panelBody = (
+    <>
               {!detail && <p className="text-xs text-slate-500">Belum ada sesi aktif.</p>}
 
               {detail && tab === "rencana" && (
@@ -609,10 +607,163 @@ export default function LaporanPage() {
                   )}
                 </div>
               )}
+    </>
+  );
+
+  const panelTabsBar = (
+    <div className="flex border-b border-slate-100 text-xs font-bold">
+      {TABS.map(([key, label, Icon]) => (
+        <button key={key} type="button" onClick={() => { setTab(key); setFresh((f) => (f === key ? null : f)); }} className={`flex flex-1 items-center justify-center gap-1 px-1 py-2 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}>
+          <Icon className="h-3.5 w-3.5" />{label}{tabCount[key] != null ? <span className="text-[10px] text-slate-400">{tabCount[key]}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+
+  const stageBadge = detail && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>;
+
+  return (
+    <div className="flex h-[100dvh] flex-col bg-slate-50 pt-[64px] md:pt-[72px]">
+      <div className="flex min-h-0 flex-1">
+        {/* ------------------------------------ desktop: daftar sesi (bisa dilipat) */}
+        <aside className={`hidden shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-3 transition-[width] lg:block ${sidebarOpen ? "w-[260px]" : "w-0 !p-0 border-0"}`}>
+          {sidebarOpen && sessionList}
+        </aside>
+
+        {/* ------------------------------------------------------------- chat */}
+        <section className="flex min-w-0 flex-1 flex-col">
+          <header className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 md:px-4">
+            <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="hidden rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 lg:inline-flex" title={sidebarOpen ? "Sembunyikan daftar sesi" : "Tampilkan daftar sesi"}><PanelLeft className="h-4 w-4" /></button>
+            <div className="flex min-w-0 flex-1 items-center gap-2 text-sm font-bold text-slate-900">
+              <Bot className="h-4 w-4 shrink-0 text-blue-600" />
+              <span className="truncate">{detail?.title || detail?.brief.title || "Asisten Laporan"}</span>
+            </div>
+            {stageBadge}
+            {/* desktop: rail chip panel kanan */}
+            <div className="ml-1 hidden items-center gap-1 lg:flex">
+              {TABS.map(([key, label, Icon]) => {
+                const n = tabCount[key]; const isFresh = fresh === key; const activeTab = panelOpen && tab === key;
+                return (
+                  <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail} title={label}
+                    className={`relative inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-bold transition disabled:opacity-40 ${activeTab ? "border-slate-900 bg-slate-900 text-white" : isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    <Icon className="h-3.5 w-3.5" /> {label}{n != null ? <span className={`rounded px-1 text-[10px] ${activeTab ? "bg-white/20" : "bg-slate-100"}`}>{n}</span> : null}
+                    {isFresh && !activeTab && <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-blue-500" />}
+                  </button>
+                );
+              })}
+            </div>
+          </header>
+
+          {/* mobile: chip pembuka panel */}
+          <div className="border-b border-slate-200 bg-white lg:hidden">{tabChips}</div>
+
+          {/* progres job ringkas (selalu terlihat di atas chat saat ada job) */}
+          {jobCard && jobActive && <div className="border-b border-slate-200 bg-white px-3 py-2 md:px-4"><div className="mx-auto max-w-3xl">{jobCard}</div></div>}
+
+          <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6">
+            <div className="mx-auto max-w-3xl space-y-4">
+              {!activeId && (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">
+                  Pilih sesi atau buat “Laporan baru”. Asisten akan bertanya tentang jenis dokumen, topik, syarat jurnal (SINTA/Scopus), format kampus, lalu menyusun rencana dan sumber yang bisa kamu cek sendiri (DOI/PDF).
+                  <div className="mt-3 flex justify-center gap-2">
+                    <Button onClick={createSession} variant="primary" size="sm"><MessageSquarePlus className="h-4 w-4" /> Laporan baru</Button>
+                    {sessions.length > 0 && <Button onClick={() => setSheet("sesi")} variant="outline" size="sm" className="lg:hidden">Pilih sesi</Button>}
+                  </div>
+                </div>
+              )}
+              {messages.map((m) => (
+                m.role === "user" ? (
+                  <div key={m.id} className="flex justify-end">
+                    <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-slate-900 px-4 py-2.5 text-sm text-white">{m.content}</div>
+                  </div>
+                ) : (
+                  <div key={m.id} className="flex gap-3">
+                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white"><Bot className="h-4 w-4" /></div>
+                    <div className="min-w-0 flex-1 text-sm leading-relaxed text-slate-900">
+                      <SimpleMarkdown text={m.content} />
+                      {m.toolCalls?.tools?.length ? <div className="mt-1 text-[10px] text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
+                    </div>
+                  </div>
+                )
+              ))}
+              {sending && <AgentRunProgress run={run} events={runEvents} startedAt={runStartedAt} lastBeatAt={lastBeatAt} onPause={pauseRun} onCancel={cancelRun} busy={runBusy} />}
+              <div ref={bottomRef} />
             </div>
           </div>
+
+          {/* ------------------------------------------------- komposer */}
+          <div className="border-t border-slate-200 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:px-6">
+            <div className="mx-auto max-w-3xl">
+              {error && <div className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{error}</div>}
+              {detail && (
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
+                  {detail.stage === "planned" && <Chip onClick={() => send("Cari sumber tambahan yang lebih relevan dengan topik ini.")}>Cari sumber lagi</Chip>}
+                  {canExecute && !jobActive && <Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip>}
+                  {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
+                  {detail.draft && <Chip onClick={() => send("Kirim file DOCX laporan terbaru.")}>Kirim file DOCX</Chip>}
+                  <label className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                    {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Paperclip className="h-3 w-3" />} Unggah bahan
+                    <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
+                  </label>
+                  <label className="ml-auto inline-flex items-center gap-1 text-[11px] text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
+                </div>
+              )}
+              <form onSubmit={(e) => { e.preventDefault(); send(); }} className="flex items-end gap-2 rounded-2xl border border-slate-300 bg-white p-2 shadow-sm focus-within:border-slate-500">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                  placeholder={activeId ? "Tulis pesan… (Enter kirim, Shift+Enter baris baru)" : "Buat sesi dulu"}
+                  disabled={!activeId || sending}
+                  rows={1}
+                  className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+                  onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; }}
+                />
+                <Button type="submit" variant="primary" size="sm" disabled={!activeId || sending || !input.trim()}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+              </form>
+            </div>
+          </div>
+        </section>
+
+        {/* ------------------------------------ desktop: panel kanan (drawer) */}
+        <aside className={`hidden shrink-0 flex-col border-l border-slate-200 bg-white transition-[width] lg:flex ${panelOpen ? "w-[420px] xl:w-[480px]" : "w-0 border-0"}`}>
+          {panelOpen && (
+            <>
+              <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
+                <span className="text-xs font-black uppercase tracking-wide text-slate-500">Panel laporan</span>
+                <button type="button" onClick={() => setPanelOpen(false)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" title="Tutup panel"><PanelRightClose className="h-4 w-4" /></button>
+              </div>
+              {panelTabsBar}
+              <div className="min-h-0 flex-1 overflow-y-auto p-3 text-sm">
+                {jobCard && !jobActive && <div className="mb-3">{jobCard}</div>}
+                {panelBody}
+              </div>
+            </>
+          )}
         </aside>
       </div>
+
+      {/* ---------------------------------------------- mobile: bottom sheet */}
+      {sheet && (
+        <div className="fixed inset-0 z-[150] lg:hidden" role="dialog" aria-modal="true">
+          <button type="button" aria-label="Tutup" onClick={() => setSheet(null)} className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" />
+          <div className="absolute inset-x-0 bottom-0 flex max-h-[88dvh] flex-col rounded-t-3xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between px-4 pb-1 pt-3">
+              <span className="mx-auto h-1.5 w-10 rounded-full bg-slate-300" />
+            </div>
+            <div className="flex items-center justify-between px-4 pb-2">
+              <span className="text-sm font-black text-slate-900">{sheet === "sesi" ? "Sesi laporan" : "Panel laporan"}</span>
+              <button type="button" onClick={() => setSheet(null)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Tutup"><X className="h-5 w-5" /></button>
+            </div>
+            {sheet === "panel" && panelTabsBar}
+            <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-sm">
+              {sheet === "sesi" ? sessionList : (<>{jobCard && !jobActive && <div className="mb-3">{jobCard}</div>}{panelBody}</>)}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

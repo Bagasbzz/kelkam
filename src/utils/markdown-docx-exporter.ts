@@ -34,7 +34,6 @@ import {
   Paragraph,
   Table,
   TableCell,
-  TableOfContents,
   TableRow,
   TabStopPosition,
   TabStopType,
@@ -143,7 +142,9 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       const title = (sep > 0 ? inner.slice(0, sep) : inner).trim();
       const captionFromInner = sep > 0 ? inner.slice(sep + 3).trim() : "";
       const trailing = (figure[2] || "").replace(/^caption:\s*/i, "").trim();
-      blocks.push({ type: "figure", title, caption: captionFromInner || trailing || title });
+      // Buang nomor manual dari AI ("Gambar 2.", "Gambar 3.1:") — penomoran dilakukan exporter.
+      const caption = (captionFromInner || trailing || title).replace(/^(gambar|figure)\s*[\d.]*\s*[:.\-–]?\s*/i, "").trim() || title;
+      blocks.push({ type: "figure", title, caption });
       return;
     }
     blocks.push({ type: "paragraph", text });
@@ -197,6 +198,8 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       flushParagraph(); flushList();
       const prev = blocks[blocks.length - 1];
       const text = line.trim().replace(/^>\s?/, "");
+      // Catatan internal pipeline (audit sitasi/gambar) bukan isi laporan → tidak diekspor.
+      if (/^\*\*Catatan[^*]*:\*\*/i.test(text)) continue;
       if (prev && prev.type === "quote") prev.text += ` ${text}`;
       else blocks.push({ type: "quote", text });
       continue;
@@ -321,7 +324,9 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   let inBibliography = false;
   const blocks = parseMarkdownToBlocks(markdown);
 
-  // Daftar gambar/tabel: bookmark pada caption → PAGEREF di bagian depan.
+  // Daftar isi/gambar/tabel: bookmark pada heading/caption → PAGEREF di bagian depan
+  // (statis, tampil tanpa "update field"; TOC field Word tetap disertakan sebagai cadangan).
+  const tocEntries: Array<{ label: string; bookmark: string; level: number }> = [];
   const figureEntries: Array<{ label: string; bookmark: string }> = [];
   const tableEntries: Array<{ label: string; bookmark: string }> = [];
 
@@ -330,8 +335,8 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   const firstHeading = blocks.find((b) => b.type === "heading");
   const docTitleIndex = firstHeading && firstHeading.type === "heading" && firstHeading.level === 1 ? blocks.indexOf(firstHeading) : -1;
 
-  const front: Array<Paragraph | Table | TableOfContents> = [];
-  const children: Array<Paragraph | Table | TableOfContents> = [];
+  const front: Array<Paragraph | Table> = [];
+  const children: Array<Paragraph | Table> = [];
 
   if (profile.cover) {
     const cover = profile.cover;
@@ -358,26 +363,24 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     pageBreakBefore: front.length > 0,
     children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 4 })],
   });
-  const listEntry = (label: string, bookmark: string) => new Paragraph({
+  const listEntry = (label: string, bookmark: string, indentMm = 12) => new Paragraph({
     tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX, leader: LeaderType.DOT }],
     spacing: { after: 80, line: lineTwips },
-    indent: { left: convertMillimetersToTwip(12), hanging: convertMillimetersToTwip(12) },
+    indent: { left: convertMillimetersToTwip(indentMm), hanging: convertMillimetersToTwip(12) },
     children: [new TextRun({ ...base, text: label }), new TextRun({ ...base, children: ["\t"] }), new PageReference(bookmark, { hyperlink: true })],
   });
 
-  if (profile.includeToc) {
-    front.push(frontTitle("DAFTAR ISI"));
-    front.push(new TableOfContents("Daftar Isi", { hyperlink: true, headingStyleRange: "1-3" }));
-  }
-
-  const headingBase = (level: number, text: string) => new Paragraph({
-    heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4][level - 1],
-    alignment: level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
-    spacing: { before: level === 1 ? 0 : 360, after: level === 1 ? 360 : 200, line: lineTwips },
-    pageBreakBefore: level === 1 && seenH1,
-    keepNext: true,
-    children: [new TextRun({ text, bold: true, font: profile.font, size: level === 1 ? sizeHalfPt + 4 : sizeHalfPt, color: "000000" })],
-  });
+  const headingBase = (level: number, text: string, bookmark?: string) => {
+    const run = new TextRun({ text, bold: true, font: profile.font, size: level === 1 ? sizeHalfPt + 4 : sizeHalfPt, color: "000000" });
+    return new Paragraph({
+      heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4][level - 1],
+      alignment: level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
+      spacing: { before: level === 1 ? 0 : 360, after: level === 1 ? 360 : 200, line: lineTwips },
+      pageBreakBefore: level === 1 && seenH1,
+      keepNext: true,
+      children: [bookmark ? new Bookmark({ id: bookmark, children: [run] }) : run],
+    });
+  };
 
   const captionParagraph = (label: string, bookmark: string) => new Paragraph({
     alignment: AlignmentType.CENTER,
@@ -389,8 +392,11 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     if (blockIndex === docTitleIndex && profile.cover) return; // judul dokumen sudah di cover
     switch (block.type) {
       case "heading": {
-        const level = Math.min(block.level, 4);
+        let level = Math.min(block.level, 4);
         let text = block.text.replace(/^\*\*|\*\*$/g, "").trim();
+        // "## Daftar Pustaka" / "## Lampiran" dari AI → bagian setara bab (bukan subbab).
+        if (level === 2 && NON_CHAPTER_RE.test(text)) level = 1;
+        const bookmark = `toc_${tocEntries.length + 1}`;
         if (level === 1) {
           inBibliography = BIBLIOGRAPHY_RE.test(text);
           subChapterCounter = 0;
@@ -400,10 +406,11 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
             text = `BAB ${ROMAN[chapterCounter - 1] || chapterCounter}\n${text}`;
           }
           const [first, ...rest] = text.toUpperCase().split("\n");
-          const para = headingBase(1, first);
+          const para = headingBase(1, first, bookmark);
           if (rest.length) {
             para.addChildElement(new TextRun({ text: rest.join(" "), bold: true, font: profile.font, size: sizeHalfPt + 4, color: "000000", break: 1 }));
           }
+          tocEntries.push({ label: [first, ...rest].join(" "), bookmark, level: 1 });
           children.push(para);
           seenH1 = true;
         } else {
@@ -413,7 +420,8 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
             subChapterCounter += 1;
             text = `${chapterCounter}.${subChapterCounter} ${text}`;
           }
-          children.push(headingBase(level, text));
+          if (level <= 3) tocEntries.push({ label: text, bookmark, level });
+          children.push(headingBase(level, text, level <= 3 ? bookmark : undefined));
         }
         break;
       }
@@ -524,7 +532,11 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     }
   });
 
-  // Daftar gambar & tabel (setelah daftar isi, hanya bila ada isinya)
+  // Daftar isi (statis) + daftar gambar & tabel (setelah daftar isi, hanya bila ada isinya)
+  if (profile.includeToc && tocEntries.length) {
+    front.push(frontTitle("DAFTAR ISI"));
+    tocEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 12 + (e.level - 1) * 8)));
+  }
   if (profile.includeToc && figureEntries.length) {
     front.push(frontTitle("DAFTAR GAMBAR"));
     figureEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark)));
@@ -586,7 +598,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
         { reference: "numbered", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
       ],
     },
-    features: { updateFields: profile.includeToc },
+    features: { updateFields: true },
     sections,
   });
 

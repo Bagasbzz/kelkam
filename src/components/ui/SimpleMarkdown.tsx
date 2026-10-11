@@ -17,7 +17,7 @@ function safeHref(url: string): string | null {
 
 function inline(text: string, keyPrefix: string): ReactNode[] {
   const out: ReactNode[] = [];
-  const re = /(\[([^\]]+)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
+  const re = /(\[([^\]]+)\]\(([^)\s]+)\)|\*\*((?:[^*]|\*(?!\*))+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
   let last = 0;
   let i = 0;
   for (const m of text.matchAll(re)) {
@@ -29,17 +29,17 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       const isFile = m[3].startsWith("/api/files/");
       out.push(
         href ? (
-          <a key={k} href={href} target={isFile ? undefined : "_blank"} rel="noopener noreferrer" download={isFile || undefined} className="inline-flex items-center gap-1 font-semibold text-blue-700 underline hover:text-blue-900">
-            {isFile && <Download className="h-3.5 w-3.5" />}
+          <a key={k} href={href} target={isFile ? undefined : "_blank"} rel="noopener noreferrer" download={isFile || undefined} className={isFile ? "my-1 inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 font-semibold text-blue-700 hover:bg-blue-100" : "font-semibold text-blue-700 underline hover:text-blue-900"}>
+            {isFile && <Download className="h-4 w-4" />}
             {m[2]}
           </a>
         ) : (
           <span key={k}>{m[2]}</span>
         ),
       );
-    } else if (m[4] !== undefined) out.push(<strong key={k}>{m[4]}</strong>);
+    } else if (m[4] !== undefined) out.push(<strong key={k}>{inline(m[4], `${k}b`)}</strong>);
     else if (m[5] !== undefined) out.push(<code key={k} className="rounded bg-slate-200/70 px-1 py-0.5 font-mono text-[0.85em]">{m[5]}</code>);
-    else if (m[6] !== undefined) out.push(<em key={k}>{m[6]}</em>);
+    else if (m[6] !== undefined) out.push(<em key={k}>{inline(m[6], `${k}i`)}</em>);
     last = idx + m[0].length;
   }
   if (last < text.length) out.push(text.slice(last));

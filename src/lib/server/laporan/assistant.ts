@@ -534,7 +534,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       events.push(`File ${exported.name} siap diunduh`);
       return {
         ok: true,
-        downloadMarkdown: `📄 **[Unduh ${exported.name}](${exported.url})** (${Math.max(1, Math.round(exported.size / 1024))} KB)`,
+        downloadMarkdown: `[Unduh ${exported.name}](${exported.url}) (${Math.max(1, Math.round(exported.size / 1024))} KB)`,
         pendingFigures: exported.pendingFigures,
         missingImages: exported.missingImages,
         note: "Tempel downloadMarkdown apa adanya di jawaban. Ingatkan user melakukan Update Field di Word untuk daftar isi/gambar/tabel.",
@@ -652,7 +652,7 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
         brief: state.brief,
         diagrams: (state.plan?.diagrams || []).map((d) => ({ title: d.title, svg: d.svg })),
       });
-      fileLine = `📄 **[Unduh ${exported.name}](${exported.url})** (${Math.max(1, Math.round(exported.size / 1024))} KB)`;
+      fileLine = `[Unduh ${exported.name}](${exported.url}) (${Math.max(1, Math.round(exported.size / 1024))} KB)`;
       if (exported.pendingFigures) pendingNote = `\n- ${exported.pendingFigures} ilustrasi masih diproses; minta "kirim file lagi" setelah muncul di tab Gambar agar ikut terpasang.`;
       if (exported.missingImages) pendingNote += `\n- ${exported.missingImages} gambar belum punya sumber (ditandai catatan di dokumen).`;
     } catch (error) {
