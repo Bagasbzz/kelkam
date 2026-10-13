@@ -1789,8 +1789,11 @@ export default function UMLBuilder() {
             borderRadius: '16px',
             width: '100%',
             maxWidth: '500px',
+            maxHeight: 'calc(100dvh - 2rem)',
             boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-            overflow: 'hidden'
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
           }}>
             <div style={{
               background: 'linear-gradient(145deg, #f8fafc, #f1f5f9)',
@@ -1798,7 +1801,8 @@ export default function UMLBuilder() {
               borderBottom: '1px solid #e2e8f0',
               display: 'flex',
               justifyContent: 'space-between',
-              alignItems: 'center'
+              alignItems: 'center',
+              flexShrink: 0
             }}>
               <h3 id="uml-ai-dialog-title" style={{ fontSize: '1rem', fontWeight: 700, color: '#4f46e5', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <BrainCircuit size={18} />
@@ -1815,7 +1819,7 @@ export default function UMLBuilder() {
               </button>
             </div>
             
-            <div style={{ padding: '1.5rem' }}>
+            <div style={{ padding: '1.5rem', overflowY: 'auto', flex: 1, minHeight: 0 }}>
               <p style={{ fontSize: '0.85rem', color: '#475569', marginBottom: '1rem', lineHeight: 1.5 }}>
                 Tulis kebutuhan diagram kamu. Bisa langsung generate, atau pakai mode tanya dulu kalau konteks masih abu-abu.
               </p>
@@ -2036,7 +2040,10 @@ export default function UMLBuilder() {
               <div id="uml-prompt-counter" style={{ marginTop: '-0.7rem', marginBottom: '0.8rem', textAlign: 'right', color: '#64748b', fontSize: '0.72rem' }}>
                 {aiPrompt.length.toLocaleString('id-ID')} / 6.000 karakter
               </div>
-              
+            </div>
+
+            {/* Tombol aksi selalu terlihat walau isi modal panjang */}
+            <div style={{ padding: '0.75rem 1.5rem 1.25rem', borderTop: '1px solid #e2e8f0', background: 'white', flexShrink: 0 }}>
               <button 
                 onClick={handleGenerateAI}
                 disabled={isGeneratingAI || !aiPrompt.trim() || aiNeedsAnswers}
