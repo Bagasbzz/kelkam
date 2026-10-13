@@ -10,6 +10,7 @@ import type OpenAI from "openai";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import {
   autoLayoutDiagram,
+  inferDiagramTypeFromPrompt,
   validateDiagramData,
   validateSpec,
   type DiagramValidationResult,
@@ -214,10 +215,19 @@ function buildGenericSpec(prompt: string, diagramType: DiagramType, reportContex
 
 function normalizeClarificationQuestions(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => cleanText(String(item || ""), "", 140))
-    .filter(Boolean)
-    .slice(0, 3);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of value) {
+    const text = cleanText(String(item || ""), "", 140);
+    if (!text) continue;
+    // Dedup berdasarkan bentuk ternormalisasi (abaikan kapital, spasi, tanda baca).
+    const key = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(text);
+    if (out.length >= 3) break;
+  }
+  return out;
 }
 
 function inferScenarioHints(prompt: string, reportContext: unknown, diagramType: DiagramType) {
@@ -253,14 +263,17 @@ function validationErrorsToQuestions(errors: string[], diagramType: DiagramType)
   ];
 
   const questions: string[] = [];
+  const push = (q: string) => {
+    if (!questions.includes(q)) questions.push(q);
+  };
   for (const error of errors) {
-    if (error.includes("start")) questions.push("Apa titik mulai yang paling awal dan pasti untuk alur ini?");
-    else if (error.includes("end")) questions.push("Bagian mana yang dianggap selesai atau hasil akhir alur?");
-    else if (error.includes("cabang ya")) questions.push("Keputusan utamanya apa, dan cabang 'ya' harus menuju langkah apa?");
-    else if (error.includes("cabang tidak")) questions.push("Keputusan utamanya apa, dan cabang 'tidak' harus menuju langkah apa?");
-    else if (error.includes("participant")) questions.push("Siapa saja participant yang benar-benar terlibat di alur ini?");
-    else if (error.includes("aktor")) questions.push("Aktor mana yang harus terhubung ke use case ini?");
-    else questions.push(`Bagian mana yang harus dipertegas untuk ${diagramType} ini?`);
+    if (error.includes("start")) push("Apa titik mulai yang paling awal dan pasti untuk alur ini?");
+    else if (error.includes("end")) push("Bagian mana yang dianggap selesai atau hasil akhir alur?");
+    else if (error.includes("cabang ya")) push("Keputusan utamanya apa, dan cabang 'ya' harus menuju langkah apa?");
+    else if (error.includes("cabang tidak")) push("Keputusan utamanya apa, dan cabang 'tidak' harus menuju langkah apa?");
+    else if (error.includes("participant")) push("Siapa saja participant yang benar-benar terlibat di alur ini?");
+    else if (error.includes("aktor")) push("Aktor mana yang harus terhubung ke use case ini?");
+    else push(`Bagian mana yang harus dipertegas untuk ${diagramType} ini?`);
     if (questions.length >= 3) break;
   }
   return questions;
@@ -779,16 +792,19 @@ async function streamChat(params: ChatParams, timeoutMs: number, onDelta: (fullT
 export interface PipelineResult { status: number; payload: Record<string, unknown> }
 
 export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budgetMs: number): Promise<PipelineResult> {
-  const done = (payload: Record<string, unknown>, status = 200): PipelineResult => ({ status, payload });
-
   if (typeof body.prompt === "string" && body.prompt.length > 6000) {
-    return done({ success: false, error: "Prompt terlalu panjang. Maksimal 6.000 karakter." }, 413);
+    return { status: 413, payload: { success: false, error: "Prompt terlalu panjang. Maksimal 6.000 karakter." } };
   }
   const prompt = optionalString(body.prompt, 6000);
-  if (!prompt) return done({ success: false, error: "Prompt tidak boleh kosong" }, 400);
+  if (!prompt) return { status: 400, payload: { success: false, error: "Prompt tidak boleh kosong" } };
 
   const requestedType = optionalString(body.diagramType, 20);
-  const normalizedType = allowedTypes.has(requestedType) ? requestedType as DiagramType : "flowchart";
+  const normalizedType: DiagramType = inferDiagramTypeFromPrompt(prompt)
+    ?? (allowedTypes.has(requestedType) ? requestedType as DiagramType : "flowchart");
+  const done = (payload: Record<string, unknown>, status = 200): PipelineResult => ({
+    status,
+    payload: { diagramType: normalizedType, ...payload },
+  });
   const mode: GenerationMode = body.generationMode === "clarify" ? "clarify" : "direct";
   const existingSummary = limitStructuredContext(body.existingSummary, 4000);
   const reportContext = limitStructuredContext(body.reportContext, 8000);

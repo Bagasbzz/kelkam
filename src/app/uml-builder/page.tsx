@@ -6,7 +6,7 @@ import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/dia
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
 import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload, Loader2 } from 'lucide-react';
-import { autoLayoutDiagram, validateDiagramData } from '@/lib/uml/diagram-guard';
+import { autoLayoutDiagram, validateDiagramData, inferDiagramTypeFromPrompt } from '@/lib/uml/diagram-guard';
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
 import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-store';
@@ -291,6 +291,8 @@ export default function UMLBuilder() {
   const loadedPrefillRef = useRef(false);
   const diagramTypeRef = useRef<DiagramType>(diagramType);
   diagramTypeRef.current = diagramType;
+  // handleSwitchDiagram dideklarasikan di bawah; ref agar bisa dipakai dari handleGenerateAI.
+  const switchDiagramRef = useRef<(type: DiagramType) => void>(() => {});
   const aiNeedsAnswers = aiClarificationQuestions.some((_, index) => !(aiClarificationAnswers[index] || '').trim());
 
   // Stopwatch selama AI jalan, supaya user tahu waktu berjalan dan bukan hang.
@@ -365,13 +367,22 @@ export default function UMLBuilder() {
     setAiPartialCount(0);
     setAiStatusText(aiMode === 'clarify' && aiClarificationQuestions.length === 0 ? 'Menghubungi AI untuk menyusun pertanyaan…' : 'Menghubungi AI…');
     showToast('AI sedang menyusun diagram...');
-    const dt = diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence';
-    const snapshotBeforeAi = { nodes, edges, meta: diagramMeta };
+    // Tipe yang disebut di prompt menang atas dropdown; pindahkan kanvas ke tipe itu.
+    const inferredType = inferDiagramTypeFromPrompt(aiPrompt);
+    if (inferredType && inferredType !== diagramType) {
+      switchDiagramRef.current(inferredType);
+      diagramTypeRef.current = inferredType;
+      showToast(`Tipe diagram diganti ke ${inferredType} sesuai permintaan.`);
+    }
+    const dt = (inferredType || diagramType) as 'flowchart' | 'usecase' | 'activity' | 'sequence';
+    const snapshotBeforeAi = inferredType && inferredType !== diagramType
+      ? { nodes: [] as DiagramNode[], edges: [] as DiagramEdge[], meta: { ...diagramMeta, title: undefined, lanes: [] } }
+      : { nodes, edges, meta: diagramMeta };
     let partialShown = false;
     // Jika user pindah tipe diagram saat stream berjalan, hasil AI tidak boleh ditulis ke tipe lain.
     const stillSameType = () => diagramTypeRef.current === dt;
     try {
-      const existingSummary = nodes.length > 0 ? {
+      const existingSummary = nodes.length > 0 && dt === diagramType ? {
         nodeCount: nodes.length,
         edgeCount: edges.length,
         nodes: nodes.slice(0, 12).map((n) => ({ id: n.id, type: n.type, text: n.text })),
@@ -382,7 +393,7 @@ export default function UMLBuilder() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: aiPrompt,
-          diagramType,
+          diagramType: dt,
           existingSummary,
           reportContext: diagramMeta.reportContext,
           generationMode: aiMode,
@@ -399,7 +410,7 @@ export default function UMLBuilder() {
         if (event.type === 'partial' && event.data) {
           if (!stillSameType()) return;
           // Gambar langsung apa yang sudah ditulis AI, sebelum spec selesai.
-          const partialNodes = normalizeApiNodes(event.data.nodes, diagramType, wrapText);
+          const partialNodes = normalizeApiNodes(event.data.nodes, dt, wrapText);
           const partialEdges = dropOrphanEdges(partialNodes, normalizeApiEdges(event.data.edges));
           if (!partialNodes.length) return;
           if (!partialShown) { saveToHistory(); partialShown = true; setIsAiModalOpen(false); }
@@ -451,9 +462,9 @@ export default function UMLBuilder() {
         setAiWarnings(serverWarnings.length ? serverWarnings : stringList(data.qualityNotes));
         setAiStatusText('');
         const returnedLanes = stringList(generatedData.lanes).length ? stringList(generatedData.lanes) : stringList(data.spec?.lanes);
-        const generatedNodes = normalizeApiNodes(generatedData.nodes, diagramType, wrapText);
+        const generatedNodes = normalizeApiNodes(generatedData.nodes, dt, wrapText);
         const nextEdges = dropOrphanEdges(generatedNodes, normalizeApiEdges(generatedData.edges));
-        const renderValidation = validateDiagramData(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
+        const renderValidation = validateDiagramData(generatedNodes, nextEdges, dt);
         if (!renderValidation.ok) {
           restoreSnapshot();
           setAiWarnings(renderValidation.errors);
@@ -461,7 +472,7 @@ export default function UMLBuilder() {
           showToast('Diagram ditahan karena relasinya belum valid.');
           return;
         }
-        const autoLaidOutNodes = autoLayoutDiagram(generatedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
+        const autoLaidOutNodes = autoLayoutDiagram(generatedNodes, nextEdges, dt, returnedLanes);
         setNodes(autoLaidOutNodes);
         setEdges(nextEdges);
         setDiagramMeta((prev) => ({
@@ -823,6 +834,7 @@ export default function UMLBuilder() {
     setAiError('');
     setDiagramMeta((prev) => ({ ...prev, title: undefined, lanes: Array.from(new Set(targetNodes.map((node) => node.lane).filter(Boolean))) as string[] }));
   }, [diagramType, edges, nodes, projects]);
+  switchDiagramRef.current = handleSwitchDiagram;
 
   const handleApproveToReport = useCallback(() => {
     if (!diagramMeta.reportDiagramId) {

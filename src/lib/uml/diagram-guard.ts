@@ -2,6 +2,16 @@ import type { DiagramEdge, DiagramNode } from "../types/diagram";
 
 export type SupportedDiagramType = "flowchart" | "usecase" | "activity" | "sequence";
 
+/** Tipe yang disebut eksplisit di prompt menang atas dropdown, supaya "buat use case ..." tidak jadi flowchart. */
+export function inferDiagramTypeFromPrompt(prompt: string): SupportedDiagramType | null {
+  const p = prompt.toLowerCase();
+  if (/\buse\s?-?case\b|\busecase\b/.test(p)) return "usecase";
+  if (/\bsequence\b|\bsekuens(ial)?\b|diagram urutan/.test(p)) return "sequence";
+  if (/\bactivity\b|\baktivitas\b|swimlane/.test(p)) return "activity";
+  if (/\bflowchart\b|\bflow\s?chart\b|diagram alir/.test(p)) return "flowchart";
+  return null;
+}
+
 export interface CompactStepLike {
   id: string;
   lane?: string;
