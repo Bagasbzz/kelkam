@@ -76,6 +76,8 @@ export interface CourseMaterial {
   mime: string;
   size: number;
   uploadedAt: string;
+  title?: string;
+  description?: string;
 }
 
 export interface TugasSummary {
@@ -600,9 +602,15 @@ export function fetchCourseMaterials(courseId: string, token: string) {
   );
 }
 
-export async function uploadCourseMaterial(courseId: string, file: File) {
+export async function uploadCourseMaterial(
+  courseId: string,
+  file: File,
+  meta: { title?: string; description?: string } = {},
+) {
   const form = new FormData();
   form.append("file", file);
+  if (meta.title) form.append("title", meta.title);
+  if (meta.description) form.append("description", meta.description);
   const resp = await authenticatedFetch(`/api/tugas/courses/${courseId}/materials`, {
     method: "POST",
     body: form,
@@ -616,6 +624,17 @@ export async function uploadCourseMaterial(courseId: string, file: File) {
     throw new ApiClientError(resp.status, payload.error || "Upload materi gagal.");
   }
   return payload.material;
+}
+
+export function updateCourseMaterial(
+  courseId: string,
+  materialId: string,
+  patch: { title?: string; description?: string },
+) {
+  return request<{ material: CourseMaterial }>(
+    `/api/tugas/courses/${courseId}/materials/${materialId}`,
+    { method: "PATCH", json: patch },
+  );
 }
 
 export function deleteCourseMaterial(courseId: string, materialId: string) {

@@ -8,7 +8,13 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const MAX_MATERIAL_BYTES = 12 * 1024 * 1024;
-const ALLOWED_EXTENSIONS = new Set([".ppt", ".pptx", ".pdf"]);
+const ALLOWED_EXTENSIONS = new Set([".ppt", ".pptx", ".pdf", ".doc", ".docx"]);
+const MATERIAL_TITLE_MAX = 120;
+const MATERIAL_DESCRIPTION_MAX = 600;
+
+function cleanMaterialText(value: FormDataEntryValue | null | undefined, max: number): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+}
 
 function extensionOf(name: string): string {
   const match = name.toLowerCase().match(/\.[a-z0-9]+$/);
@@ -40,13 +46,14 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
   try {
     const { courseId } = await context.params;
     await requireCourseAdmin(courseId);
-    const fileValue = (await req.formData()).get("file");
+    const form = await req.formData();
+    const fileValue = form.get("file");
     const file = fileValue instanceof File ? fileValue : null;
     if (!file) throw new ApiRequestError(400, "File tidak ditemukan.");
     const originalName = file.name.replace(/[\r\n]/g, "").slice(0, 200);
     const extension = extensionOf(originalName);
     if (!originalName || !ALLOWED_EXTENSIONS.has(extension)) {
-      throw new ApiRequestError(400, "Materi harus berupa PPT, PPTX, atau PDF.");
+      throw new ApiRequestError(400, "Materi harus berupa PPT, PPTX, PDF, DOC, atau DOCX.");
     }
     if (file.size <= 0 || file.size > MAX_MATERIAL_BYTES) {
       throw new ApiRequestError(413, "Ukuran materi maksimal 12 MB.");
@@ -56,6 +63,8 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
       buffer: Buffer.from(await file.arrayBuffer()),
       originalName,
       mime: file.type || "application/octet-stream",
+      title: cleanMaterialText(form.get("title"), MATERIAL_TITLE_MAX),
+      description: cleanMaterialText(form.get("description"), MATERIAL_DESCRIPTION_MAX),
     });
     return NextResponse.json({ success: true, material }, { status: 201 });
   } catch (error) {

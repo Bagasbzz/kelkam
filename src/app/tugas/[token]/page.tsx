@@ -32,19 +32,26 @@ export default function CoursePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [materials, setMaterials] = useState<CourseMaterial[]>([]);
+  const [loadedAt, setLoadedAt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetchCourseByToken(token)
+    // Reset state di luar fase sinkron effect supaya tidak memicu render berantai.
+    Promise.resolve()
+      .then(() => {
+        if (cancelled) return null;
+        setLoading(true);
+        setError(null);
+        return fetchCourseByToken(token);
+      })
       .then(async (data) => {
-        if (cancelled) return;
+        if (cancelled || !data) return;
         const materialData = await fetchCourseMaterials(data.course.id, token).catch(() => ({ materials: [] }));
         if (cancelled) return;
         setCourse(data.course);
         setTugases(data.tugases);
         setMaterials(materialData.materials);
+        setLoadedAt(Date.now());
       })
       .catch((err) => {
         if (cancelled) return;
@@ -59,7 +66,7 @@ export default function CoursePage() {
   }, [token]);
 
   const { active, past } = useMemo(() => {
-    const now = Date.now();
+    const now = loadedAt;
     const active: TugasSummary[] = [];
     const past: TugasSummary[] = [];
     for (const t of tugases) {
@@ -69,7 +76,7 @@ export default function CoursePage() {
     active.sort((a, b) => +new Date(a.deadline) - +new Date(b.deadline));
     past.sort((a, b) => +new Date(b.deadline) - +new Date(a.deadline));
     return { active, past };
-  }, [tugases]);
+  }, [tugases, loadedAt]);
 
   if (loading || authLoading) {
     return (
@@ -150,12 +157,17 @@ export default function CoursePage() {
             <h2 className="text-lg font-bold text-slate-900">Materi pertemuan</h2>
             <div className="mt-4 divide-y divide-slate-100">
               {materials.map((material) => (
-                <div key={material.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <FileText className="h-5 w-5 shrink-0 text-blue-600" />
+                <div key={material.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    <FileText className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">{material.originalName}</p>
-                      <p className="text-xs text-slate-500">{(material.size / 1024 / 1024).toFixed(1)} MB</p>
+                      <p className="text-sm font-semibold text-slate-900">{material.title?.trim() || material.originalName}</p>
+                      {material.description && (
+                        <p className="mt-0.5 whitespace-pre-line text-sm text-slate-600">{material.description}</p>
+                      )}
+                      <p className="mt-1 truncate text-xs text-slate-500">
+                        {material.title ? `${material.originalName} / ` : ""}{(material.size / 1024 / 1024).toFixed(1)} MB
+                      </p>
                     </div>
                   </div>
                   <a

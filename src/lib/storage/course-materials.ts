@@ -10,6 +10,9 @@ export interface CourseMaterialFile {
   mime: string;
   size: number;
   uploadedAt: string;
+  /** Judul tampilan; kosong berarti pakai nama file. */
+  title?: string;
+  description?: string;
 }
 
 function materialsRoot(): string {
@@ -64,6 +67,8 @@ export async function saveCourseMaterial(input: {
   buffer: Buffer;
   originalName: string;
   mime: string;
+  title?: string;
+  description?: string;
 }): Promise<CourseMaterialFile> {
   const extension = path.extname(input.originalName).toLowerCase();
   const id = randomUUID();
@@ -73,11 +78,29 @@ export async function saveCourseMaterial(input: {
     mime: input.mime,
     size: input.buffer.byteLength,
     uploadedAt: new Date().toISOString(),
+    title: input.title || undefined,
+    description: input.description || undefined,
   };
   const directory = courseDirectory(input.courseId);
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(filePath(input.courseId, id, extension), input.buffer);
   await fs.writeFile(metadataPath(input.courseId, id), JSON.stringify(material), "utf8");
+  return material;
+}
+
+export async function updateCourseMaterial(
+  courseId: string,
+  materialId: string,
+  patch: { title?: string; description?: string },
+): Promise<CourseMaterialFile | null> {
+  const found = await readCourseMaterial(courseId, materialId);
+  if (!found) return null;
+  const material: CourseMaterialFile = {
+    ...found.material,
+    title: patch.title !== undefined ? (patch.title || undefined) : found.material.title,
+    description: patch.description !== undefined ? (patch.description || undefined) : found.material.description,
+  };
+  await fs.writeFile(metadataPath(courseId, materialId), JSON.stringify(material), "utf8");
   return material;
 }
 

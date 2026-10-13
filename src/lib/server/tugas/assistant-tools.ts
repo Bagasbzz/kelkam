@@ -148,7 +148,7 @@ async function getCourseContext(ctx: ToolContext): Promise<ToolResult> {
   let materi: Array<{ id: string; nama: string; ukuran: number }> = [];
   try {
     const { listCourseMaterials } = await import("@/lib/storage/course-materials");
-    materi = (await listCourseMaterials(ctx.courseId)).map((m) => ({ id: m.id, nama: m.originalName, ukuran: m.size }));
+    materi = (await listCourseMaterials(ctx.courseId)).map((m) => ({ id: m.id, judul: m.title || m.originalName, keterangan: m.description || "", nama: m.originalName, ukuran: m.size }));
   } catch { /* opsional */ }
   const now = new Date();
   return {
@@ -470,7 +470,7 @@ async function getMaterialContent(ctx: ToolContext, args: { materialId: string; 
     error = err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : "Materi tidak bisa dibaca sebagai teks.";
   }
   return {
-    materialId: material.id, nama: material.originalName, ukuran: material.size, diunggah: material.uploadedAt,
+    materialId: material.id, judul: material.title || material.originalName, keterangan: material.description || "", nama: material.originalName, ukuran: material.size, diunggah: material.uploadedAt,
     totalKarakter: text.length, offset, isi: text.slice(offset, offset + maxChars), adaLanjutan: offset + maxChars < text.length, error,
   };
 }
@@ -730,7 +730,7 @@ async function getMaterials(ctx: ToolContext): Promise<ToolResult> {
   try {
     const { listCourseMaterials } = await import("@/lib/storage/course-materials");
     const list = await listCourseMaterials(ctx.courseId);
-    return { jumlah: list.length, materi: list.map((m) => ({ id: m.id, nama: m.originalName, ukuran: m.size })) };
+    return { jumlah: list.length, materi: list.map((m) => ({ id: m.id, judul: m.title || m.originalName, keterangan: m.description || "", nama: m.originalName, ukuran: m.size })) };
   } catch {
     return { jumlah: 0, materi: [], catatan: "Daftar materi tidak tersedia." };
   }
@@ -872,7 +872,7 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: { type: "object", properties: { submissionId: { type: "string" }, ...tugasSelector } },
     },
   },
-  { type: "function", function: { name: "getMaterials", description: "Daftar materi pertemuan (PPTX/PDF) yang diunggah admin untuk course.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "getMaterials", description: "Daftar materi pertemuan (PPTX/PDF/DOCX) beserta judul dan keterangan yang diunggah admin untuk course.", parameters: { type: "object", properties: {} } } },
   {
     type: "function",
     function: {
