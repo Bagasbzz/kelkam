@@ -200,13 +200,43 @@ function clipToolResult(obj: unknown): string {
   return s.length > TOOL_RESULT_MAX_CHARS ? `${s.slice(0, TOOL_RESULT_MAX_CHARS)}…[dipotong]` : s;
 }
 
+/** Gambar yang ingin tool tunjukkan ke model vision (mis. halaman PDF scan). */
+export interface ToolImage { dataUrl: string; label?: string }
+export const TOOL_IMAGES_KEY = "__images";
+const MAX_TOOL_IMAGES = 8;
+
+/** Pisahkan `__images` dari hasil tool: JSON tetap ringkas, gambar dikirim sebagai pesan user terpisah. */
+function splitToolImages(result: unknown): { result: unknown; images: ToolImage[] } {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return { result, images: [] };
+  const { [TOOL_IMAGES_KEY]: raw, ...rest } = result as Record<string, unknown>;
+  if (!Array.isArray(raw)) return { result, images: [] };
+  const images = raw
+    .filter((x): x is ToolImage => !!x && typeof x === "object" && typeof (x as ToolImage).dataUrl === "string" && (x as ToolImage).dataUrl.startsWith("data:image/"))
+    .slice(0, MAX_TOOL_IMAGES);
+  return { result: rest, images };
+}
+
+function imagesToUserMessage(images: ToolImage[]): Msg {
+  const parts: OpenAI.Chat.Completions.ChatCompletionContentPart[] = [
+    { type: "text", text: `[SISTEM] ${images.length} gambar dari hasil tool terakhir (${images.map((i) => i.label || "gambar").join(", ")}). Baca isinya langsung dari gambar.` },
+  ];
+  for (const img of images) parts.push({ type: "image_url", image_url: { url: img.dataUrl, detail: "high" } });
+  return { role: "user", content: parts };
+}
+
 /** Pangkas tool result lama supaya konteks model & ukuran row tetap terkendali. */
 function compactMessages(messages: Msg[], force = false): Msg[] {
   const total = messages.reduce((n, m) => n + (typeof m.content === "string" ? m.content.length : 0), 0);
   if (!force && total < CONTEXT_SOFT_LIMIT_CHARS) return messages;
   const cutoff = Math.max(0, messages.length - COMPACT_KEEP_LAST);
   return messages.map((m, i) => {
-    if (i >= cutoff || m.role !== "tool" || typeof m.content !== "string" || m.content.length <= COMPACTED_RESULT_CHARS) return m;
+    if (i >= cutoff) return m;
+    // Gambar lama (halaman PDF) dibuang, sisakan keterangannya saja.
+    if (m.role === "user" && Array.isArray(m.content) && m.content.some((p) => p.type === "image_url")) {
+      const text = m.content.filter((p): p is OpenAI.Chat.Completions.ChatCompletionContentPartText => p.type === "text").map((p) => p.text).join("\n");
+      return { role: "user", content: `${text}\n[gambar dihapus untuk hemat konteks]` };
+    }
+    if (m.role !== "tool" || typeof m.content !== "string" || m.content.length <= COMPACTED_RESULT_CHARS) return m;
     return { ...m, content: `${m.content.slice(0, COMPACTED_RESULT_CHARS)}…[hasil lama dipangkas untuk hemat konteks]` };
   });
 }
@@ -588,6 +618,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       // 6. Eksekusi tool.
       messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
       let pending: PendingQuestion | null = null;
+      const pendingImages: ToolImage[] = [];
       for (const call of calls) {
         if (call.type !== "function") continue;
         const name = call.function.name;
@@ -618,8 +649,12 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         }
         const secs = Math.round((Date.now() - t0) / 1000);
         if (secs >= 3) emit(`${describeTool(driver, name)} selesai (${secs}s)`);
-        messages.push({ role: "tool", tool_call_id: call.id, content: clipToolResult(result) });
+        const split = splitToolImages(result);
+        pendingImages.push(...split.images);
+        messages.push({ role: "tool", tool_call_id: call.id, content: clipToolResult(split.result) });
       }
+      // Gambar harus di pesan user (bukan tool) agar model vision bisa melihatnya.
+      if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.slice(0, MAX_TOOL_IMAGES)));
 
       stepCount += 1;
       await persistStep();

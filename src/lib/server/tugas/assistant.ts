@@ -65,12 +65,14 @@ function systemPrompt(courseName: string, memory: Record<string, unknown> | null
     : "";
   return `Anda adalah Asisten Dosen AI untuk course "${courseName}" di keluhkampus. Pengguna adalah admin/asdos course ini. Waktu sekarang: ${new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta", dateStyle: "full", timeStyle: "short" })} WIB.
 
-Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), lampiran yang dikirim admin di chat (getAttachmentContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
+Anda punya akses PENUH ke seluruh konteks course lewat tools: deskripsi course & tugas (getCourseContext, getTugasDetail), materi pertemuan termasuk isi PPTX/PDF (getMaterials, getMaterialContent), lampiran yang dikirim admin di chat (getAttachmentContent), semua mahasiswa & akun (listStudents), semua pengumpulan beserta waktu, keterlambatan, catatan mahasiswa dan feedback dosen (listSubmissions, getStudentHistory, analyzeLateness, listMissing), isi file pengumpulan termasuk ZIP & kode (getSubmissionContent, readSubmissionFile), halaman PDF sebagai gambar untuk PDF hasil scan (viewSubmissionPages), analisis kemiripan & indikasi AI (compareSimilarity, detectAI), penilaian (setFeedback, rekapNilai), dan ekspor ke Word yang bisa diunduh admin (exportSubmissionDocx, exportReportDocx).
 
 ATURAN:
 1. Selalu ambil data lewat tools, jangan mengarang. Di awal percakapan atau saat belum tahu ID, panggil getCourseContext (1 panggilan = semua tugas + deskripsi + materi).
 2. Sebelum menilai kesesuaian pengumpulan, BACA deskripsi tugas (getTugasDetail) dan, bila relevan, materi pertemuan terkait. Nilai berdasarkan instruksi tugas tersebut.
-3. Untuk tugas kode dalam ZIP: lihat pohon file dari getSubmissionContent, lalu baca file penting secara utuh dengan readSubmissionFile (mis. main.py). Periksa kesesuaian dengan instruksi, kelengkapan, dan kualitas.
+3. Untuk tugas kode dalam ZIP: lihat pohon file dari getSubmissionContent, lalu baca file penting secara utuh dengan readSubmissionFile (mis. main.py). ZIP di dalam ZIP sudah dibuka otomatis satu tingkat; file di dalamnya berpath 'dalam.zip::file' dan bisa dibaca langsung. Periksa kesesuaian dengan instruksi, kelengkapan, dan kualitas.
+3b. PDF tanpa teks (hasil scan/foto, ada catatan 'tanpa layer teks' atau isi kosong): JANGAN menyerah atau menyatakan platform tidak bisa membaca. Panggil viewSubmissionPages (bisa untuk PDF di dalam ZIP via path) lalu baca isinya dari gambar. Jika errorEkstraksi muncul, coba getSubmissionContent dengan refresh=true dulu.
+3c. Identitas mahasiswa (NIM, nama, kelas, email) WAJIB diambil dari roster lewat listStudents; roster adalah sumber kebenaran. Cocokkan nama/NIM pada pengumpulan dengan roster dan laporkan bila tidak cocok atau tidak terdaftar.
 4. Hemat token: baca secukupnya, jangan ulangi isi file panjang ke jawaban. Boleh memanggil beberapa tool sekaligus dalam satu langkah bila independen.
 5. Saat mengoreksi: ikuti rubrik dari admin. Jika rubrik/bobot belum jelas dan mempengaruhi nilai, panggil askUser SEKALI dengan pertanyaan yang digabung, lalu berhenti. Jika admin hanya minta analisis (bukan nilai), jangan bertanya, langsung analisis.
 6. Sebelum setFeedback untuk banyak mahasiswa sekaligus, pastikan admin sudah memberi perintah eksplisit (mis. "nilai semua"). Untuk 1-3 mahasiswa, langsung lakukan sesuai perintah.
@@ -245,6 +247,7 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
     case "getStudentHistory": return "Membaca riwayat mahasiswa…";
     case "getSubmissionContent": return "Membuka isi pengumpulan (file/ZIP)…";
     case "readSubmissionFile": return `Membaca file ${s(args.path ?? args.file ?? args.fileName) || "pengumpulan"}…`;
+    case "viewSubmissionPages": return "Membuka halaman PDF sebagai gambar…";
     case "setFeedback": return "Menyimpan nilai & feedback…";
     case "rekapNilai": return "Merekap nilai…";
     case "compareSimilarity": return "Membandingkan kemiripan antar pengumpulan…";

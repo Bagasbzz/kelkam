@@ -21,9 +21,9 @@ export interface SubmissionText {
   extractError: string | null;
 }
 
-/** Ekstrak (atau ambil dari cache) teks untuk 1 FileUpload. */
-export async function getOrExtractFileText(fileUploadId: string) {
-  const cached = await prisma.extractedText.findUnique({ where: { fileUploadId } });
+/** Ekstrak (atau ambil dari cache) teks untuk 1 FileUpload. `refresh` memaksa ekstraksi ulang. */
+export async function getOrExtractFileText(fileUploadId: string, options: { refresh?: boolean } = {}) {
+  const cached = options.refresh ? null : await prisma.extractedText.findUnique({ where: { fileUploadId } });
   if (cached) return cached;
 
   const file = await prisma.fileUpload.findUnique({ where: { id: fileUploadId } });
@@ -37,23 +37,23 @@ export async function getOrExtractFileText(fileUploadId: string) {
   }
 
   const result = await extractTextFromBuffer(buffer, file.originalName, { maxChars: 60_000 });
+  const data = {
+    kind: result.kind,
+    text: result.content,
+    charCount: result.charCount,
+    truncated: result.truncated,
+    zipManifest: result.zipManifest ? JSON.parse(JSON.stringify(result.zipManifest)) : undefined,
+  };
 
   return prisma.extractedText.upsert({
     where: { fileUploadId },
-    create: {
-      fileUploadId,
-      kind: result.kind,
-      text: result.content,
-      charCount: result.charCount,
-      truncated: result.truncated,
-      zipManifest: result.zipManifest ? JSON.parse(JSON.stringify(result.zipManifest)) : undefined,
-    },
-    update: {},
+    create: { fileUploadId, ...data },
+    update: options.refresh ? data : {},
   });
 }
 
 /** Gabungkan note + teks file untuk 1 submission. */
-export async function getSubmissionText(submissionId: string): Promise<SubmissionText | null> {
+export async function getSubmissionText(submissionId: string, options: { refresh?: boolean } = {}): Promise<SubmissionText | null> {
   const sub = await prisma.tugasSubmission.findUnique({
     where: { id: submissionId },
     select: {
@@ -75,7 +75,7 @@ export async function getSubmissionText(submissionId: string): Promise<Submissio
 
   if (sub.fileUploadId) {
     try {
-      const ex = await getOrExtractFileText(sub.fileUploadId);
+      const ex = await getOrExtractFileText(sub.fileUploadId, options);
       if (ex) {
         fileText = ex.text;
         kind = ex.kind;

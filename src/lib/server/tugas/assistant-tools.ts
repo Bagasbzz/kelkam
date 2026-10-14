@@ -17,8 +17,9 @@ import { nilaiToHuruf } from "@/lib/server/tugas/serialize";
 import { normalizeNim } from "@/lib/server/tugas/pertemuan";
 import { getOrExtractFileText, getSubmissionText, getTugasSubmissionTexts } from "@/lib/server/tugas/submission-text";
 import { compareAll, detectAiIndication, textHash } from "@/lib/server/tugas/text-analysis";
-import { extractTextFromBuffer, readZipEntries, readZipEntry } from "@/lib/server/extract-text";
+import { extractTextFromBuffer, hasPdfSignature, hasZipSignature, readZipEntries, readZipEntry, readZipEntryBytes, renderPdfPages } from "@/lib/server/extract-text";
 import { exportDocxForUser, type DocxSection } from "@/lib/server/tugas/export-docx";
+import { TOOL_IMAGES_KEY, type ToolImage } from "@/lib/server/agent-runs/engine";
 
 export interface ToolContext {
   courseId: string;
@@ -27,6 +28,8 @@ export interface ToolContext {
   attachments?: Array<{ fileId: string; name: string; url: string; size: number }>;
   /** fileId lampiran yang dikirim admin di chat (hanya ini yang boleh dibaca getAttachmentContent). */
   userFileIds?: string[];
+  /** Progres ke UI (opsional). */
+  emit?: (text: string) => void;
 }
 
 export type ToolResult = Record<string, unknown>;
@@ -402,14 +405,16 @@ async function getStudentHistory(ctx: ToolContext, args: { nim?: string; name?: 
 
 async function getSubmissionContent(
   ctx: ToolContext,
-  args: { submissionId: string; maxChars?: number; offset?: number },
+  args: { submissionId: string; maxChars?: number; offset?: number; refresh?: boolean },
 ): Promise<ToolResult> {
   const s = await submissionInCourse(ctx, args.submissionId);
-  const t = await getSubmissionText(s.id);
+  const t = await getSubmissionText(s.id, { refresh: args.refresh === true });
   const maxChars = Math.min(Math.max(args.maxChars ?? 6000, 500), 20_000);
   const offset = Math.max(args.offset ?? 0, 0);
   const text = t?.text ?? "";
   const slice = text.slice(offset, offset + maxChars);
+  const isPdf = /\.pdf$/i.test(s.fileUpload?.originalName ?? "");
+  const looksScanned = isPdf && /tanpa layer teks/.test(text);
   return {
     submissionId: s.id,
     nim: s.nim,
@@ -427,8 +432,53 @@ async function getSubmissionContent(
     isi: slice,
     adaLanjutan: offset + maxChars < text.length,
     errorEkstraksi: t?.extractError ?? null,
+    saran: looksScanned
+      ? "PDF ini hasil scan (tanpa teks). Panggil viewSubmissionPages untuk melihat halamannya sebagai gambar."
+      : t?.extractError ? "Coba lagi dengan refresh=true (ekstraksi ulang), atau viewSubmissionPages bila file PDF." : undefined,
     nilaiSekarang: s.nilai,
     feedbackSekarang: s.feedback,
+  };
+}
+
+const VIEW_PAGES_MAX = 6;
+
+/**
+ * Tampilkan halaman PDF pengumpulan sebagai gambar (untuk PDF hasil scan / foto).
+ * PDF boleh langsung atau berada di dalam ZIP (path). Gambar dikirim ke model lewat __images.
+ */
+async function viewSubmissionPages(ctx: ToolContext, args: { submissionId: string; path?: string; pages?: number[]; first?: number }): Promise<ToolResult> {
+  const { s, buffer, originalName } = await submissionBuffer(ctx, args.submissionId);
+  let pdf: Buffer;
+  let label = originalName;
+  if (args.path?.trim()) {
+    if (!hasZipSignature(buffer)) throw new Error("File pengumpulan bukan ZIP; jangan isi path.");
+    const entry = await readZipEntryBytes(buffer, args.path);
+    pdf = entry.bytes;
+    label = entry.path;
+  } else if (hasPdfSignature(buffer)) {
+    pdf = buffer;
+  } else if (hasZipSignature(buffer) && !/\.(docx|pptx|xlsx)$/i.test(originalName)) {
+    // ZIP tanpa path: ambil PDF pertama di dalamnya.
+    const docs = await readZipEntries(buffer, { maxFiles: 60, maxCharsPerFile: 1 });
+    const first = docs.find((d) => /\.pdf$/i.test(d.path));
+    if (!first) throw new Error("Tidak ada PDF di dalam ZIP ini. Lihat pohon file di getSubmissionContent.");
+    const entry = await readZipEntryBytes(buffer, first.path);
+    pdf = entry.bytes;
+    label = entry.path;
+  } else {
+    throw new Error("File pengumpulan bukan PDF. Gunakan getSubmissionContent.");
+  }
+  const pages = Array.isArray(args.pages) ? args.pages.map(Number).filter((n) => Number.isInteger(n) && n > 0).slice(0, VIEW_PAGES_MAX) : undefined;
+  const first = Math.min(Math.max(args.first ?? 4, 1), VIEW_PAGES_MAX);
+  const r = await renderPdfPages(pdf, { pages, first, maxPages: VIEW_PAGES_MAX });
+  const images: ToolImage[] = r.pages.map((p) => ({ dataUrl: `data:image/png;base64,${p.base64}`, label: `${label} hal. ${p.page}` }));
+  ctx.emit?.(`Membuka ${images.length} halaman PDF ${s.name} sebagai gambar`);
+  return {
+    submissionId: s.id, nim: s.nim, nama: s.name, file: label,
+    totalHalaman: r.total, halamanDitampilkan: r.pages.map((p) => p.page),
+    adaLanjutan: r.total > Math.max(...r.pages.map((p) => p.page), 0),
+    catatan: "Halaman dikirim sebagai gambar di pesan berikutnya. Untuk halaman lain panggil lagi dengan pages=[n,...].",
+    [TOOL_IMAGES_KEY]: images,
   };
 }
 
@@ -755,6 +805,7 @@ export const TOOL_IMPL: Record<string, ToolFn> = {
   getStudentHistory,
   getSubmissionContent,
   readSubmissionFile,
+  viewSubmissionPages,
   setFeedback,
   rekapNilai,
   compareSimilarity,
@@ -812,7 +863,7 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "listStudents",
-      description: "Semua mahasiswa: roster (nim, nama, email, kelas) + akun user yang bergabung ke course (email, nama akun, nim yang dipakai, jumlah submit, ada di roster atau tidak). query untuk cari nama/nim/email.",
+      description: "SUMBER IDENTITAS mahasiswa: roster lengkap (nim, nama, email, kelas) + akun user yang bergabung ke course (email, nama akun, nim yang dipakai, jumlah submit, ada di roster atau tidak). Pakai untuk mencocokkan nama/NIM pengumpulan dengan data resmi. query untuk cari nama/nim/email.",
       parameters: { type: "object", properties: { classId: { type: "string" }, query: { type: "string" } } },
     },
   },
@@ -828,16 +879,24 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "getSubmissionContent",
-      description: "Baca isi pengumpulan (catatan + isi file PDF/DOCX/PPTX/ZIP yang sudah diekstrak; ZIP memberi pohon file + cuplikan tiap file kode). Gunakan offset untuk lanjutan. Untuk membaca satu file kode secara UTUH di dalam ZIP gunakan readSubmissionFile.",
-      parameters: { type: "object", properties: { submissionId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["submissionId"] },
+      description: "Baca isi pengumpulan (catatan + isi file PDF/DOCX/PPTX/ZIP yang sudah diekstrak; ZIP memberi pohon file + cuplikan tiap file, termasuk isi ZIP di dalam ZIP dengan path 'dalam.zip::file'). Gunakan offset untuk lanjutan. refresh=true untuk ekstraksi ulang bila errorEkstraksi. PDF hasil scan: ikuti 'saran' (viewSubmissionPages). Untuk membaca satu file secara UTUH di dalam ZIP gunakan readSubmissionFile.",
+      parameters: { type: "object", properties: { submissionId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" }, refresh: { type: "boolean" } }, required: ["submissionId"] },
     },
   },
   {
     type: "function",
     function: {
       name: "readSubmissionFile",
-      description: "Baca SATU file di dalam ZIP pengumpulan secara utuh (mis. path 'main.py' atau 'src/app.js'; DOCX/PDF/PPTX di dalam ZIP juga bisa). Pakai untuk review kode detail.",
+      description: "Baca SATU file di dalam ZIP pengumpulan secara utuh (mis. path 'main.py', 'src/app.js', atau file di ZIP bertingkat 'tugas.zip::src/app.py'; DOCX/PDF/PPTX di dalam ZIP juga bisa). Pakai untuk review kode detail.",
       parameters: { type: "object", properties: { submissionId: { type: "string" }, path: { type: "string" }, maxChars: { type: "integer" } }, required: ["submissionId", "path"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "viewSubmissionPages",
+      description: "Tampilkan halaman PDF pengumpulan sebagai GAMBAR supaya bisa dibaca walau PDF hasil scan/foto tanpa layer teks. PDF boleh langsung, atau di dalam ZIP lewat path (mendukung 'dalam.zip::file.pdf'); tanpa path pada ZIP akan memakai PDF pertama. Maks 6 halaman per panggilan; default 4 halaman pertama, pakai pages=[5,6] untuk lanjutan.",
+      parameters: { type: "object", properties: { submissionId: { type: "string" }, path: { type: "string" }, pages: { type: "array", items: { type: "integer" } }, first: { type: "integer" } }, required: ["submissionId"] },
     },
   },
   {

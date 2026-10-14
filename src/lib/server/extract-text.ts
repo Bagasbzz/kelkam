@@ -43,6 +43,10 @@ export interface ExtractResult {
   kind: ExtractKind;
   truncated: boolean;
   zipManifest?: ZipManifest;
+  /** Jumlah halaman (PDF). */
+  pdfPages?: number;
+  /** PDF hampir tanpa teks: kemungkinan hasil scan, perlu dibaca sebagai gambar. */
+  pdfScanned?: boolean;
 }
 
 export interface ExtractOptions {
@@ -68,6 +72,13 @@ const MAX_ZIP_ENTRY_BYTES = 2 * 1024 * 1024;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 24 * 1024 * 1024;
 const MAX_ZIP_RATIO = 80;
 const PARSER_TIMEOUT_MS = 30_000;
+/** Di bawah ini per halaman dianggap PDF scan (tanpa layer teks). */
+const PDF_SCAN_MIN_CHARS_PER_PAGE = 40;
+const PDF_RENDER_MAX_PAGES = 6;
+const PDF_RENDER_WIDTH = 1100;
+/** ZIP di dalam ZIP: dibuka 1 level, entry-nya diberi prefix "inner.zip::". */
+const NESTED_ZIP_SEPARATOR = "::";
+const MAX_NESTED_ZIPS = 5;
 
 /** File penanda → nama framework. Dipakai untuk ringkasan struktur ZIP. */
 const FRAMEWORK_MARKERS: Array<[RegExp, string]> = [
@@ -137,9 +148,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs = PARSER_TIMEOUT_MS) {
 }
 
 function isSafeArchivePath(path: string) {
-  const normalized = path.replace(/\\/g, "/");
-  if (!normalized || normalized.startsWith("/") || /^[a-z]:\//i.test(normalized)) return false;
-  return !normalized.split("/").some((part) => part === "..");
+  // Entry ZIP bertingkat "a.zip::b/c": tiap bagian harus aman.
+  return path.split(NESTED_ZIP_SEPARATOR).every((segment) => {
+    const normalized = segment.replace(/\\/g, "/");
+    if (!normalized || normalized.startsWith("/") || /^[a-z]:\//i.test(normalized)) return false;
+    return !normalized.split("/").some((part) => part === "..");
+  });
 }
 
 function shouldIgnorePath(path: string) {
@@ -171,6 +185,60 @@ export function hasPdfSignature(buffer: Buffer) {
   return buffer.subarray(0, 5).toString("ascii") === "%PDF-";
 }
 
+/** Entry arsip yang sudah diratakan (ZIP dalam ZIP ikut dibuka 1 level). */
+interface FlatEntry {
+  name: string;
+  declaredSize: number;
+  text(): Promise<string>;
+  bytes(): Promise<Buffer>;
+}
+
+async function loadArchiveEntries(buffer: Buffer): Promise<FlatEntry[]> {
+  const JSZip = (await import("jszip")).default;
+  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const wrap = (entry: import("jszip").JSZipObject, name: string): FlatEntry => ({
+    name,
+    declaredSize: declaredUncompressedSize(entry),
+    text: () => withTimeout(entry.async("string"), 8_000),
+    bytes: async () => Buffer.from(await withTimeout(entry.async("nodebuffer"), 15_000)),
+  });
+  const out: FlatEntry[] = [];
+  const nested: Array<{ name: string; entry: import("jszip").JSZipObject }> = [];
+  for (const entry of Object.values(zip.files)) {
+    if (entry.dir) continue;
+    if (/\.zip$/i.test(entry.name) && !shouldIgnorePath(entry.name)) nested.push({ name: entry.name, entry });
+    else out.push(wrap(entry, entry.name));
+  }
+  // ZIP di dalam ZIP (umum: mahasiswa zip ulang folder hasil download). Dibuka 1 level saja.
+  for (const n of nested.slice(0, MAX_NESTED_ZIPS)) {
+    if (declaredUncompressedSize(n.entry) > MAX_ZIP_UNCOMPRESSED_BYTES) continue;
+    try {
+      const buf = Buffer.from(await withTimeout(n.entry.async("nodebuffer"), 15_000));
+      if (!hasZipSignature(buf)) continue;
+      const inner = await withTimeout(JSZip.loadAsync(buf));
+      let count = 0;
+      for (const ie of Object.values(inner.files)) {
+        if (ie.dir) continue;
+        if (++count > MAX_ZIP_ENTRIES) break;
+        out.push(wrap(ie, `${n.name}${NESTED_ZIP_SEPARATOR}${ie.name}`));
+      }
+    } catch {
+      out.push({ name: `${n.name}${NESTED_ZIP_SEPARATOR}[gagal dibuka]`, declaredSize: 0, text: async () => "", bytes: async () => Buffer.alloc(0) });
+    }
+  }
+  return out;
+}
+
+/** Cocokkan path yang diminta model dengan entry (persis, tanpa case, atau akhiran path). */
+function findEntry(entries: FlatEntry[], requested: string): FlatEntry | undefined {
+  const lower = requested.toLowerCase();
+  return (
+    entries.find((e) => e.name === requested) ??
+    entries.find((e) => e.name.toLowerCase() === lower) ??
+    entries.find((e) => e.name.toLowerCase().endsWith(`/${lower}`) || e.name.toLowerCase().endsWith(`${NESTED_ZIP_SEPARATOR}${lower}`))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Parsers
 // ---------------------------------------------------------------------------
@@ -184,13 +252,59 @@ export async function extractDocx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
 
 export async function extractPdf(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
   if (!hasPdfSignature(buffer)) throw new ApiRequestError(415, "File PDF tidak valid.");
-  type PdfParseResult = { text?: string };
-  type PdfParseFunction = (input: Buffer) => Promise<PdfParseResult>;
-  const mod = (await import("pdf-parse")) as unknown as { default?: PdfParseFunction } & PdfParseFunction;
-  const pdfParse: PdfParseFunction = mod.default || mod;
-  const result = await withTimeout(pdfParse(buffer));
-  const { text, truncated } = sanitizeText(result.text || "", maxChars);
-  return { content: text, charCount: text.length, kind: "guide", truncated };
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(buffer), verbosity: 0 });
+  try {
+    const result = await withTimeout(parser.getText());
+    // pdf-parse v2 menyisipkan pemisah "-- n of m --" antar halaman.
+    const raw = (result.text || "").replace(/\n*-- \d+ of \d+ --\n*/g, "\n\n");
+    const { text, truncated } = sanitizeText(raw, maxChars);
+    const scanned = result.total > 0 && text.replace(/\s+/g, "").length < PDF_SCAN_MIN_CHARS_PER_PAGE * result.total;
+    const content = scanned
+      ? `${text}${text ? "\n\n" : ""}[PDF ${result.total} halaman tanpa layer teks (kemungkinan hasil scan). Gunakan tampilan halaman sebagai gambar untuk membacanya.]`
+      : text;
+    return { content, charCount: text.length, kind: "guide", truncated, pdfPages: result.total, pdfScanned: scanned };
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
+}
+
+export interface PdfPageImage {
+  page: number;
+  width: number;
+  height: number;
+  /** PNG base64 (tanpa prefix data URL). */
+  base64: string;
+}
+
+/**
+ * Render halaman PDF ke PNG (untuk PDF hasil scan yang tidak punya layer teks).
+ * Dipakai Admin AI supaya model vision bisa "membaca" halaman.
+ */
+export async function renderPdfPages(
+  buffer: Buffer,
+  options: { pages?: number[]; first?: number; maxPages?: number; desiredWidth?: number } = {},
+): Promise<{ total: number; pages: PdfPageImage[] }> {
+  if (!hasPdfSignature(buffer)) throw new ApiRequestError(415, "File PDF tidak valid.");
+  const maxPages = Math.min(options.maxPages ?? PDF_RENDER_MAX_PAGES, PDF_RENDER_MAX_PAGES);
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(buffer), verbosity: 0 });
+  try {
+    const partial = options.pages?.filter((p) => Number.isInteger(p) && p > 0).slice(0, maxPages);
+    const shot = await withTimeout(
+      parser.getScreenshot({
+        ...(partial?.length ? { partial } : { first: Math.min(options.first ?? maxPages, maxPages) }),
+        desiredWidth: options.desiredWidth ?? PDF_RENDER_WIDTH,
+      }),
+      60_000,
+    );
+    return {
+      total: shot.total,
+      pages: shot.pages.map((p) => ({ page: p.pageNumber, width: p.width, height: p.height, base64: Buffer.from(p.data).toString("base64") })),
+    };
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
 }
 
 /**
@@ -244,26 +358,33 @@ export async function readZipEntry(
   if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
   const normalized = entryPath.replace(/\\/g, "/").replace(/^\.?\//, "");
   if (shouldIgnorePath(normalized)) throw new ApiRequestError(400, "Path tidak diizinkan.");
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
-  const entry =
-    zip.files[normalized] ??
-    Object.values(zip.files).find((e) => !e.dir && e.name.toLowerCase() === normalized.toLowerCase()) ??
-    Object.values(zip.files).find((e) => !e.dir && e.name.toLowerCase().endsWith(`/${normalized.toLowerCase()}`));
-  if (!entry || entry.dir) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
-  if (declaredUncompressedSize(entry) > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
+  const entries = await loadArchiveEntries(buffer);
+  const entry = findEntry(entries, normalized);
+  if (!entry) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
+  if (entry.declaredSize > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
 
   const lower = entry.name.toLowerCase();
   if (/\.(docx|pdf|pptx)$/.test(lower)) {
-    const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+    const buf = await entry.bytes();
     const inner = lower.endsWith(".docx") ? await extractDocx(buf, maxChars)
       : lower.endsWith(".pdf") ? await extractPdf(buf, maxChars)
       : await extractPptx(buf, maxChars);
     return { path: entry.name, size: buf.length, content: inner.content, truncated: inner.truncated };
   }
-  const raw = await withTimeout(entry.async("string"), 8_000);
+  const raw = await entry.text();
   const { text, truncated } = sanitizeText(raw, maxChars);
   return { path: entry.name, size: Buffer.byteLength(raw, "utf8"), content: text, truncated };
+}
+
+/** Ambil bytes mentah satu entry ZIP (mis. PDF untuk dirender). Mendukung ZIP bertingkat. */
+export async function readZipEntryBytes(buffer: Buffer, entryPath: string): Promise<{ path: string; bytes: Buffer }> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
+  const normalized = entryPath.replace(/\\/g, "/").replace(/^\.?\//, "");
+  if (shouldIgnorePath(normalized)) throw new ApiRequestError(400, "Path tidak diizinkan.");
+  const entry = findEntry(await loadArchiveEntries(buffer), normalized);
+  if (!entry) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
+  if (entry.declaredSize > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
+  return { path: entry.name, bytes: await entry.bytes() };
 }
 
 /**
@@ -277,12 +398,10 @@ export async function readZipEntries(
   if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
   const maxFiles = options.maxFiles ?? 40;
   const perFile = options.maxCharsPerFile ?? 30_000;
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
   const wanted = options.paths?.map((p) => p.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase());
-  const entries = Object.values(zip.files)
-    .filter((e) => !e.dir && !shouldIgnorePath(e.name) && declaredUncompressedSize(e) <= MAX_ZIP_ENTRY_BYTES)
-    .filter((e) => (wanted?.length ? wanted.some((w) => e.name.toLowerCase() === w || e.name.toLowerCase().endsWith(`/${w}`)) : true))
+  const entries = (await loadArchiveEntries(buffer))
+    .filter((e) => !shouldIgnorePath(e.name) && e.declaredSize <= MAX_ZIP_ENTRY_BYTES)
+    .filter((e) => (wanted?.length ? wanted.some((w) => e.name.toLowerCase() === w || e.name.toLowerCase().endsWith(`/${w}`) || e.name.toLowerCase().endsWith(`${NESTED_ZIP_SEPARATOR}${w}`)) : true))
     .filter((e) => TEXT_EXTENSIONS.test(e.name) || /\.(docx|pdf|pptx)$/i.test(e.name) || /(^|\/)README(\.|$)/i.test(e.name))
     .sort((a, b) => filePriority(a.name) - filePriority(b.name))
     .slice(0, maxFiles);
@@ -293,13 +412,13 @@ export async function readZipEntries(
     const lower = entry.name.toLowerCase();
     try {
       if (/\.(docx|pdf|pptx)$/.test(lower)) {
-        const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+        const buf = await entry.bytes();
         const inner = lower.endsWith(".docx") ? await extractDocx(buf, perFile)
           : lower.endsWith(".pdf") ? await extractPdf(buf, perFile)
           : await extractPptx(buf, perFile);
         out.push({ path: entry.name, kind: "doc", content: inner.content, truncated: inner.truncated });
       } else {
-        const raw = await withTimeout(entry.async("string"), 8_000);
+        const raw = await entry.text();
         totalBytes += Buffer.byteLength(raw, "utf8");
         if (totalBytes > MAX_ZIP_UNCOMPRESSED_BYTES) break;
         const { text, truncated } = sanitizeText(raw, perFile);
@@ -320,18 +439,16 @@ export async function extractZip(
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
   const perFile = options.maxCharsPerZipFile ?? DEFAULT_MAX_CHARS_PER_ZIP_FILE;
 
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
-  const entries = Object.values(zip.files).filter((entry) => !entry.dir);
+  const entries = await loadArchiveEntries(buffer);
 
-  if (entries.length > MAX_ZIP_ENTRIES) {
+  if (entries.length > MAX_ZIP_ENTRIES * 2) {
     throw new ApiRequestError(413, "Arsip berisi terlalu banyak file.");
   }
 
   // ZIP bomb defense
   let declaredTotal = 0;
   for (const entry of entries) {
-    const size = declaredUncompressedSize(entry);
+    const size = entry.declaredSize;
     if (size > MAX_ZIP_ENTRY_BYTES) {
       throw new ApiRequestError(413, "Arsip memiliki file internal yang terlalu besar.");
     }
@@ -370,7 +487,7 @@ export async function extractZip(
     .slice(0, MAX_ZIP_FILES_READ);
 
   const header =
-    `Struktur ZIP (${visible.length} file${frameworks.size ? `, stack: ${[...frameworks].join(", ")}` : ""}):\n` +
+    `Struktur ZIP (${visible.length} file${frameworks.size ? `, stack: ${[...frameworks].join(", ")}` : ""}${visible.some((e) => e.name.includes(NESTED_ZIP_SEPARATOR)) ? `; entri "x.zip::path" berasal dari ZIP di dalam ZIP` : ""}):\n` +
     tree.map((p) => `- ${p}`).join("\n");
   const chunks: string[] = [header];
   let extractedBytes = 0;
@@ -378,7 +495,7 @@ export async function extractZip(
 
   for (const entry of readable) {
     if (total >= maxChars) break;
-    const raw = await withTimeout(entry.async("string"), 8_000);
+    const raw = await entry.text();
     extractedBytes += Buffer.byteLength(raw, "utf8");
     if (extractedBytes > MAX_ZIP_UNCOMPRESSED_BYTES) {
       throw new ApiRequestError(413, "Isi arsip terlalu besar untuk diproses.");
@@ -396,7 +513,7 @@ export async function extractZip(
   for (const entry of docs) {
     if (total >= maxChars) break;
     try {
-      const buf = Buffer.from(await withTimeout(entry.async("nodebuffer"), 10_000));
+      const buf = await entry.bytes();
       const budget = Math.min(perFile * 4, maxChars - total);
       const inner = /\.docx$/i.test(entry.name)
         ? await extractDocx(buf, budget)
