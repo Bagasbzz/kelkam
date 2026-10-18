@@ -1,9 +1,9 @@
 "use client";
 
 import { getErrorMessage } from "@/lib/errors";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, FileText, ImagePlus, Loader2, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
@@ -12,11 +12,34 @@ import KelasPicker from "@/components/tugas/KelasPicker";
 import {
   createTugas,
   fetchCourseByToken,
+  tugasAttachmentUrl,
   updateTugas,
+  uploadSubmissionFile,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
 import { useAuth } from "@/components/AuthProvider";
+
+const MAX_ATTACHMENTS = 8;
+const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
+const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip";
+
+interface DraftAttachment {
+  key: string;
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  caption: string;
+  /** URL preview: blob lokal (baru) atau URL publik (lampiran lama). */
+  previewUrl: string | null;
+}
+
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 interface TugasFormPageProps {
   token: string;
@@ -55,9 +78,71 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
   const [deadlineLocal, setDeadlineLocal] = useState<string>(
     initial ? toDatetimeLocal(initial.deadline) : "",
   );
+  const [attachments, setAttachments] = useState<DraftAttachment[]>(() =>
+    (initial?.attachments ?? []).map((a) => ({
+      key: a.id,
+      fileId: a.fileId,
+      name: a.name,
+      mime: a.mime,
+      size: a.size,
+      caption: a.caption,
+      previewUrl: a.isImage && initial ? tugasAttachmentUrl(initial.id, a.id, token) : null,
+    })),
+  );
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  async function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    setError(null);
+    if (attachments.length + files.length > MAX_ATTACHMENTS) {
+      setError(`Maksimal ${MAX_ATTACHMENTS} lampiran.`);
+      return;
+    }
+    const tooBig = files.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (tooBig) {
+      setError(`${tooBig.name} melebihi 12 MB.`);
+      return;
+    }
+    setUploading(true);
+    try {
+      const uploaded: DraftAttachment[] = [];
+      for (const f of files) {
+        const r = await uploadSubmissionFile(f);
+        uploaded.push({
+          key: `${r.fileId}:${Date.now()}:${uploaded.length}`,
+          fileId: r.fileId,
+          name: f.name,
+          mime: r.mime || f.type,
+          size: r.size,
+          caption: "",
+          previewUrl: /^image\//.test(f.type) ? URL.createObjectURL(f) : null,
+        });
+      }
+      setAttachments((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      setError(getErrorMessage(err, "Upload lampiran gagal."));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function removeAttachment(key: string) {
+    setAttachments((prev) => {
+      const target = prev.find((a) => a.key === key);
+      if (target?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(target.previewUrl);
+      return prev.filter((a) => a.key !== key);
+    });
+  }
+
+  function setCaption(key: string, caption: string) {
+    setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, caption } : a)));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -149,6 +234,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
 
     setSubmitting(true);
     try {
+      const attachmentInput = attachments.map((a) => ({ fileId: a.fileId, caption: a.caption.trim() || undefined }));
       if (isEdit && initial) {
         await updateTugas(initial.id, {
           title: title.trim(),
@@ -156,6 +242,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
           deadline: iso,
           classId,
           pertemuan: pertemuanNum,
+          attachments: attachmentInput,
         });
       } else {
         await createTugas({
@@ -166,6 +253,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
           deadline: iso,
           // undefined → server menebak dari judul ("Pertemuan 3", "Minggu 2", "P4").
           pertemuan: pertemuanNum ?? undefined,
+          attachments: attachmentInput,
         });
       }
       router.push(`/tugas/${token}/admin`);
@@ -214,6 +302,75 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
               maxLength={8000}
               placeholder="Instruksi tugas, format file, dll..."
             />
+
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-medium text-slate-700">
+                  Lampiran (opsional): screenshot output yang diharapkan, file contoh, dll
+                </p>
+                <span className="text-xs text-slate-500">{attachments.length}/{MAX_ATTACHMENTS}</span>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ATTACHMENT_ACCEPT}
+                className="hidden"
+                onChange={onPickFiles}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || attachments.length >= MAX_ATTACHMENTS}
+                className="inline-flex items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-blue-400 hover:text-blue-600 disabled:opacity-50"
+              >
+                {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                {uploading ? "Mengunggah..." : "Tambah gambar / file"}
+              </button>
+              <p className="mt-1 text-xs text-slate-500">
+                Gambar (PNG/JPG/WebP), PDF, Word, PPT, ZIP. Maks 12 MB per file. Mahasiswa dan Asisten AI bisa melihatnya.
+              </p>
+
+              {attachments.length > 0 && (
+                <ul className="mt-3 space-y-3">
+                  {attachments.map((a) => (
+                    <li key={a.key} className="flex gap-3 rounded-2xl border border-slate-200 bg-white p-3">
+                      {a.previewUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={a.previewUrl} alt={a.name} className="h-20 w-28 flex-none rounded-xl border border-slate-200 object-cover" />
+                      ) : (
+                        <div className="flex h-20 w-28 flex-none items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                          <FileText className="h-6 w-6" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="truncate text-sm font-medium text-slate-800" title={a.name}>
+                            {a.name} <span className="text-xs font-normal text-slate-500">({formatBytes(a.size)})</span>
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => removeAttachment(a.key)}
+                            aria-label="Hapus lampiran"
+                            className="rounded-full p-1 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                        <input
+                          type="text"
+                          value={a.caption}
+                          onChange={(e) => setCaption(a.key, e.target.value)}
+                          maxLength={500}
+                          placeholder="Keterangan, mis. Output yang harus muncul di terminal"
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none transition focus:border-blue-500"
+                        />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
             <div>
               <p className="mb-2 block text-sm font-medium text-slate-700">
@@ -272,7 +429,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
                 variant="primary"
                 size="md"
                 isLoading={submitting}
-                disabled={submitting}
+                disabled={submitting || uploading}
               >
                 {isEdit ? "Simpan Perubahan" : "Bikin Tugas"}
               </Button>

@@ -78,6 +78,12 @@ const PUBLIC_API_EXACT_PATHS = [
   "/api/report-jobs/tick",
 ];
 
+/** Endpoint publik berbasis token course (handler memverifikasi token + rate limit sendiri). */
+function isPublicTokenEndpoint(pathname: string) {
+  return /^\/api\/tugas\/tugas\/[^/]+\/attachments\/[^/]+$/.test(pathname)
+    || /^\/api\/tugas\/courses\/[^/]+\/materials\/[^/]+\/download$/.test(pathname);
+}
+
 /**
  * Endpoint polling/stream yang dipanggil klien berulang (tiap 0.5-2 s) selama job
  * berjalan. Gateway limit 40/10 menit akan memutus polling → job "macet".
@@ -132,6 +138,7 @@ export async function proxy(request: NextRequest) {
   // Skip publik endpoint (waitlist + by-token course lookup rate-limit dirinya sendiri).
   if (pathname === "/api/waitlist") return NextResponse.next();
   if (PUBLIC_API_EXACT_PATHS.includes(pathname)) return NextResponse.next();
+  if (request.method === "GET" && isPublicTokenEndpoint(pathname)) return NextResponse.next();
 
   const isProtectedApi = PROTECTED_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const isProtectedPage = PROTECTED_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));

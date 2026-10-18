@@ -26,6 +26,18 @@ import {
 } from "@/lib/server/request-guards";
 import { assertClassBelongsToCourse } from "@/lib/server/tugas/access";
 import { guessPertemuan } from "@/lib/server/tugas/pertemuan";
+import {
+  attachmentInclude,
+  buildAttachmentCreates,
+  MAX_TUGAS_ATTACHMENTS,
+  serializeAttachments,
+  type TugasAttachmentView,
+} from "@/lib/server/tugas/attachments";
+
+const AttachmentInputSchema = z.object({
+  fileId: z.string().min(1).max(60),
+  caption: z.string().max(500).optional(),
+});
 
 const TugasCreateSchema = z.object({
   courseId: z.string().min(1),
@@ -40,6 +52,7 @@ const TugasCreateSchema = z.object({
     .max(99)
     .nullable()
     .optional(),
+  attachments: z.array(AttachmentInputSchema).max(MAX_TUGAS_ATTACHMENTS).optional(),
 });
 
 export async function POST(req: Request) {
@@ -57,7 +70,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { courseId, classId, title, description, deadline, pertemuan } = parsed.data;
+  const { courseId, classId, title, description, deadline, pertemuan, attachments } = parsed.data;
 
   try {
     const user = await requireCourseAdmin(courseId);
@@ -74,6 +87,8 @@ export async function POST(req: Request) {
       await assertClassBelongsToCourse(classId, courseId);
     }
 
+    const attachmentCreates = await buildAttachmentCreates(user.id, attachments ?? []);
+
     const tugas = await prisma.tugas.create({
       data: {
         courseId,
@@ -83,8 +98,9 @@ export async function POST(req: Request) {
         deadline: deadlineDate,
         pertemuan: pertemuan === undefined ? guessPertemuan(title) : pertemuan,
         createdById: user.id,
+        attachments: attachmentCreates.length ? { create: attachmentCreates } : undefined,
       },
-      include: { class: { select: { id: true, name: true } } },
+      include: { class: { select: { id: true, name: true } }, ...attachmentInclude },
     });
 
     return NextResponse.json(
@@ -154,7 +170,7 @@ export async function GET(req: Request) {
     const tugases = await prisma.tugas.findMany({
       where: { courseId },
       orderBy: { deadline: "asc" },
-      include: { class: { select: { id: true, name: true } } },
+      include: { class: { select: { id: true, name: true } }, ...attachmentInclude },
     });
 
     return NextResponse.json({
@@ -182,7 +198,8 @@ function serializeTugas(t: {
   pertemuan: number | null;
   createdAt: Date;
   updatedAt: Date;
-}) {
+  attachments?: Parameters<typeof serializeAttachments>[0];
+}): Record<string, unknown> & { attachments: TugasAttachmentView[] } {
   return {
     id: t.id,
     courseId: t.courseId,
@@ -194,5 +211,6 @@ function serializeTugas(t: {
     pertemuan: t.pertemuan,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
+    attachments: serializeAttachments(t.attachments),
   };
 }

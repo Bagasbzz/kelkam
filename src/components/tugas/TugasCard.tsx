@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { CalendarClock, Pencil, Trash2, FileText, Tag } from "lucide-react";
+import { CalendarClock, Pencil, Trash2, FileText, Tag, Paperclip } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import CountdownTimer from "./CountdownTimer";
 import type { TugasSummary } from "@/lib/client/tugas-api";
+import { useDeadlinePassed } from "@/lib/client/use-deadline-passed";
 
 interface TugasCardProps {
   tugas: TugasSummary;
@@ -47,7 +48,9 @@ export default function TugasCard({
   submissionsCount,
 }: TugasCardProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const isPast = new Date(tugas.deadline).getTime() < Date.now();
+  const isPast = useDeadlinePassed(tugas.deadline);
+  const attachmentCount = tugas.attachments?.length ?? 0;
+  const imageCount = tugas.attachments?.filter((a) => a.isImage).length ?? 0;
   return (
     <div
       className={`rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md ${
@@ -81,6 +84,17 @@ export default function TugasCard({
               {formatDeadline(tugas.deadline)}
             </span>
             <CountdownTimer deadline={tugas.deadline} />
+            {attachmentCount > 0 && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-bold text-amber-700"
+                title="Tugas ini punya lampiran dari dosen/asdos"
+              >
+                <Paperclip className="w-3 h-3" />
+                {imageCount > 0 && imageCount === attachmentCount
+                  ? `${imageCount} gambar`
+                  : `${attachmentCount} lampiran`}
+              </span>
+            )}
             {submissionsCount !== undefined && (
               <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
                 <FileText className="w-3 h-3" />

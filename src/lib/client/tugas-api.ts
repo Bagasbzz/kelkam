@@ -80,6 +80,21 @@ export interface CourseMaterial {
   description?: string;
 }
 
+export interface TugasAttachment {
+  id: string;
+  fileId: string;
+  name: string;
+  mime: string;
+  size: number;
+  caption: string;
+  isImage: boolean;
+}
+
+export interface TugasAttachmentInput {
+  fileId: string;
+  caption?: string;
+}
+
 export interface TugasSummary {
   id: string;
   courseId: string;
@@ -90,8 +105,15 @@ export interface TugasSummary {
   deadline: string;
   /** Nomor pertemuan (opsional). */
   pertemuan?: number | null;
+  /** Lampiran dari admin (screenshot output, file contoh). */
+  attachments?: TugasAttachment[];
   createdAt: string;
   updatedAt: string;
+}
+
+/** URL publik lampiran tugas (butuh token course). */
+export function tugasAttachmentUrl(tugasId: string, attachmentId: string, token: string) {
+  return `/api/tugas/tugas/${encodeURIComponent(tugasId)}/attachments/${encodeURIComponent(attachmentId)}?token=${encodeURIComponent(token)}`;
 }
 
 export interface SubmissionRow {
@@ -259,6 +281,7 @@ export function createTugas(input: {
   description: string;
   deadline: string; // ISO
   pertemuan?: number | null;
+  attachments?: TugasAttachmentInput[];
 }) {
   return request<{ tugas: TugasSummary }>("/api/tugas/tugas", {
     method: "POST",
@@ -274,6 +297,7 @@ export function updateTugas(
     deadline: string;
     classId: string | null;
     pertemuan: number | null;
+    attachments: TugasAttachmentInput[];
   }>,
 ) {
   return request<{ tugas: TugasSummary }>(`/api/tugas/tugas/${tugasId}`, {

@@ -22,6 +22,12 @@ import {
   assertClassBelongsToCourse,
   getTugasOrThrow,
 } from "@/lib/server/tugas/access";
+import {
+  attachmentInclude,
+  buildAttachmentCreates,
+  MAX_TUGAS_ATTACHMENTS,
+  serializeAttachments,
+} from "@/lib/server/tugas/attachments";
 
 const TugasPatchSchema = z
   .object({
@@ -30,6 +36,8 @@ const TugasPatchSchema = z
     deadline: z.string().datetime(),
     classId: z.string().min(1).nullable(),
     pertemuan: z.number().int().min(1).max(99).nullable(),
+    // Daftar lampiran LENGKAP (mengganti yang lama).
+    attachments: z.array(z.object({ fileId: z.string().min(1).max(60), caption: z.string().max(500).optional() })).max(MAX_TUGAS_ATTACHMENTS),
   })
   .partial();
 
@@ -56,9 +64,7 @@ export async function PATCH(
   try {
     const { id } = await context.params;
     const existing = await getTugasOrThrow(id);
-    await requireCourseAdmin(existing.courseId);
-
-    // Validasi class kalau ada di patch.
+    const user = await requireCourseAdmin(existing.courseId);
     if (patch.classId !== undefined && patch.classId !== null) {
       await assertClassBelongsToCourse(patch.classId, existing.courseId);
     }
@@ -82,11 +88,15 @@ export async function PATCH(
     if (patch.pertemuan !== undefined) {
       data.pertemuan = patch.pertemuan;
     }
+    if (patch.attachments !== undefined) {
+      const creates = await buildAttachmentCreates(user.id, patch.attachments);
+      data.attachments = { deleteMany: {}, create: creates };
+    }
 
     const updated = await prisma.tugas.update({
       where: { id },
       data,
-      include: { class: { select: { id: true, name: true } } },
+      include: { class: { select: { id: true, name: true } }, ...attachmentInclude },
     });
 
     return NextResponse.json({ success: true, tugas: serializeTugas(updated) });
@@ -132,6 +142,7 @@ function serializeTugas(t: {
   pertemuan: number | null;
   createdAt: Date;
   updatedAt: Date;
+  attachments?: Parameters<typeof serializeAttachments>[0];
 }) {
   return {
     id: t.id,
@@ -144,5 +155,6 @@ function serializeTugas(t: {
     pertemuan: t.pertemuan,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
+    attachments: serializeAttachments(t.attachments),
   };
 }

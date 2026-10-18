@@ -13,6 +13,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
+import { attachmentInclude, serializeAttachments } from "@/lib/server/tugas/attachments";
 
 function clientIp(req: Request): string {
   const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
@@ -48,7 +49,7 @@ export async function GET(req: Request) {
     const tugases = await prisma.tugas.findMany({
       where: { courseId: course.id },
       orderBy: { deadline: "asc" },
-      include: { class: { select: { id: true, name: true } } },
+      include: { class: { select: { id: true, name: true } }, ...attachmentInclude },
     });
 
     return NextResponse.json(
@@ -72,6 +73,8 @@ export async function GET(req: Request) {
           title: t.title,
           description: t.description,
           deadline: t.deadline.toISOString(),
+          pertemuan: t.pertemuan,
+          attachments: serializeAttachments(t.attachments),
           createdAt: t.createdAt.toISOString(),
           updatedAt: t.updatedAt.toISOString(),
         })),

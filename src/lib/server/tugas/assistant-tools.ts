@@ -113,28 +113,80 @@ async function listTugas(ctx: ToolContext): Promise<ToolResult> {
   };
 }
 
+const MAX_TUGAS_IMAGE_BYTES = 4 * 1024 * 1024;
+
 async function getTugasDetail(ctx: ToolContext, args: { tugasId?: string; pertemuan?: number; title?: string }): Promise<ToolResult> {
   const tugases = await resolveTugas(ctx, args);
   const course = await prisma.course.findUnique({ where: { id: ctx.courseId }, select: { name: true, description: true } });
   const now = new Date();
+  const images: ToolImage[] = [];
+  const tugas = await Promise.all(tugases.map(async (t) => {
+    const [agg, atts] = await Promise.all([
+      prisma.tugasSubmission.groupBy({ by: ["status"], where: { tugasId: t.id }, _count: { _all: true } }),
+      prisma.tugasAttachment.findMany({
+        where: { tugasId: t.id },
+        orderBy: { position: "asc" },
+        select: { id: true, caption: true, fileUpload: { select: { id: true, originalName: true, mime: true, size: true, filePath: true } } },
+      }),
+    ]);
+    // Gambar lampiran (screenshot output yang diharapkan) dikirim langsung ke model.
+    for (const a of atts) {
+      if (!/^image\/(png|jpe?g|webp|gif)$/i.test(a.fileUpload.mime) || a.fileUpload.size > MAX_TUGAS_IMAGE_BYTES || images.length >= 8) continue;
+      try {
+        const buf = await fs.readFile(a.fileUpload.filePath);
+        images.push({ dataUrl: `data:${a.fileUpload.mime};base64,${buf.toString("base64")}`, label: `Lampiran tugas "${t.title}": ${a.caption || a.fileUpload.originalName}` });
+      } catch { /* file hilang, lewati */ }
+    }
+    return {
+      id: t.id,
+      pertemuan: t.pertemuan,
+      title: t.title,
+      deskripsiLengkap: t.description,
+      lampiran: atts.map((a) => ({
+        id: a.id,
+        fileId: a.fileUpload.id,
+        nama: a.fileUpload.originalName,
+        keterangan: a.caption,
+        jenis: /^image\//i.test(a.fileUpload.mime) ? "gambar (dikirim sebagai gambar di pesan berikutnya)" : "dokumen (baca dengan getTugasAttachmentContent)",
+      })),
+      kelas: t.class?.name ?? "semua kelas",
+      classId: t.classId,
+      deadline: fmtDate(t.deadline),
+      deadlineISO: t.deadline.toISOString(),
+      sudahLewat: t.deadline < now,
+      dibuat: fmtDate(t.createdAt),
+      jumlahPerStatus: Object.fromEntries(agg.map((a) => [a.status, a._count._all])),
+    };
+  }));
   return {
     course: { nama: course?.name, deskripsi: course?.description ?? null },
-    tugas: await Promise.all(tugases.map(async (t) => {
-      const agg = await prisma.tugasSubmission.groupBy({ by: ["status"], where: { tugasId: t.id }, _count: { _all: true } });
-      return {
-        id: t.id,
-        pertemuan: t.pertemuan,
-        title: t.title,
-        deskripsiLengkap: t.description,
-        kelas: t.class?.name ?? "semua kelas",
-        classId: t.classId,
-        deadline: fmtDate(t.deadline),
-        deadlineISO: t.deadline.toISOString(),
-        sudahLewat: t.deadline < now,
-        dibuat: fmtDate(t.createdAt),
-        jumlahPerStatus: Object.fromEntries(agg.map((a) => [a.status, a._count._all])),
-      };
-    })),
+    tugas,
+    ...(images.length ? { [TOOL_IMAGES_KEY]: images } : {}),
+  };
+}
+
+/** Isi dokumen lampiran tugas (PDF/DOCX/PPTX/ZIP/teks) yang dipasang admin saat membuat tugas. */
+async function getTugasAttachmentContent(ctx: ToolContext, args: { attachmentId: string; maxChars?: number; offset?: number }): Promise<ToolResult> {
+  const att = await prisma.tugasAttachment.findFirst({
+    where: { id: args.attachmentId, tugas: { courseId: ctx.courseId } },
+    select: { caption: true, tugas: { select: { title: true } }, fileUpload: { select: { id: true, originalName: true, mime: true, size: true } } },
+  });
+  if (!att) throw new Error("Lampiran tugas tidak ditemukan.");
+  if (/^image\//i.test(att.fileUpload.mime)) return { nama: att.fileUpload.originalName, isi: "", error: "Lampiran berupa gambar; panggil getTugasDetail, gambarnya dikirim langsung." };
+  const maxChars = Math.min(Math.max(args.maxChars ?? 8000, 500), 30_000);
+  const offset = Math.max(args.offset ?? 0, 0);
+  let text = "";
+  let error: string | null = null;
+  try {
+    const ex = await getOrExtractFileText(att.fileUpload.id);
+    text = ex?.text ?? "";
+    if (!ex) error = "File tidak bisa dibaca.";
+  } catch (err) {
+    error = err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : "Lampiran tidak bisa dibaca sebagai teks.";
+  }
+  return {
+    tugas: att.tugas.title, nama: att.fileUpload.originalName, keterangan: att.caption, ukuran: att.fileUpload.size,
+    totalKarakter: text.length, offset, isi: text.slice(offset, offset + maxChars), adaLanjutan: offset + maxChars < text.length, error,
   };
 }
 
@@ -813,6 +865,7 @@ export const TOOL_IMPL: Record<string, ToolFn> = {
   getMaterials: (ctx) => getMaterials(ctx),
   getMaterialContent,
   getAttachmentContent,
+  getTugasAttachmentContent,
   exportSubmissionDocx,
   exportReportDocx,
 };
@@ -831,8 +884,16 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "getTugasDetail",
-      description: "Deskripsi LENGKAP sebuah tugas (instruksi/soal yang diberikan ke mahasiswa), deadline, kelas, jumlah per status. WAJIB dibaca sebelum menilai kesesuaian pengumpulan.",
+      description: "Deskripsi LENGKAP sebuah tugas (instruksi/soal yang diberikan ke mahasiswa), lampiran dari admin (screenshot output yang diharapkan dikirim sebagai gambar; dokumen dibaca lewat getTugasAttachmentContent), deadline, kelas, jumlah per status. WAJIB dibaca sebelum menilai kesesuaian pengumpulan.",
       parameters: { type: "object", properties: { ...tugasSelector } },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "getTugasAttachmentContent",
+      description: "Baca isi dokumen lampiran tugas (PDF/DOCX/PPTX/ZIP/teks) yang dipasang admin pada tugas. attachmentId dari getTugasDetail.lampiran.",
+      parameters: { type: "object", properties: { attachmentId: { type: "string" }, maxChars: { type: "integer" }, offset: { type: "integer" } }, required: ["attachmentId"] },
     },
   },
   {

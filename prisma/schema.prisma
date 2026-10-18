@@ -295,6 +295,7 @@ model FileUpload {
   submissions TugasSubmission[]
   extracted   ExtractedText?
   imageJobs   ImageJob[]
+  tugasAttachments TugasAttachment[]
 
   @@index([ownerId])
   @@index([createdAt])
@@ -634,11 +635,31 @@ model Tugas {
   updatedAt   DateTime     @updatedAt @map("updated_at")
 
   submissions TugasSubmission[]
+  attachments TugasAttachment[]
 
   @@index([courseId])
   @@index([classId])
   @@index([deadline])
   @@map("tugases")
+}
+
+/**
+ * Lampiran tugas dari admin (screenshot output yang diharapkan, file contoh, dll).
+ * File fisik ada di FileUpload (dedup SHA256), jadi jangan hapus file saat lampiran dihapus.
+ */
+model TugasAttachment {
+  id           String     @id @default(cuid())
+  tugasId      String     @map("tugas_id")
+  tugas        Tugas      @relation(fields: [tugasId], references: [id], onDelete: Cascade)
+  fileUploadId String     @map("file_upload_id")
+  fileUpload   FileUpload @relation(fields: [fileUploadId], references: [id], onDelete: Cascade)
+  caption      String     @default("")
+  position     Int        @default(0)
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  @@index([tugasId])
+  @@index([fileUploadId])
+  @@map("tugas_attachments")
 }
 
 /**

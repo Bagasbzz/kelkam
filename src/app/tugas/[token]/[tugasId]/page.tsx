@@ -4,15 +4,17 @@ import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, CalendarClock, Loader2 } from "lucide-react";
+import { ArrowLeft, CalendarClock, FileText, Loader2 } from "lucide-react";
 import Card from "@/components/ui/Card";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import SubmissionForm from "@/components/tugas/SubmissionForm";
 import {
   fetchCourseByToken,
+  tugasAttachmentUrl,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
+import { useDeadlinePassed } from "@/lib/client/use-deadline-passed";
 
 /**
  * /tugas/[token]/[tugasId], detail satu tugas + form kumpulkan / ubah.
@@ -27,18 +29,20 @@ export default function TugasDetailPage() {
   const [tugas, setTugas] = useState<TugasSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Hook harus dipanggil sebelum early-return; deadline kosong → false.
+  const deadlinePassed = useDeadlinePassed(tugas?.deadline ?? "");
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    // Reset state hanya lewat callback async (bukan sinkron di body effect)
+    // agar lolos aturan react-hooks/set-state-in-effect.
     fetchCourseByToken(token)
       .then((data) => {
         if (cancelled) return;
         setCourse(data.course);
         const t = data.tugases.find((x) => x.id === tugasId) ?? null;
         setTugas(t);
-        if (!t) setError("Tugas ini tidak ada di mata kuliah tersebut.");
+        setError(t ? null : "Tugas ini tidak ada di mata kuliah tersebut.");
       })
       .catch((err) => {
         if (cancelled) return;
@@ -78,8 +82,6 @@ export default function TugasDetailPage() {
     );
   }
 
-  const deadlinePassed = new Date(tugas.deadline).getTime() < Date.now();
-
   return (
     <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
       <div className="mx-auto max-w-3xl space-y-6">
@@ -105,6 +107,39 @@ export default function TugasDetailPage() {
             <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700 md:text-base">
               {tugas.description}
             </p>
+          )}
+          {(tugas.attachments?.length ?? 0) > 0 && (
+            <div className="mt-4 space-y-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lampiran</p>
+              {tugas.attachments!.map((a) => {
+                const url = tugasAttachmentUrl(tugas.id, a.id, token);
+                return a.isImage ? (
+                  <figure key={a.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                    <a href={url} target="_blank" rel="noreferrer">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={url} alt={a.caption || a.name} className="max-h-[28rem] w-full object-contain" />
+                    </a>
+                    {a.caption && (
+                      <figcaption className="px-4 py-2 text-sm text-slate-700">{a.caption}</figcaption>
+                    )}
+                  </figure>
+                ) : (
+                  <a
+                    key={a.id}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm hover:border-blue-400"
+                  >
+                    <FileText className="h-5 w-5 flex-none text-slate-500" />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-slate-800">{a.name}</span>
+                      {a.caption && <span className="block text-xs text-slate-600">{a.caption}</span>}
+                    </span>
+                  </a>
+                );
+              })}
+            </div>
           )}
           <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-700">
             <span className="inline-flex items-center gap-2">
