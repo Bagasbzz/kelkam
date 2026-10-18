@@ -73,6 +73,16 @@ export async function POST(req: Request) {
       throw new ApiRequestError(413, `Ukuran file harus di bawah ${MAX_FILE_LABEL}.`);
     }
 
+    // Video hanya boleh diunggah admin lewat /api/files/upload-video (streaming, tanpa limit).
+    if (/^video\//i.test(file.type || "")) {
+      throw new ApiRequestError(
+        auth.user.role === "ADMIN" ? 400 : 403,
+        auth.user.role === "ADMIN"
+          ? "Video harus diunggah lewat endpoint upload-video."
+          : "Mahasiswa tidak dapat mengunggah video.",
+      );
+    }
+
     const name = file.name.replace(/[\r\n]/g, "").slice(0, 200);
     if (!name) {
       throw new ApiRequestError(400, "Nama file tidak valid.");

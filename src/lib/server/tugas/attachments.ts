@@ -8,15 +8,18 @@ import { ApiRequestError } from "@/lib/server/request-guards";
 
 export const MAX_TUGAS_ATTACHMENTS = 8;
 export const IMAGE_MIME_RE = /^image\/(png|jpe?g|webp|gif)$/i;
+/** Video yang bisa diputar langsung di browser (HTML5 <video>) dan diunduh mahasiswa. */
+export const VIDEO_MIME_RE = /^video\/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$/i;
 
 /**
  * MIME yang boleh jadi lampiran tugas. Lampiran diakses PUBLIK via token course
- * dan gambar di-serve inline, jadi tipe aktif (HTML, SVG, JS) ditolak untuk
+ * dan gambar/video di-serve inline, jadi tipe aktif (HTML, SVG, JS) ditolak untuk
  * mencegah stored-XSS lewat file yang diunggah admin.
  */
 const ALLOWED_ATTACHMENT_MIME_RE = new RegExp(
   [
     "^image/(png|jpe?g|webp|gif)$",
+    "^video/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$",
     "^application/pdf$",
     "^application/zip$",
     "^application/x-zip-compressed$",
@@ -50,6 +53,7 @@ export interface TugasAttachmentView {
   size: number;
   caption: string;
   isImage: boolean;
+  isVideo: boolean;
 }
 
 export const attachmentInclude = {
@@ -74,6 +78,7 @@ export function serializeAttachments(rows: AttachmentRow[] | undefined): TugasAt
     size: a.fileUpload.size,
     caption: a.caption,
     isImage: IMAGE_MIME_RE.test(a.fileUpload.mime),
+    isVideo: VIDEO_MIME_RE.test(a.fileUpload.mime),
   }));
 }
 
@@ -92,7 +97,7 @@ export async function buildAttachmentCreates(adminId: string, input: TugasAttach
   if (disallowed) {
     throw new ApiRequestError(
       400,
-      `Tipe file "${disallowed.originalName}" tidak didukung sebagai lampiran. Gunakan gambar (PNG/JPG/WebP/GIF), PDF, Word, PPT, Excel, teks, atau ZIP.`,
+      `Tipe file "${disallowed.originalName}" tidak didukung sebagai lampiran. Gunakan gambar (PNG/JPG/WebP/GIF), video (MP4/WebM/MOV/MKV), PDF, Word, PPT, Excel, teks, atau ZIP.`,
     );
   }
   return unique.map((a, i) => ({

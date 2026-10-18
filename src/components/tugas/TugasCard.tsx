@@ -51,6 +51,7 @@ export default function TugasCard({
   const isPast = useDeadlinePassed(tugas.deadline);
   const attachmentCount = tugas.attachments?.length ?? 0;
   const imageCount = tugas.attachments?.filter((a) => a.isImage).length ?? 0;
+  const videoCount = tugas.attachments?.filter((a) => a.isVideo).length ?? 0;
   return (
     <div
       className={`rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md ${
@@ -92,7 +93,9 @@ export default function TugasCard({
                 <Paperclip className="w-3 h-3" />
                 {imageCount > 0 && imageCount === attachmentCount
                   ? `${imageCount} gambar`
-                  : `${attachmentCount} lampiran`}
+                  : videoCount > 0 && videoCount === attachmentCount
+                    ? `${videoCount} video`
+                    : `${attachmentCount} lampiran`}
               </span>
             )}
             {submissionsCount !== undefined && (

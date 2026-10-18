@@ -138,7 +138,7 @@ export async function proxy(request: NextRequest) {
   // Skip publik endpoint (waitlist + by-token course lookup rate-limit dirinya sendiri).
   if (pathname === "/api/waitlist") return NextResponse.next();
   if (PUBLIC_API_EXACT_PATHS.includes(pathname)) return NextResponse.next();
-  if (request.method === "GET" && isPublicTokenEndpoint(pathname)) return NextResponse.next();
+  if ((request.method === "GET" || request.method === "HEAD") && isPublicTokenEndpoint(pathname)) return NextResponse.next();
 
   const isProtectedApi = PROTECTED_API_PREFIXES.some((prefix) => pathname.startsWith(prefix));
   const isProtectedPage = PROTECTED_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));

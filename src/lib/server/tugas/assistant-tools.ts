@@ -147,7 +147,11 @@ async function getTugasDetail(ctx: ToolContext, args: { tugasId?: string; pertem
         fileId: a.fileUpload.id,
         nama: a.fileUpload.originalName,
         keterangan: a.caption,
-        jenis: /^image\//i.test(a.fileUpload.mime) ? "gambar (dikirim sebagai gambar di pesan berikutnya)" : "dokumen (baca dengan getTugasAttachmentContent)",
+        jenis: /^image\//i.test(a.fileUpload.mime)
+          ? "gambar (dikirim sebagai gambar di pesan berikutnya)"
+          : /^video\//i.test(a.fileUpload.mime)
+            ? "video (tidak bisa dibaca asisten; hanya untuk ditonton/diunduh mahasiswa)"
+            : "dokumen (baca dengan getTugasAttachmentContent)",
       })),
       kelas: t.class?.name ?? "semua kelas",
       classId: t.classId,
@@ -173,6 +177,7 @@ async function getTugasAttachmentContent(ctx: ToolContext, args: { attachmentId:
   });
   if (!att) throw new Error("Lampiran tugas tidak ditemukan.");
   if (/^image\//i.test(att.fileUpload.mime)) return { nama: att.fileUpload.originalName, isi: "", error: "Lampiran berupa gambar; panggil getTugasDetail, gambarnya dikirim langsung." };
+  if (/^video\//i.test(att.fileUpload.mime)) return { nama: att.fileUpload.originalName, isi: "", error: "Lampiran berupa video; tidak bisa dibaca sebagai teks." };
   const maxChars = Math.min(Math.max(args.maxChars ?? 8000, 500), 30_000);
   const offset = Math.max(args.offset ?? 0, 0);
   let text = "";

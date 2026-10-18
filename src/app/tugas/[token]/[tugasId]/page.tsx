@@ -4,10 +4,11 @@ import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, CalendarClock, FileText, Loader2 } from "lucide-react";
+import { ArrowLeft, CalendarClock, Download, FileText, Loader2 } from "lucide-react";
 import Card from "@/components/ui/Card";
 import CountdownTimer from "@/components/tugas/CountdownTimer";
 import SubmissionForm from "@/components/tugas/SubmissionForm";
+import { formatFileSize } from "@/lib/file-limits";
 import {
   fetchCourseByToken,
   tugasAttachmentUrl,
@@ -113,30 +114,65 @@ export default function TugasDetailPage() {
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lampiran</p>
               {tugas.attachments!.map((a) => {
                 const url = tugasAttachmentUrl(tugas.id, a.id, token);
-                return a.isImage ? (
-                  <figure key={a.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                    <a href={url} target="_blank" rel="noreferrer">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={url} alt={a.caption || a.name} className="max-h-[28rem] w-full object-contain" />
-                    </a>
-                    {a.caption && (
-                      <figcaption className="px-4 py-2 text-sm text-slate-700">{a.caption}</figcaption>
-                    )}
-                  </figure>
-                ) : (
+                const downloadUrl = tugasAttachmentUrl(tugas.id, a.id, token, { download: true });
+                const downloadBtn = (
                   <a
+                    href={downloadUrl}
+                    download={a.name}
+                    className="inline-flex flex-none items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:border-blue-400 hover:text-blue-700"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Unduh
+                  </a>
+                );
+                if (a.isImage) {
+                  return (
+                    <figure key={a.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                      <a href={url} target="_blank" rel="noreferrer">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt={a.caption || a.name} className="max-h-[28rem] w-full object-contain" />
+                      </a>
+                      <figcaption className="flex items-center justify-between gap-3 px-4 py-2 text-sm text-slate-700">
+                        <span className="min-w-0 truncate">{a.caption || a.name}</span>
+                        {downloadBtn}
+                      </figcaption>
+                    </figure>
+                  );
+                }
+                if (a.isVideo) {
+                  return (
+                    <figure key={a.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                      <video
+                        src={url}
+                        controls
+                        preload="metadata"
+                        playsInline
+                        className="max-h-[28rem] w-full bg-black"
+                      >
+                        Browser tidak mendukung pemutaran video. Unduh filenya.
+                      </video>
+                      <figcaption className="flex items-center justify-between gap-3 px-4 py-2 text-sm text-slate-700">
+                        <span className="min-w-0 truncate">
+                          {a.caption || a.name}
+                          <span className="ml-1 text-xs text-slate-500">({formatFileSize(a.size)})</span>
+                        </span>
+                        {downloadBtn}
+                      </figcaption>
+                    </figure>
+                  );
+                }
+                return (
+                  <div
                     key={a.id}
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm hover:border-blue-400"
+                    className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm"
                   >
                     <FileText className="h-5 w-5 flex-none text-slate-500" />
-                    <span className="min-w-0">
+                    <a href={url} target="_blank" rel="noreferrer" className="min-w-0 flex-1 hover:text-blue-700">
                       <span className="block truncate font-medium text-slate-800">{a.name}</span>
                       {a.caption && <span className="block text-xs text-slate-600">{a.caption}</span>}
-                    </span>
-                  </a>
+                    </a>
+                    {downloadBtn}
+                  </div>
                 );
               })}
             </div>

@@ -3,26 +3,35 @@
 import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, FileText, ImagePlus, Loader2, X } from "lucide-react";
+import { ArrowLeft, FileText, ImagePlus, Loader2, Video, X } from "lucide-react";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
 import Input from "@/components/ui/Input";
 import Textarea from "@/components/ui/Textarea";
 import KelasPicker from "@/components/tugas/KelasPicker";
 import {
+  VIDEO_MIME_CLIENT_RE,
   createTugas,
   fetchCourseByToken,
   tugasAttachmentUrl,
   updateTugas,
   uploadSubmissionFile,
+  uploadVideoFile,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
 import { useAuth } from "@/components/AuthProvider";
 
 const MAX_ATTACHMENTS = 8;
+/** Batas untuk non-video (ikut /api/files/upload). Video TIDAK dibatasi (endpoint streaming khusus admin). */
 const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
-const ATTACHMENT_ACCEPT = "image/png,image/jpeg,image/webp,image/gif,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip";
+const ATTACHMENT_ACCEPT =
+  "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.m4v,.webm,.mov,.mkv,.avi,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip";
+
+/** Deteksi video dari MIME browser atau ekstensi (MKV/AVI sering MIME kosong). */
+function isVideoFile(f: File): boolean {
+  return VIDEO_MIME_CLIENT_RE.test(f.type) || /\.(mp4|m4v|webm|ogv|mov|mkv|avi|3gp)$/i.test(f.name);
+}
 
 interface DraftAttachment {
   key: string;
@@ -33,6 +42,7 @@ interface DraftAttachment {
   caption: string;
   /** URL preview: blob lokal (baru) atau URL publik (lampiran lama). */
   previewUrl: string | null;
+  kind: "image" | "video" | "file";
 }
 
 function formatBytes(n: number) {
@@ -86,10 +96,13 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       mime: a.mime,
       size: a.size,
       caption: a.caption,
-      previewUrl: a.isImage && initial ? tugasAttachmentUrl(initial.id, a.id, token) : null,
+      previewUrl: (a.isImage || a.isVideo) && initial ? tugasAttachmentUrl(initial.id, a.id, token) : null,
+      kind: a.isImage ? "image" : a.isVideo ? "video" : "file",
     })),
   );
   const [uploading, setUploading] = useState(false);
+  /** Progres upload video aktif (0..1), null kalau tidak ada video yang sedang diunggah. */
+  const [videoProgress, setVideoProgress] = useState<{ name: string; fraction: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [submitting, setSubmitting] = useState(false);
@@ -104,7 +117,8 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       setError(`Maksimal ${MAX_ATTACHMENTS} lampiran.`);
       return;
     }
-    const tooBig = files.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    // Batas 12 MB hanya untuk non-video; video diunggah via endpoint streaming tanpa limit.
+    const tooBig = files.find((f) => !isVideoFile(f) && f.size > MAX_ATTACHMENT_BYTES);
     if (tooBig) {
       setError(`${tooBig.name} melebihi 12 MB.`);
       return;
@@ -113,7 +127,16 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
     try {
       const uploaded: DraftAttachment[] = [];
       for (const f of files) {
-        const r = await uploadSubmissionFile(f);
+        const video = isVideoFile(f);
+        let r: { fileId: string; size: number; mime: string };
+        if (video) {
+          setVideoProgress({ name: f.name, fraction: 0 });
+          r = await uploadVideoFile(f, (fraction) => setVideoProgress({ name: f.name, fraction }));
+          setVideoProgress(null);
+        } else {
+          r = await uploadSubmissionFile(f);
+        }
+        const isImage = /^image\//.test(f.type);
         uploaded.push({
           key: `${r.fileId}:${Date.now()}:${uploaded.length}`,
           fileId: r.fileId,
@@ -121,7 +144,8 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
           mime: r.mime || f.type,
           size: r.size,
           caption: "",
-          previewUrl: /^image\//.test(f.type) ? URL.createObjectURL(f) : null,
+          previewUrl: isImage || video ? URL.createObjectURL(f) : null,
+          kind: isImage ? "image" : video ? "video" : "file",
         });
       }
       setAttachments((prev) => [...prev, ...uploaded]);
@@ -129,6 +153,7 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       setError(getErrorMessage(err, "Upload lampiran gagal."));
     } finally {
       setUploading(false);
+      setVideoProgress(null);
     }
   }
 
@@ -325,22 +350,35 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
                 className="inline-flex items-center gap-2 rounded-2xl border-2 border-dashed border-slate-300 px-4 py-3 text-sm font-medium text-slate-600 transition hover:border-blue-400 hover:text-blue-600 disabled:opacity-50"
               >
                 {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
-                {uploading ? "Mengunggah..." : "Tambah gambar / file"}
+                {uploading ? "Mengunggah..." : "Tambah gambar / video / file"}
               </button>
               <p className="mt-1 text-xs text-slate-500">
-                Gambar (PNG/JPG/WebP), PDF, Word, PPT, ZIP. Maks 12 MB per file. Mahasiswa dan Asisten AI bisa melihatnya.
+                Gambar (PNG/JPG/WebP), video (MP4/WebM/MOV/MKV, tanpa batas ukuran), PDF, Word, PPT, ZIP. File non-video maks 12 MB. Mahasiswa bisa melihat dan mengunduhnya; Asisten AI bisa membaca gambar dan dokumen.
               </p>
+              {videoProgress && (
+                <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
+                  <div className="flex items-center justify-between text-xs text-blue-700">
+                    <span className="truncate">Mengunggah video {videoProgress.name}</span>
+                    <span className="ml-2 flex-none font-semibold">{Math.round(videoProgress.fraction * 100)}%</span>
+                  </div>
+                  <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
+                    <div className="h-full bg-blue-600 transition-[width]" style={{ width: `${Math.round(videoProgress.fraction * 100)}%` }} />
+                  </div>
+                </div>
+              )}
 
               {attachments.length > 0 && (
                 <ul className="mt-3 space-y-3">
                   {attachments.map((a) => (
                     <li key={a.key} className="flex gap-3 rounded-2xl border border-slate-200 bg-white p-3">
-                      {a.previewUrl ? (
+                      {a.kind === "image" && a.previewUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={a.previewUrl} alt={a.name} className="h-20 w-28 flex-none rounded-xl border border-slate-200 object-cover" />
+                      ) : a.kind === "video" && a.previewUrl ? (
+                        <video src={a.previewUrl} muted preload="metadata" className="h-20 w-28 flex-none rounded-xl border border-slate-200 bg-black object-cover" />
                       ) : (
                         <div className="flex h-20 w-28 flex-none items-center justify-center rounded-xl bg-slate-100 text-slate-500">
-                          <FileText className="h-6 w-6" />
+                          {a.kind === "video" ? <Video className="h-6 w-6" /> : <FileText className="h-6 w-6" />}
                         </div>
                       )}
                       <div className="min-w-0 flex-1 space-y-2">

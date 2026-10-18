@@ -66,6 +66,8 @@ const contentSecurityPolicy = [
   `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
+  // Video lampiran tugas: stream dari origin sendiri + preview blob lokal saat admin memilih file.
+  "media-src 'self' blob:",
   "font-src 'self' data:",
   `connect-src 'self' ${siteOrigin}${isDevelopment ? " ws: wss:" : ""}`,
   "worker-src 'self' blob:",

@@ -38,8 +38,10 @@
  * -----------------------------------------------------------------------------
  */
 
-import { promises as fs } from "fs";
-import { createHash } from "crypto";
+import { promises as fs, createWriteStream } from "fs";
+import { createHash, randomBytes } from "crypto";
+import { pipeline } from "stream/promises";
+import { Readable, Transform } from "stream";
 import path from "path";
 import { prisma } from "@/lib/db/prisma";
 import { Prisma } from "@prisma/client";
@@ -71,6 +73,7 @@ function extensionFor(originalName: string, mime: string): string {
   const ext = path.extname(originalName).toLowerCase();
   if (ext && ext.length <= 8) return ext;
   if (mime.startsWith("image/")) return `.${mime.split("/")[1]}`;
+  if (mime.startsWith("video/")) return `.${mime.split("/")[1].replace(/^x-/, "")}`;
   if (mime === "application/pdf") return ".pdf";
   if (mime === "application/zip") return ".zip";
   if (mime.includes("word")) return ".docx";
@@ -128,19 +131,92 @@ export async function saveUpload(input: {
   const filePath = path.join(ownerDir, `${sha256}${ext}`);
   await fs.writeFile(filePath, input.buffer);
 
-  // Catat di DB.
+  return recordUpload({
+    sha256,
+    ownerId: input.ownerId,
+    filePath,
+    mime: input.mime,
+    size: input.buffer.byteLength,
+    originalName: input.originalName,
+  });
+}
+
+/**
+ * Simpan file BESAR (video) langsung dari stream ke disk tanpa menahan
+ * seluruh isi di memori. SHA256 dihitung sambil menulis; file ditulis ke
+ * nama sementara lalu di-rename ke `${sha256}${ext}` setelah hash diketahui.
+ *
+ * Dedup tetap berlaku: kalau SHA256 sudah ada, file sementara dihapus dan
+ * row existing dikembalikan.
+ *
+ * @param input.stream - web ReadableStream (mis. `file.stream()` dari FormData)
+ */
+export async function saveUploadFromStream(input: {
+  ownerId: string;
+  stream: ReadableStream<Uint8Array>;
+  originalName: string;
+  mime: string;
+}): Promise<SavedUpload & { size: number }> {
+  const ext = extensionFor(input.originalName, input.mime);
+  const ownerDir = path.join(uploadDir(), input.ownerId);
+  await fs.mkdir(ownerDir, { recursive: true });
+  const tmpPath = path.join(ownerDir, `.tmp-${randomBytes(8).toString("hex")}${ext}`);
+
+  const hash = createHash("sha256");
+  let size = 0;
+  const hasher = new Transform({
+    transform(chunk: Buffer, _enc, cb) {
+      hash.update(chunk);
+      size += chunk.byteLength;
+      cb(null, chunk);
+    },
+  });
+
+  try {
+    await pipeline(Readable.fromWeb(input.stream as import("stream/web").ReadableStream<Uint8Array>), hasher, createWriteStream(tmpPath));
+  } catch (error) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    throw error;
+  }
+
+  const sha256 = hash.digest("hex");
+  if (size <= 0) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    throw new Error("File kosong.");
+  }
+
+  const existing = await prisma.fileUpload.findUnique({ where: { sha256 } });
+  if (existing) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    return { id: existing.id, sha256: existing.sha256, filePath: existing.filePath, deduplicated: true, size: existing.size };
+  }
+
+  const filePath = path.join(ownerDir, `${sha256}${ext}`);
+  await fs.rename(tmpPath, filePath);
+  const saved = await recordUpload({
+    sha256,
+    ownerId: input.ownerId,
+    filePath,
+    mime: input.mime,
+    size,
+    originalName: input.originalName,
+  });
+  return { ...saved, size };
+}
+
+/** Catat row `file_uploads`; tangani race unique SHA256 sebagai dedup. */
+async function recordUpload(data: {
+  sha256: string;
+  ownerId: string;
+  filePath: string;
+  mime: string;
+  size: number;
+  originalName: string;
+}): Promise<SavedUpload> {
+  const { sha256, filePath } = data;
   let row;
   try {
-    row = await prisma.fileUpload.create({
-      data: {
-        sha256,
-        ownerId: input.ownerId,
-        filePath,
-        mime: input.mime,
-        size: input.buffer.byteLength,
-        originalName: input.originalName,
-      },
-    });
+    row = await prisma.fileUpload.create({ data });
   } catch (error) {
     // Dua upload identik yang masuk bersamaan bisa sama-sama lolos findUnique.
     // Jadikan unique SHA256 sebagai dedup normal, lalu hapus file sementara.

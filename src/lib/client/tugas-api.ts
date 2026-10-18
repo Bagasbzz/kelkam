@@ -88,6 +88,8 @@ export interface TugasAttachment {
   size: number;
   caption: string;
   isImage: boolean;
+  /** Video yang bisa diputar langsung di browser (hanya admin yang bisa mengunggah). */
+  isVideo?: boolean;
 }
 
 export interface TugasAttachmentInput {
@@ -111,9 +113,10 @@ export interface TugasSummary {
   updatedAt: string;
 }
 
-/** URL publik lampiran tugas (butuh token course). */
-export function tugasAttachmentUrl(tugasId: string, attachmentId: string, token: string) {
-  return `/api/tugas/tugas/${encodeURIComponent(tugasId)}/attachments/${encodeURIComponent(attachmentId)}?token=${encodeURIComponent(token)}`;
+/** URL publik lampiran tugas (butuh token course). `download: true` memaksa unduh (bukan putar inline). */
+export function tugasAttachmentUrl(tugasId: string, attachmentId: string, token: string, opts?: { download?: boolean }) {
+  const base = `/api/tugas/tugas/${encodeURIComponent(tugasId)}/attachments/${encodeURIComponent(attachmentId)}?token=${encodeURIComponent(token)}`;
+  return opts?.download ? `${base}&download=1` : base;
 }
 
 export interface SubmissionRow {
@@ -617,6 +620,54 @@ export async function uploadSubmissionFile(file: File): Promise<{
   }
 
   throw lastError instanceof Error ? lastError : new ApiClientError(0, "Upload gagal.");
+}
+
+export const VIDEO_MIME_CLIENT_RE = /^video\/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$/i;
+
+/**
+ * Upload VIDEO (khusus admin) via `POST /api/files/upload-video`.
+ *
+ * Body dikirim raw (bukan multipart) supaya server bisa stream ke disk tanpa
+ * batas ukuran. Pakai XHR (bukan fetch) agar ada progress upload.
+ * `onProgress` menerima 0..1.
+ */
+export function uploadVideoFile(
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<{ fileId: string; sha256: string; size: number; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/files/upload-video");
+    xhr.withCredentials = true;
+    xhr.responseType = "json";
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    // Tanpa timeout: video besar + koneksi lambat bisa butuh waktu lama.
+    xhr.timeout = 0;
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total);
+    };
+    xhr.onerror = () => reject(new ApiClientError(0, "Koneksi ke server terputus saat mengunggah video."));
+    xhr.onabort = () => reject(new ApiClientError(0, "Upload video dibatalkan."));
+    xhr.onload = () => {
+      const json = (xhr.response ?? null) as {
+        success?: boolean;
+        error?: string;
+        data?: { fileId: string; sha256: string; size: number; mime: string };
+      } | null;
+      if (xhr.status >= 200 && xhr.status < 300 && json?.success && json.data) {
+        resolve(json.data);
+        return;
+      }
+      const fallback =
+        xhr.status === 413
+          ? "Video ditolak server (terlalu besar untuk batas server hosting)."
+          : "Upload video gagal.";
+      reject(new ApiClientError(xhr.status, json?.error || fallback));
+    };
+    xhr.send(file);
+  });
 }
 
 export function fetchCourseMaterials(courseId: string, token: string) {
