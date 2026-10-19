@@ -642,6 +642,8 @@ export function uploadVideoFile(
     xhr.responseType = "json";
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    // Server membandingkan byte diterima dengan ukuran ini → upload terpotong ditolak.
+    xhr.setRequestHeader("X-File-Size", String(file.size));
     // Tanpa timeout: video besar + koneksi lambat bisa butuh waktu lama.
     xhr.timeout = 0;
 

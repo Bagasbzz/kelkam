@@ -104,6 +104,14 @@ const nextConfig: NextConfig = {
   },
   /** Hilangkan header "X-Powered-By: Next.js" (info disclosure). */
   poweredByHeader: false,
+  experimental: {
+    /**
+     * Default 10 MB: body request yang melewati proxy.ts di atas batas ini
+     * DIPOTONG diam-diam. Upload video sudah dikecualikan dari matcher proxy,
+     * ini cadangan agar upload lain (mis. materi) tidak terpotong.
+     */
+    proxyClientMaxBodySize: "64mb",
+  },
   /** Pasang security headers di semua response. */
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

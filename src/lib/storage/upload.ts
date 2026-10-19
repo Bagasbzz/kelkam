@@ -84,6 +84,22 @@ function extensionFor(originalName: string, mime: string): string {
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Upload terpotong: byte diterima tidak sama dengan ukuran file asli. */
+export class IncompleteUploadError extends Error {
+  constructor(public readonly received: number, public readonly expected: number) {
+    super(`Upload tidak lengkap: diterima ${received} dari ${expected} byte.`);
+    this.name = "IncompleteUploadError";
+  }
+}
+
+/** Isi file tidak cocok dengan tipe yang diklaim (magic bytes salah). */
+export class InvalidSignatureError extends Error {
+  constructor() {
+    super("Isi file tidak sesuai dengan tipenya.");
+    this.name = "InvalidSignatureError";
+  }
+}
+
 export interface SavedUpload {
   id: string;
   sha256: string;
@@ -156,6 +172,13 @@ export async function saveUploadFromStream(input: {
   stream: ReadableStream<Uint8Array>;
   originalName: string;
   mime: string;
+  /** Ukuran yang diharapkan (bytes). Kalau diisi & tidak cocok → file dibuang (anti file terpotong). */
+  expectedSize?: number;
+  /**
+   * Validasi signature (magic bytes) dari 16 byte pertama. Return false → upload
+   * dibatalkan dengan `InvalidSignatureError` sebelum file selesai ditulis.
+   */
+  validateHead?: (head: Buffer) => boolean;
 }): Promise<SavedUpload & { size: number }> {
   const ext = extensionFor(input.originalName, input.mime);
   const ownerDir = path.join(uploadDir(), input.ownerId);
@@ -164,11 +187,31 @@ export async function saveUploadFromStream(input: {
 
   const hash = createHash("sha256");
   let size = 0;
+  // Kumpulkan beberapa byte awal untuk cek signature sebelum lanjut menulis.
+  const HEAD_BYTES = 16;
+  let head: Buffer | null = input.validateHead ? Buffer.alloc(0) : null;
+  const checkHead = (): Error | null => {
+    if (!head || !input.validateHead) return null;
+    const ok = input.validateHead(head);
+    head = null;
+    return ok ? null : new InvalidSignatureError();
+  };
   const hasher = new Transform({
     transform(chunk: Buffer, _enc, cb) {
+      if (head) {
+        head = Buffer.concat([head, chunk.subarray(0, HEAD_BYTES - head.length)]);
+        if (head.length >= HEAD_BYTES) {
+          const err = checkHead();
+          if (err) return cb(err);
+        }
+      }
       hash.update(chunk);
       size += chunk.byteLength;
       cb(null, chunk);
+    },
+    flush(cb) {
+      // File lebih kecil dari HEAD_BYTES: tetap divalidasi.
+      cb(checkHead());
     },
   });
 
@@ -183,6 +226,10 @@ export async function saveUploadFromStream(input: {
   if (size <= 0) {
     await fs.unlink(tmpPath).catch(() => undefined);
     throw new Error("File kosong.");
+  }
+  if (input.expectedSize !== undefined && size !== input.expectedSize) {
+    await fs.unlink(tmpPath).catch(() => undefined);
+    throw new IncompleteUploadError(size, input.expectedSize);
   }
 
   const existing = await prisma.fileUpload.findUnique({ where: { sha256 } });
