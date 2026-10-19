@@ -1,13 +1,13 @@
-import { promises as fs } from "node:fs";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { requireCourseAdmin } from "@/lib/server/auth";
 import { ApiRequestError, publicErrorResponse } from "@/lib/server/request-guards";
+import { contentDisposition, streamFileResponse } from "@/lib/server/file-response";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ submissionId: string }> },
 ) {
   try {
@@ -23,16 +23,14 @@ export async function GET(
     await requireCourseAdmin(submission.tugas.courseId);
     if (!submission.fileUpload) throw new ApiRequestError(404, "Pengumpulan ini tidak memiliki file.");
 
-    const buffer = await fs.readFile(submission.fileUpload.filePath);
-    const fileName = submission.fileUpload.originalName.replace(/[\\/\r\n"\x00-\x1f]/g, "_") || "lampiran";
-    return new NextResponse(buffer, {
-      headers: {
-        "Content-Type": "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${fileName.replace(/[^\x20-\x7e]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-      },
+    // Streaming (bukan readFile) → file besar tidak ditahan di memori.
+    const res = await streamFileResponse(req, submission.fileUpload.filePath, {
+      "Content-Type": "application/octet-stream",
+      "Content-Disposition": contentDisposition("attachment", submission.fileUpload.originalName, "lampiran"),
+      "Cache-Control": "private, no-store",
     });
+    if (!res) throw new ApiRequestError(404, "File tidak ditemukan di server.");
+    return res;
   } catch (error) {
     if (error instanceof ApiRequestError) {
       return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });

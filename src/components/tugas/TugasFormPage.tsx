@@ -15,18 +15,15 @@ import {
   fetchCourseByToken,
   tugasAttachmentUrl,
   updateTugas,
-  uploadSubmissionFile,
-  uploadVideoFile,
+  uploadAdminFile,
   type CourseSummary,
   type TugasSummary,
 } from "@/lib/client/tugas-api";
 import { useAuth } from "@/components/AuthProvider";
 
 const MAX_ATTACHMENTS = 8;
-/** Batas untuk non-video (ikut /api/files/upload). Video TIDAK dibatasi (endpoint streaming khusus admin). */
-const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
-const ATTACHMENT_ACCEPT =
-  "image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,video/x-matroska,.mp4,.m4v,.webm,.mov,.mkv,.avi,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip";
+/** Admin tidak dibatasi ukuran; tipe executable/skrip ditolak server. */
+const ATTACHMENT_ACCEPT = "*/*";
 
 /** Deteksi video dari MIME browser atau ekstensi (MKV/AVI sering MIME kosong). */
 function isVideoFile(f: File): boolean {
@@ -117,26 +114,16 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
       setError(`Maksimal ${MAX_ATTACHMENTS} lampiran.`);
       return;
     }
-    // Batas 12 MB hanya untuk non-video; video diunggah via endpoint streaming tanpa limit.
-    const tooBig = files.find((f) => !isVideoFile(f) && f.size > MAX_ATTACHMENT_BYTES);
-    if (tooBig) {
-      setError(`${tooBig.name} melebihi 12 MB.`);
-      return;
-    }
+    // Admin: tanpa batas ukuran (upload streaming ke /api/files/upload-admin).
     setUploading(true);
     try {
       const uploaded: DraftAttachment[] = [];
       for (const f of files) {
         const video = isVideoFile(f);
-        let r: { fileId: string; size: number; mime: string };
-        if (video) {
-          setVideoProgress({ name: f.name, fraction: 0 });
-          r = await uploadVideoFile(f, (fraction) => setVideoProgress({ name: f.name, fraction }));
-          setVideoProgress(null);
-        } else {
-          r = await uploadSubmissionFile(f);
-        }
-        const isImage = /^image\//.test(f.type);
+        setVideoProgress({ name: f.name, fraction: 0 });
+        const r = await uploadAdminFile(f, (fraction) => setVideoProgress({ name: f.name, fraction }));
+        setVideoProgress(null);
+        const isImage = /^image\/(png|jpeg|webp|gif)$/.test(r.mime);
         uploaded.push({
           key: `${r.fileId}:${Date.now()}:${uploaded.length}`,
           fileId: r.fileId,
@@ -353,12 +340,12 @@ export default function TugasFormPage({ token, initial }: TugasFormPageProps) {
                 {uploading ? "Mengunggah..." : "Tambah gambar / video / file"}
               </button>
               <p className="mt-1 text-xs text-slate-500">
-                Gambar (PNG/JPG/WebP), video (MP4/WebM/MOV/MKV, tanpa batas ukuran), PDF, Word, PPT, ZIP. File non-video maks 12 MB. Mahasiswa bisa melihat dan mengunduhnya; Asisten AI bisa membaca gambar dan dokumen.
+                Gambar, video, PDF, Word, PPT, Excel, ZIP, dan file lain, tanpa batas ukuran (program/skrip .exe/.bat dll diblokir). Mahasiswa bisa melihat dan mengunduhnya; Asisten AI bisa membaca gambar dan dokumen.
               </p>
               {videoProgress && (
                 <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
                   <div className="flex items-center justify-between text-xs text-blue-700">
-                    <span className="truncate">Mengunggah video {videoProgress.name}</span>
+                    <span className="truncate">Mengunggah {videoProgress.name}</span>
                     <span className="ml-2 flex-none font-semibold">{Math.round(videoProgress.fraction * 100)}%</span>
                   </div>
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-blue-100">

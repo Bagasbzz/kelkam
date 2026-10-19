@@ -346,6 +346,81 @@ export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
   return { content: text, charCount: text.length, kind: "guide", truncated };
 }
 
+/** Decode entity XML dasar (OOXML). */
+function decodeXml(s: string): string {
+  return s
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n: string) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&amp;/g, "&");
+}
+
+/** Gabungan semua <t> di dalam satu fragmen XML (rich text punya beberapa run). */
+function joinXmlText(fragment: string): string {
+  return [...fragment.matchAll(/<t(?:\s[^>]*)?>([^<]*)<\/t>/g)].map((m) => decodeXml(m[1])).join("");
+}
+
+const MAX_XLSX_SHEETS = 20;
+const MAX_XLSX_ROWS_PER_SHEET = 2_000;
+
+/**
+ * XLSX = ZIP berisi xl/worksheets/sheetN.xml + xl/sharedStrings.xml.
+ * Output per sheet: baris dipisah newline, sel dipisah " | " (mudah dibaca AI).
+ * Format .xls lama (binary) tidak didukung.
+ */
+export async function extractXlsx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File XLSX tidak valid (format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau CSV).");
+  const JSZip = (await import("jszip")).default;
+  const zip = await withTimeout(JSZip.loadAsync(buffer));
+
+  // Anti ZIP bomb: total ukuran XML yang akan dibaca dibatasi.
+  const xmlFiles = Object.values(zip.files).filter((f) => !f.dir && /^xl\/(sharedStrings|workbook|worksheets\/sheet\d+)\.xml$/i.test(f.name));
+  const declaredTotal = xmlFiles.reduce((sum, f) => sum + declaredUncompressedSize(f), 0);
+  if (declaredTotal > MAX_ZIP_UNCOMPRESSED_BYTES) throw new ApiRequestError(413, "Isi spreadsheet terlalu besar untuk dibaca.");
+
+  const read = async (name: string) => (zip.files[name] ? withTimeout(zip.files[name].async("string"), 10_000) : "");
+
+  const shared = [...(await read("xl/sharedStrings.xml")).matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => joinXmlText(m[1]));
+  const sheetNames = [...(await read("xl/workbook.xml")).matchAll(/<sheet\b[^>]*\bname="([^"]*)"/g)].map((m) => decodeXml(m[1]));
+  const sheetFiles = Object.keys(zip.files)
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((a, b) => Number(/sheet(\d+)/i.exec(a)?.[1] ?? 0) - Number(/sheet(\d+)/i.exec(b)?.[1] ?? 0))
+    .slice(0, MAX_XLSX_SHEETS);
+  if (!sheetFiles.length) throw new ApiRequestError(415, "XLSX tidak berisi sheet yang bisa dibaca.");
+
+  const chunks: string[] = [];
+  let total = 0;
+  for (const [i, name] of sheetFiles.entries()) {
+    if (total >= maxChars) break;
+    const xml = await read(name);
+    const lines: string[] = [];
+    for (const row of [...xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)].slice(0, MAX_XLSX_ROWS_PER_SHEET)) {
+      const cells: string[] = [];
+      for (const cell of row[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attrs = cell[1];
+        const inner = cell[2] ?? "";
+        const type = /\bt="([^"]+)"/.exec(attrs)?.[1];
+        const value = /<v>([^<]*)<\/v>/.exec(inner)?.[1];
+        let text = "";
+        if (type === "s" && value !== undefined) text = shared[Number(value)] ?? "";
+        else if (type === "inlineStr") text = joinXmlText(inner);
+        else if (type === "b" && value !== undefined) text = value === "1" ? "TRUE" : "FALSE";
+        else if (value !== undefined) text = decodeXml(value);
+        cells.push(text.replace(/\s+/g, " ").trim());
+      }
+      // Buang sel kosong di ujung baris; lewati baris kosong.
+      while (cells.length && !cells[cells.length - 1]) cells.pop();
+      if (cells.length) lines.push(cells.join(" | "));
+    }
+    if (!lines.length) continue;
+    const block = `[Sheet: ${sheetNames[i] || `Sheet${i + 1}`}]\n${lines.join("\n")}`;
+    chunks.push(block);
+    total += block.length;
+  }
+  const { text, truncated } = sanitizeText(chunks.join("\n\n"), maxChars);
+  return { content: text, charCount: text.length, kind: "note", truncated };
+}
+
 /**
  * Baca SATU file di dalam ZIP (path persis), dipakai Admin AI untuk review
  * kode secara utuh. Mendukung file teks/kode, DOCX, PDF, PPTX di dalam ZIP.
@@ -564,6 +639,9 @@ export async function extractTextFromBuffer(
   if (lower.endsWith(".pdf")) return extractPdf(buffer, maxChars);
   if (lower.endsWith(".pptx")) return extractPptx(buffer, maxChars);
   if (lower.endsWith(".ppt")) throw new ApiRequestError(415, "Format .ppt lama tidak didukung; unggah ulang sebagai .pptx atau PDF.");
+  if (lower.endsWith(".xlsx")) return extractXlsx(buffer, maxChars);
+  if (lower.endsWith(".xls")) throw new ApiRequestError(415, "Format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau CSV.");
+  if (lower.endsWith(".doc")) throw new ApiRequestError(415, "Format .doc lama tidak didukung; simpan ulang sebagai .docx atau PDF.");
   if (lower.endsWith(".zip")) return extractZip(buffer, options);
   if (TEXT_EXTENSIONS.test(lower)) {
     const { text, truncated } = sanitizeText(buffer.toString("utf8"), maxChars);
@@ -576,6 +654,6 @@ export async function extractTextFromBuffer(
 
   throw new ApiRequestError(
     415,
-    "Format belum didukung. Gunakan PDF, DOCX, PPTX, ZIP, TXT/MD/CSV/JSON, atau file kode.",
+    "Format belum didukung. Gunakan PDF, DOCX, PPTX, XLSX, ZIP, gambar (PNG/JPG/WebP/GIF), TXT/MD/CSV/JSON, atau file kode.",
   );
 }

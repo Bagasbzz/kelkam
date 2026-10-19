@@ -22,6 +22,15 @@ import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type
 import type { VerifiedSource } from "@/lib/references/find-sources";
 import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
 import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
+import { MAX_FILE_BYTES } from "@/lib/file-limits";
+
+/** Format bahan Laporan: dokumen, spreadsheet, arsip, teks/kode, dan gambar (dibaca AI vision). */
+const MATERIAL_ACCEPT = [
+  ".pdf", ".docx", ".pptx", ".xlsx", ".zip", ".txt", ".md", ".csv", ".json",
+  ".py", ".js", ".ts", ".java", ".php", ".c", ".cpp", ".sql",
+  ".png", ".jpg", ".jpeg", ".webp", ".gif",
+  "image/png", "image/jpeg", "image/webp", "image/gif",
+].join(",");
 
 const getErrorMessage = (e: unknown) => baseErrorMessage(e, "Terjadi kesalahan.");
 
@@ -324,6 +333,9 @@ export default function LaporanPage() {
 
   const uploadMaterial = async (file: File) => {
     if (!activeId) return;
+    // Validasi awal di klien (server tetap memvalidasi ulang): user 12 MB, admin 50 MB.
+    const limit = user?.role === "ADMIN" ? 50 * 1024 * 1024 : MAX_FILE_BYTES;
+    if (file.size > limit) { setError(`"${file.name}" melebihi ${Math.round(limit / 1048576)} MB.`); return; }
     setUploading(true); setError(null);
     try {
       const form = new FormData();
@@ -738,7 +750,7 @@ export default function LaporanPage() {
                   {detail.draft && <Chip onClick={() => send("Kirim file DOCX laporan terbaru.")}>Kirim file DOCX</Chip>}
                   <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Unggah bahan
-                    <input type="file" className="hidden" accept=".pdf,.docx,.zip,.txt,.md" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
+                    <input type="file" className="hidden" accept={MATERIAL_ACCEPT} disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadMaterial(f); e.target.value = ""; }} />
                   </label>
                   <label className="ml-auto inline-flex items-center gap-1 text-sm text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
                 </div>

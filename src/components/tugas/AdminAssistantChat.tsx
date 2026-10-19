@@ -16,7 +16,6 @@ import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import AgentRunProgress from "@/components/ui/AgentRunProgress";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
-import { MAX_FILE_BYTES, MAX_FILE_LABEL } from "@/lib/file-limits";
 import {
   assistantActiveRunUrl,
   assistantRunUrl,
@@ -24,7 +23,7 @@ import {
   fetchAssistantHistory,
   fetchAssistantSessions,
   openAssistantRunStream,
-  uploadSubmissionFile,
+  uploadAdminFile,
   type AssistantAttachment,
   type AssistantSessionSummary,
 } from "@/lib/client/tugas-api";
@@ -47,7 +46,7 @@ interface PendingFile {
 }
 
 const MAX_ATTACHMENTS = 5;
-const ACCEPT_ATTACHMENTS = ".pdf,.docx,.pptx,.zip,.txt,.md,.csv,.json,.py,.js,.ts,.java,.php,.c,.cpp,.sql,image/png,image/jpeg,image/webp,image/gif";
+const ACCEPT_ATTACHMENTS = ".pdf,.docx,.pptx,.xlsx,.zip,.txt,.md,.csv,.json,.py,.js,.ts,.java,.php,.c,.cpp,.sql,image/png,image/jpeg,image/webp,image/gif";
 
 const QUICK_PROMPTS = [
   "Siapa yang belum kumpul di pertemuan terakhir?",
@@ -223,14 +222,13 @@ export default function AdminAssistantChat({ courseId, initialPrompt }: { course
     if (!list?.length) return;
     const picked = Array.from(list).slice(0, MAX_ATTACHMENTS - files.length);
     if (!picked.length) { setError(`Maksimal ${MAX_ATTACHMENTS} lampiran per pesan.`); return; }
-    const tooBig = picked.find((f) => f.size > MAX_FILE_BYTES);
-    if (tooBig) { setError(`"${tooBig.name}" melebihi ${MAX_FILE_LABEL}.`); return; }
+    // Admin: tanpa batas ukuran (upload streaming). Isi dokumen > 50 MB tidak dibaca AI.
     setUploading(true);
     setError(null);
     try {
       for (const f of picked) {
-        const r = await uploadSubmissionFile(f);
-        const isImage = /^image\//.test(f.type);
+        const r = await uploadAdminFile(f);
+        const isImage = /^image\/(png|jpeg|webp|gif)$/.test(r.mime);
         setFiles((prev) => prev.some((p) => p.fileId === r.fileId) ? prev : [...prev, { fileId: r.fileId, name: f.name, size: f.size, isImage, previewUrl: isImage ? URL.createObjectURL(f) : undefined }]);
       }
     } catch (err) {

@@ -6,6 +6,10 @@
 import fs from "node:fs/promises";
 import { prisma } from "@/lib/db/prisma";
 import { extractTextFromBuffer, type ZipManifest } from "@/lib/server/extract-text";
+import { ApiRequestError } from "@/lib/server/request-guards";
+
+/** Batas ukuran file yang diekstrak teksnya (hindari OOM). */
+const MAX_EXTRACT_FILE_BYTES = 50 * 1024 * 1024;
 
 export interface SubmissionText {
   submissionId: string;
@@ -28,6 +32,13 @@ export async function getOrExtractFileText(fileUploadId: string, options: { refr
 
   const file = await prisma.fileUpload.findUnique({ where: { id: fileUploadId } });
   if (!file) return null;
+  // File admin bisa sangat besar (upload tanpa batas) → jangan dimuat utuh ke memori.
+  if (file.size > MAX_EXTRACT_FILE_BYTES) {
+    throw new ApiRequestError(
+      413,
+      `File terlalu besar untuk dibaca otomatis (> ${Math.round(MAX_EXTRACT_FILE_BYTES / 1048576)} MB).`,
+    );
+  }
 
   let buffer: Buffer;
   try {

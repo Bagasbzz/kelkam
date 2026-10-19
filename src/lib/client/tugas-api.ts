@@ -625,33 +625,33 @@ export async function uploadSubmissionFile(file: File): Promise<{
 export const VIDEO_MIME_CLIENT_RE = /^video\/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$/i;
 
 /**
- * Upload VIDEO (khusus admin) via `POST /api/files/upload-video`.
+ * Upload file APAPUN untuk ADMIN via `POST /api/files/upload-admin` (tanpa batas ukuran).
  *
- * Body dikirim raw (bukan multipart) supaya server bisa stream ke disk tanpa
- * batas ukuran. Pakai XHR (bukan fetch) agar ada progress upload.
- * `onProgress` menerima 0..1.
+ * Body dikirim raw (bukan multipart) supaya server bisa stream ke disk.
+ * Pakai XHR (bukan fetch) agar ada progress upload. `onProgress` menerima 0..1.
  */
-export function uploadVideoFile(
+export function uploadAdminFile(
   file: File,
   onProgress?: (fraction: number) => void,
+  endpoint = "/api/files/upload-admin",
 ): Promise<{ fileId: string; sha256: string; size: number; mime: string }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/files/upload-video");
+    xhr.open("POST", endpoint);
     xhr.withCredentials = true;
     xhr.responseType = "json";
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
     // Server membandingkan byte diterima dengan ukuran ini → upload terpotong ditolak.
     xhr.setRequestHeader("X-File-Size", String(file.size));
-    // Tanpa timeout: video besar + koneksi lambat bisa butuh waktu lama.
+    // Tanpa timeout: file besar + koneksi lambat bisa butuh waktu lama.
     xhr.timeout = 0;
 
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total);
     };
-    xhr.onerror = () => reject(new ApiClientError(0, "Koneksi ke server terputus saat mengunggah video."));
-    xhr.onabort = () => reject(new ApiClientError(0, "Upload video dibatalkan."));
+    xhr.onerror = () => reject(new ApiClientError(0, `Koneksi ke server terputus saat mengunggah "${file.name}".`));
+    xhr.onabort = () => reject(new ApiClientError(0, "Upload dibatalkan."));
     xhr.onload = () => {
       const json = (xhr.response ?? null) as {
         success?: boolean;
@@ -664,12 +664,20 @@ export function uploadVideoFile(
       }
       const fallback =
         xhr.status === 413
-          ? "Video ditolak server (terlalu besar untuk batas server hosting)."
-          : "Upload video gagal.";
+          ? "File ditolak server (terlalu besar untuk batas server hosting)."
+          : "Upload gagal.";
       reject(new ApiClientError(xhr.status, json?.error || fallback));
     };
     xhr.send(file);
   });
+}
+
+/** Upload VIDEO khusus admin (endpoint memastikan MIME video). */
+export function uploadVideoFile(
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<{ fileId: string; sha256: string; size: number; mime: string }> {
+  return uploadAdminFile(file, onProgress, "/api/files/upload-video");
 }
 
 export function fetchCourseMaterials(courseId: string, token: string) {
@@ -679,18 +687,21 @@ export function fetchCourseMaterials(courseId: string, token: string) {
   );
 }
 
+/**
+ * Upload materi course (admin). File dikirim dulu ke /api/files/upload-admin
+ * (streaming, tanpa batas ukuran, ada progress), lalu didaftarkan sebagai materi.
+ */
 export async function uploadCourseMaterial(
   courseId: string,
   file: File,
   meta: { title?: string; description?: string } = {},
+  onProgress?: (fraction: number) => void,
 ) {
-  const form = new FormData();
-  form.append("file", file);
-  if (meta.title) form.append("title", meta.title);
-  if (meta.description) form.append("description", meta.description);
+  const up = await uploadAdminFile(file, onProgress);
   const resp = await authenticatedFetch(`/api/tugas/courses/${courseId}/materials`, {
     method: "POST",
-    body: form,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fileId: up.fileId, title: meta.title || "", description: meta.description || "" }),
   });
   const payload = (await resp.json().catch(() => ({ success: false }))) as {
     success?: boolean;

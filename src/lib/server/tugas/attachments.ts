@@ -5,6 +5,7 @@
  */
 import { prisma } from "@/lib/db/prisma";
 import { ApiRequestError } from "@/lib/server/request-guards";
+import { isBlockedFileName, sanitizeMime } from "@/lib/security/file-types";
 
 export const MAX_TUGAS_ATTACHMENTS = 8;
 export const IMAGE_MIME_RE = /^image\/(png|jpe?g|webp|gif)$/i;
@@ -12,32 +13,17 @@ export const IMAGE_MIME_RE = /^image\/(png|jpe?g|webp|gif)$/i;
 export const VIDEO_MIME_RE = /^video\/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$/i;
 
 /**
- * MIME yang boleh jadi lampiran tugas. Lampiran diakses PUBLIK via token course
- * dan gambar/video di-serve inline, jadi tipe aktif (HTML, SVG, JS) ditolak untuk
- * mencegah stored-XSS lewat file yang diunggah admin.
+ * Lampiran tugas boleh tipe apa pun KECUALI:
+ *   - MIME aktif (HTML/SVG/JS/XML) → bisa stored-XSS bila di-render dari origin kita;
+ *   - ekstensi executable/skrip (.exe, .bat, .ps1, ...).
+ * File baru dari endpoint upload sudah disanitasi (MIME aktif → octet-stream),
+ * cek ini menjaga row lama. Endpoint lampiran hanya menyajikan gambar/video
+ * inline; tipe lain selalu `Content-Disposition: attachment` + nosniff.
  */
-const ALLOWED_ATTACHMENT_MIME_RE = new RegExp(
-  [
-    "^image/(png|jpe?g|webp|gif)$",
-    "^video/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$",
-    "^application/pdf$",
-    "^application/zip$",
-    "^application/x-zip-compressed$",
-    "^application/msword$",
-    "^application/vnd\\.openxmlformats-officedocument\\.wordprocessingml\\.document$",
-    "^application/vnd\\.ms-powerpoint$",
-    "^application/vnd\\.openxmlformats-officedocument\\.presentationml\\.presentation$",
-    "^application/vnd\\.ms-excel$",
-    "^application/vnd\\.openxmlformats-officedocument\\.spreadsheetml\\.sheet$",
-    "^text/plain$",
-    "^text/csv$",
-    "^application/octet-stream$",
-  ].join("|"),
-  "i",
-);
-
 export function isAllowedAttachmentMime(mime: string): boolean {
-  return ALLOWED_ATTACHMENT_MIME_RE.test(mime);
+  const base = (mime || "").split(";")[0].trim().toLowerCase();
+  // sanitizeMime mengubah MIME aktif menjadi octet-stream; kalau berubah → aktif → tolak.
+  return base === "application/octet-stream" || sanitizeMime(base) === base || base === "image/jpg";
 }
 
 export interface TugasAttachmentInput {
@@ -93,11 +79,11 @@ export async function buildAttachmentCreates(adminId: string, input: TugasAttach
   const ownedById = new Map(owned.map((f) => [f.id, f]));
   const missing = unique.find((a) => !ownedById.has(a.fileId));
   if (missing) throw new ApiRequestError(400, "Lampiran tidak ditemukan atau bukan milik Anda.");
-  const disallowed = owned.find((f) => !isAllowedAttachmentMime(f.mime));
+  const disallowed = owned.find((f) => !isAllowedAttachmentMime(f.mime) || isBlockedFileName(f.originalName));
   if (disallowed) {
     throw new ApiRequestError(
       400,
-      `Tipe file "${disallowed.originalName}" tidak didukung sebagai lampiran. Gunakan gambar (PNG/JPG/WebP/GIF), video (MP4/WebM/MOV/MKV), PDF, Word, PPT, Excel, teks, atau ZIP.`,
+      `File "${disallowed.originalName}" tidak boleh dijadikan lampiran (HTML/SVG/skrip/program diblokir demi keamanan). Kompres ke ZIP bila perlu.`,
     );
   }
   return unique.map((a, i) => ({

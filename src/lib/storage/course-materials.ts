@@ -88,12 +88,59 @@ export async function saveCourseMaterial(input: {
   return material;
 }
 
+/**
+ * Simpan materi dari file yang SUDAH ada di disk (hasil /api/files/upload-admin).
+ * Disalin via copyFile (kernel-level, tanpa buffer di memori) → aman untuk file besar.
+ * Disalin, bukan dipindah, karena FileUpload sumber bisa dipakai ulang (dedup SHA256).
+ */
+export async function saveCourseMaterialFromFile(input: {
+  courseId: string;
+  sourcePath: string;
+  originalName: string;
+  mime: string;
+  title?: string;
+  description?: string;
+}): Promise<CourseMaterialFile> {
+  const extension = path.extname(input.originalName).toLowerCase();
+  const id = randomUUID();
+  const directory = courseDirectory(input.courseId);
+  await fs.mkdir(directory, { recursive: true });
+  const target = filePath(input.courseId, id, extension);
+  await fs.copyFile(input.sourcePath, target);
+  const { size } = await fs.stat(target);
+  const material: CourseMaterialFile = {
+    id,
+    originalName: input.originalName,
+    mime: input.mime,
+    size,
+    uploadedAt: new Date().toISOString(),
+    title: input.title || undefined,
+    description: input.description || undefined,
+  };
+  await fs.writeFile(metadataPath(input.courseId, id), JSON.stringify(material), "utf8");
+  return material;
+}
+
+/** Metadata + path fisik materi TANPA membaca isi file (untuk streaming download). */
+export async function getCourseMaterialFile(courseId: string, materialId: string): Promise<{
+  material: CourseMaterialFile;
+  path: string;
+} | null> {
+  try {
+    const material = JSON.parse(await fs.readFile(metadataPath(courseId, materialId), "utf8")) as CourseMaterialFile;
+    return { material, path: filePath(courseId, material.id, path.extname(material.originalName).toLowerCase()) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 export async function updateCourseMaterial(
   courseId: string,
   materialId: string,
   patch: { title?: string; description?: string },
 ): Promise<CourseMaterialFile | null> {
-  const found = await readCourseMaterial(courseId, materialId);
+  const found = await getCourseMaterialFile(courseId, materialId);
   if (!found) return null;
   const material: CourseMaterialFile = {
     ...found.material,
@@ -119,11 +166,14 @@ export async function readCourseMaterial(courseId: string, materialId: string): 
 }
 
 export async function deleteCourseMaterial(courseId: string, materialId: string): Promise<boolean> {
-  const material = await readCourseMaterial(courseId, materialId);
-  if (!material) return false;
+  // Pakai metadata saja (jangan baca isi file → materi besar tidak dimuat ke memori).
+  const found = await getCourseMaterialFile(courseId, materialId);
+  if (!found) return false;
   await Promise.all([
-    fs.unlink(filePath(courseId, material.material.id, path.extname(material.material.originalName).toLowerCase())),
-    fs.unlink(metadataPath(courseId, material.material.id)),
+    fs.unlink(found.path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+    }),
+    fs.unlink(metadataPath(courseId, found.material.id)),
   ]);
   return true;
 }

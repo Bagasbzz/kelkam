@@ -204,9 +204,10 @@ export async function proxy(request: NextRequest) {
 // ---------------------------------------------------------------------------
 
 export const config = {
-  // PENTING: `/api/files/upload-video` sengaja DIKECUALIKAN. Kalau proxy match,
-  // Next.js meng-clone body request dengan batas `proxyClientMaxBodySize` dan
-  // memotong body di atas batas itu secara diam-diam → video tersimpan rusak.
-  // Route tersebut melakukan auth (requireAdmin) + rate limit sendiri.
-  matcher: ["/api/((?!files/upload-video).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*"],
+  // PENTING: upload raw admin (`/api/files/upload-admin`, `/api/files/upload-video`)
+  // sengaja DIKECUALIKAN. Kalau proxy match, Next.js meng-clone body request
+  // dengan batas `proxyClientMaxBodySize` dan memotong body di atas batas itu
+  // secara diam-diam → file tersimpan rusak. Route tersebut melakukan auth
+  // (requireAdmin) + rate limit sendiri.
+  matcher: ["/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*"],
 };

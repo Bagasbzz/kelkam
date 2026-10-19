@@ -562,7 +562,18 @@ async function readSubmissionFile(ctx: ToolContext, args: { submissionId: string
 
 /** Isi materi (PPTX/PDF/DOCX) yang diunggah admin. */
 async function getMaterialContent(ctx: ToolContext, args: { materialId: string; maxChars?: number; offset?: number }): Promise<ToolResult> {
-  const { readCourseMaterial } = await import("@/lib/storage/course-materials");
+  const { getCourseMaterialFile, readCourseMaterial } = await import("@/lib/storage/course-materials");
+  const meta = await getCourseMaterialFile(ctx.courseId, args.materialId);
+  if (!meta) throw new Error("Materi tidak ditemukan. Gunakan getMaterials untuk melihat daftar.");
+  // Materi admin bisa sangat besar (tanpa batas upload) → jangan dimuat ke memori untuk ekstraksi.
+  if (meta.material.size > MAX_MATERIAL_EXTRACT_BYTES) {
+    const m = meta.material;
+    return {
+      materialId: m.id, judul: m.title || m.originalName, keterangan: m.description || "", nama: m.originalName, ukuran: m.size, diunggah: m.uploadedAt,
+      totalKarakter: 0, offset: 0, isi: "", adaLanjutan: false,
+      error: `Materi terlalu besar untuk dibaca otomatis (> ${Math.round(MAX_MATERIAL_EXTRACT_BYTES / 1048576)} MB). Gunakan judul/keterangan saja.`,
+    };
+  }
   const found = await readCourseMaterial(ctx.courseId, args.materialId);
   if (!found) throw new Error("Materi tidak ditemukan. Gunakan getMaterials untuk melihat daftar.");
   const { material, buffer } = found;
@@ -583,6 +594,8 @@ async function getMaterialContent(ctx: ToolContext, args: { materialId: string; 
 }
 
 const MAX_EXPORT_SUBMISSIONS = 25;
+/** Batas ukuran materi yang diekstrak teksnya oleh asisten (hindari OOM). */
+const MAX_MATERIAL_EXTRACT_BYTES = 50 * 1024 * 1024;
 
 /** Isi dokumen lampiran yang dikirim admin di chat (PDF/DOCX/PPTX/ZIP/teks). Gambar tidak lewat sini. */
 async function getAttachmentContent(ctx: ToolContext, args: { fileId: string; maxChars?: number; offset?: number }): Promise<ToolResult> {

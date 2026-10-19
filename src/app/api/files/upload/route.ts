@@ -34,6 +34,7 @@ import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
 import { MAX_FILE_BYTES, MAX_FILE_LABEL } from "@/lib/file-limits";
 import { saveUpload } from "@/lib/storage/upload";
+import { BLOCKED_FILE_MESSAGE, headMatchesMime, isBlockedFileName, resolveMime } from "@/lib/security/file-types";
 
 /** Pakai Node.js runtime (bukan Edge) karena pakai fs + buffer. */
 export const runtime = "nodejs";
@@ -73,12 +74,12 @@ export async function POST(req: Request) {
       throw new ApiRequestError(413, `Ukuran file harus di bawah ${MAX_FILE_LABEL}.`);
     }
 
-    // Video hanya boleh diunggah admin lewat /api/files/upload-video (streaming, tanpa limit).
+    // Video hanya boleh diunggah admin lewat /api/files/upload-admin (streaming, tanpa limit).
     if (/^video\//i.test(file.type || "")) {
       throw new ApiRequestError(
         auth.user.role === "ADMIN" ? 400 : 403,
         auth.user.role === "ADMIN"
-          ? "Video harus diunggah lewat endpoint upload-video."
+          ? "Video harus diunggah lewat endpoint upload-admin."
           : "Mahasiswa tidak dapat mengunggah video.",
       );
     }
@@ -87,16 +88,24 @@ export async function POST(req: Request) {
     if (!name) {
       throw new ApiRequestError(400, "Nama file tidak valid.");
     }
+    if (isBlockedFileName(name)) {
+      throw new ApiRequestError(415, BLOCKED_FILE_MESSAGE);
+    }
 
     // -------------------------------------------------------------------------
     // Save (dengan SHA256 dedup)
     // -------------------------------------------------------------------------
     const buffer = Buffer.from(await file.arrayBuffer());
+    const mime = resolveMime(name, file.type);
+    // Gambar/video di-serve inline di beberapa tempat → isi wajib cocok dengan tipenya.
+    if (!headMatchesMime(mime, buffer.subarray(0, 16))) {
+      throw new ApiRequestError(415, `Isi file "${name}" tidak sesuai dengan tipenya (${mime}).`);
+    }
     const upload = await saveUpload({
       ownerId: auth.user.id,
       buffer,
       originalName: name,
-      mime: file.type || "application/octet-stream",
+      mime,
     });
 
     return NextResponse.json(
@@ -107,7 +116,7 @@ export async function POST(req: Request) {
           sha256: upload.sha256,
           deduplicated: upload.deduplicated,
           size: buffer.byteLength,
-          mime: file.type || "application/octet-stream",
+          mime,
         },
       },
       { headers: { "Cache-Control": "private, no-store" } }

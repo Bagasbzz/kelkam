@@ -23,6 +23,7 @@ import {
   fetchMySubmission,
   submitTugas,
   updateMySubmission,
+  uploadAdminFile,
   uploadSubmissionFile,
   type SubmissionRow,
 } from "@/lib/client/tugas-api";
@@ -50,8 +51,9 @@ function formatWaktu(iso: string) {
   });
 }
 
-function validateFile(f: File): string | null {
-  if (f.size > MAX_FILE_BYTES) return `Ukuran file maksimal ${formatFileSize(MAX_FILE_BYTES)}.`;
+function validateFile(f: File, isAdmin: boolean): string | null {
+  // Admin tidak dibatasi ukuran (upload streaming); user biasa maks 12 MB.
+  if (!isAdmin && f.size > MAX_FILE_BYTES) return `Ukuran file maksimal ${formatFileSize(MAX_FILE_BYTES)}.`;
   if (!f.name || f.name.length > 200) return "Nama file tidak valid.";
   return null;
 }
@@ -64,6 +66,7 @@ export default function SubmissionForm({
   onSubmitted,
 }: SubmissionFormProps) {
   const { user, openLoginModal } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
 
   const [classId, setClassId] = useState<string | null>(lockedClassId ?? null);
   const [nim, setNim] = useState("");
@@ -153,7 +156,7 @@ export default function SubmissionForm({
       setFile(null);
       return;
     }
-    const err = validateFile(f);
+    const err = validateFile(f, isAdmin);
     if (err) {
       setFileError(err);
       setFile(null);
@@ -197,7 +200,7 @@ export default function SubmissionForm({
     try {
       let fileUploadId: string | undefined;
       if (file) {
-        const up = await uploadSubmissionFile(file);
+        const up = isAdmin ? await uploadAdminFile(file) : await uploadSubmissionFile(file);
         fileUploadId = up.fileId;
       } else if (keepOldFile) {
         fileUploadId = existing!.fileUpload!.id;
@@ -466,7 +469,9 @@ export default function SubmissionForm({
           ) : !file ? (
             <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 transition hover:border-blue-200 hover:bg-blue-50/50">
               <Upload className="h-5 w-5" />
-              <span>Pilih file (maksimal {formatFileSize(MAX_FILE_BYTES)})</span>
+              <span>
+                {isAdmin ? "Pilih file (admin: tanpa batas ukuran)" : `Pilih file (maksimal ${formatFileSize(MAX_FILE_BYTES)})`}
+              </span>
               <input type="file" className="hidden" onChange={onPickFile} accept="*/*" />
             </label>
           ) : (

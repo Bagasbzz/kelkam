@@ -12,18 +12,13 @@ import {
   type CourseMaterial,
 } from "@/lib/client/tugas-api";
 
-const ACCEPT = [
-  ".ppt", ".pptx", ".pdf", ".doc", ".docx",
-  "application/pdf",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-].join(",");
+/** Admin boleh unggah tipe apa pun tanpa batas ukuran; program/skrip ditolak server. */
+const ACCEPT = "*/*";
 
 const INPUT_CLASS = "w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
 function formatSize(size: number): string {
+  if (size >= 1024 * 1024 * 1024) return `${(size / 1024 / 1024 / 1024).toFixed(2)} GB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
@@ -36,6 +31,8 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
   const [materials, setMaterials] = useState<CourseMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  /** Progres upload materi (0..1); null kalau tidak sedang upload. */
+  const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [formOpen, setFormOpen] = useState(false);
@@ -80,13 +77,20 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
     setBusy(true);
     setError(null);
     try {
-      const material = await uploadCourseMaterial(courseId, file, { title: title.trim(), description: description.trim() });
+      setProgress(0);
+      const material = await uploadCourseMaterial(
+        courseId,
+        file,
+        { title: title.trim(), description: description.trim() },
+        (fraction) => setProgress(fraction),
+      );
       setMaterials((current) => [material, ...current]);
       resetForm();
     } catch (err) {
       setError(getErrorMessage(err, "Gagal mengunggah materi."));
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -132,7 +136,7 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-bold text-slate-900">Materi pertemuan</h2>
-          <p className="mt-1 text-sm text-slate-600">Upload PPT, PPTX, PDF, atau Word untuk diunduh mahasiswa. Beri judul dan keterangan supaya jelas isinya.</p>
+          <p className="mt-1 text-sm text-slate-600">Upload PPT, PDF, Word, video, atau file lain untuk diunduh mahasiswa. Beri judul dan keterangan supaya jelas isinya.</p>
         </div>
         {!formOpen && (
           <Button type="button" size="sm" icon={Upload} disabled={busy} onClick={() => setFormOpen(true)}>
@@ -158,7 +162,18 @@ export default function CourseMaterialsManager({ courseId, token }: { courseId: 
                 if (picked && !title.trim()) setTitle(picked.name.replace(/\.[a-z0-9]+$/i, ""));
               }}
             />
-            <p className="mt-1 text-xs text-slate-500">Maks 12 MB.</p>
+            <p className="mt-1 text-xs text-slate-500">PPT, PDF, Word, Excel, video, ZIP, dll. Tanpa batas ukuran (program/skrip diblokir).</p>
+            {progress !== null && (
+              <div className="mt-2">
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span className="truncate">Mengunggah {file?.name}</span>
+                  <span className="ml-2 font-semibold">{Math.round(progress * 100)}%</span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                  <div className="h-full bg-blue-600 transition-[width]" style={{ width: `${Math.round(progress * 100)}%` }} />
+                </div>
+              </div>
+            )}
           </div>
           <div>
             <label htmlFor="material-title" className="mb-1 block text-xs font-bold uppercase tracking-wide text-slate-600">Judul</label>
