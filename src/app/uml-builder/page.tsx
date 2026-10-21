@@ -7,6 +7,7 @@ import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
 import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload, Loader2 } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData, inferDiagramTypeFromPrompt } from '@/lib/uml/diagram-guard';
+import { fitTerminators, terminatorSize, wrapTerminatorText } from '@/lib/uml/node-size';
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
 import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-store';
@@ -189,17 +190,18 @@ function normalizeApiNodes(
     const rawType = typeof node.type === 'string' ? node.type as NodeType : 'process';
     const type = supportedNodeTypes.has(rawType) ? rawType : 'process';
     const text = typeof node.text === 'string' ? node.text.trim().slice(0, 120) : '';
-    const lines = type === 'start' || type === 'end' ? [text || (type === 'start' ? 'Mulai' : 'Selesai')] : wrapText(text, charsPerLine);
+    const isTerminator = type === 'start' || type === 'end';
+    const terminatorLabel = text || (type === 'start' ? 'Mulai' : 'Selesai');
+    const lines = isTerminator ? wrapTerminatorText(terminatorLabel) : wrapText(text, charsPerLine);
     let height = 60;
     let width = 120;
 
     if (type === 'actor') {
       height = 80;
       width = 60;
-    } else if (type === 'start' || type === 'end') {
-      // Terminator: ukuran tetap, jangan membesar mengikuti panjang teks.
-      width = 110;
-      height = 56;
+    } else if (isTerminator) {
+      // Terminator: oval mengikuti panjang label supaya teks tidak keluar garis.
+      ({ width, height } = terminatorSize(lines));
     } else if (type === 'fork' || type === 'join') {
       height = 10;
       width = 120;
@@ -629,7 +631,7 @@ export default function UMLBuilder() {
           setDiagramType(parsed.diagramType);
         }
         loadedPrefillRef.current = true;
-        const restoredNodes = Array.isArray(parsed.diagramData?.nodes) ? parsed.diagramData.nodes : [];
+        const restoredNodes = fitTerminators(Array.isArray(parsed.diagramData?.nodes) ? parsed.diagramData.nodes as DiagramNode[] : []);
         const restoredEdges = Array.isArray(parsed.diagramData?.edges) ? parsed.diagramData.edges : [];
         setNodes(restoredNodes);
         setEdges(restoredEdges);
@@ -788,7 +790,7 @@ export default function UMLBuilder() {
             for (const key of Object.keys(cleaned)) {
               const p = cleaned[key];
               if (!p) continue;
-              const ns = Array.isArray(p.nodes) ? p.nodes : [];
+              const ns = fitTerminators(Array.isArray(p.nodes) ? p.nodes : []);
               cleaned[key] = { nodes: ns, edges: dropOrphanEdges(ns, Array.isArray(p.edges) ? p.edges : []) };
             }
             parsed.projects = cleaned;
@@ -1043,8 +1045,21 @@ export default function UMLBuilder() {
     const finalWidth = lines.length > 1 ? MAX_WIDTH : Math.min(MAX_WIDTH, Math.max(120, newText.length * 10 + 40));
 
     setNodes(prev => prev.map(n => {
-      if (n.id === id) return { ...n, text: newText, lines, width: finalWidth, height: nodeHeight };
-      return n;
+      if (n.id !== id) return n;
+      // Terminator: wrap pendek + oval mengikuti label (pusat oval dipertahankan).
+      if (n.type === 'start' || n.type === 'end') {
+        const tLines = wrapTerminatorText(newText);
+        const size = terminatorSize(tLines.length ? tLines : [' ']);
+        return {
+          ...n,
+          text: newText,
+          lines: tLines,
+          x: n.x + (n.width - size.width) / 2,
+          y: n.y + (n.height - size.height) / 2,
+          ...size,
+        };
+      }
+      return { ...n, text: newText, lines, width: finalWidth, height: nodeHeight };
     }));
   }, [wrapText]);
 
@@ -1220,12 +1235,16 @@ export default function UMLBuilder() {
     const LINE_HEIGHT = 24;
     const PADDING_V = 40;
 
-    const lines = wrapText(newNodeText, CHARS_PER_LINE);
+    const lines = newNodeType === 'start' || newNodeType === 'end'
+      ? wrapTerminatorText(newNodeText)
+      : wrapText(newNodeText, CHARS_PER_LINE);
     let nodeHeight = 60;
     let finalWidth = 120;
 
     if (newNodeType === 'actor') {
       nodeHeight = 80; finalWidth = 60;
+    } else if (newNodeType === 'start' || newNodeType === 'end') {
+      ({ width: finalWidth, height: nodeHeight } = terminatorSize(lines));
     } else if (newNodeType === 'fork' || newNodeType === 'join') {
       nodeHeight = 10; finalWidth = 120;
     } else if (newNodeType === 'lifeline') {

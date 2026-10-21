@@ -9,6 +9,8 @@
  * -----------------------------------------------------------------------------
  */
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { fitTerminators } from "@/lib/uml/node-size";
+import { diagramFontCap, layoutNodeText } from "@/lib/uml/text-fit";
 
 export interface SvgDiagramInput {
   nodes: DiagramNode[];
@@ -46,7 +48,7 @@ function exitPoint(node: DiagramNode, side: "right" | "left" | "bottom" | "top")
   }
 }
 
-function renderNode(node: DiagramNode): string {
+function renderNode(node: DiagramNode, fontCap?: number): string {
   const { type, width, height } = node;
   const x = node.x + (node.offsetX || 0);
   const y = node.y + (node.offsetY || 0);
@@ -54,12 +56,10 @@ function renderNode(node: DiagramNode): string {
   let shape = "";
   switch (type) {
     case "start":
-    case "usecase":
-      shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`;
-      break;
     case "end":
-      shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`
-        + `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(Math.max(8, width / 2 - 5))}" ry="${num(Math.max(8, height / 2 - 5))}" fill="none" stroke="${BORDER}" stroke-width="1.2"/>`;
+    case "usecase":
+      // Terminator & use case: satu oval bergaris tunggal (konsisten dengan editor).
+      shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`;
       break;
     case "process":
     case "system":
@@ -102,23 +102,15 @@ function renderNode(node: DiagramNode): string {
       shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" rx="4" fill="white" ${stroke}/>`;
   }
 
-  const lines = node.lines?.length ? node.lines : [node.text];
-  const totalTextHeight = (lines.length - 1) * LINE_HEIGHT;
-  let textY = y + height / 2 - totalTextHeight / 2;
-  let baseline = "middle";
-  if (type === "actor" || type === "fork" || type === "join") {
-    textY = y + height + 15;
-    if (type === "actor") baseline = "hanging";
-  } else if (type === "lifeline") {
-    textY = y + 23 - totalTextHeight / 2;
-  }
-  const showText = lines.join("").trim().length > 0;
+  // Label auto-fit (sama persis dengan editor Node.tsx).
+  const layout = layoutNodeText(node, x, y, fontCap);
+  const showText = layout.lines.join("").trim().length > 0;
   const cx = x + width / 2;
-  const tspans = lines
-    .map((line, i) => `<tspan x="${num(cx)}" dy="${i === 0 ? 0 : LINE_HEIGHT}">${esc(line)}</tspan>`)
+  const tspans = layout.lines
+    .map((line, i) => `<tspan x="${num(cx)}" dy="${i === 0 ? 0 : num(layout.lineHeight)}">${esc(line)}</tspan>`)
     .join("");
   const text = showText
-    ? `<text x="${num(cx)}" y="${num(textY)}" text-anchor="middle" dominant-baseline="${baseline}" font-size="13" font-weight="${type === "actor" ? 600 : 500}" fill="${BORDER}" font-family="${FONT}">${tspans}</text>`
+    ? `<text x="${num(cx)}" y="${num(layout.firstLineY)}" text-anchor="middle" dominant-baseline="${layout.baseline}" font-size="${num(layout.fontSize)}" font-weight="${layout.fontWeight}" fill="${BORDER}" font-family="${FONT}">${tspans}</text>`
     : "";
   return `<g>${shape}${text}</g>`;
 }
@@ -234,7 +226,8 @@ function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): stri
  * Lebar minimal 800 agar proporsi gambar di laporan konsisten.
  */
 export function diagramToSvg(input: SvgDiagramInput): string {
-  const nodes = input.nodes ?? [];
+  // Diagram lama: oval terminator tetap 110×56 → perbesar agar label muat.
+  const nodes = fitTerminators(input.nodes ?? []);
   const edges = input.edges ?? [];
   const lanes = input.lanes?.length
     ? input.lanes
@@ -285,7 +278,8 @@ export function diagramToSvg(input: SvgDiagramInput): string {
       return from && to ? renderEdge(e, from, to) : "";
     })
     .join("");
-  const nodeSvg = nodes.map(renderNode).join("");
+  const fontCap = diagramFontCap(nodes);
+  const nodeSvg = nodes.map((n) => renderNode(n, fontCap)).join("");
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vx} ${vy} ${vw} ${vh}" font-family="${FONT}">` +

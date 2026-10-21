@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { DiagramNode } from '@/lib/types/diagram';
+import { layoutNodeText } from '@/lib/uml/text-fit';
 
 interface NodeProps {
   node: DiagramNode;
@@ -7,12 +8,14 @@ interface NodeProps {
   isConnectSource?: boolean;
   onClick?: () => void;
   onDragStart?: (id: string, e: React.PointerEvent | React.MouseEvent) => void;
+  /** Plafon font seragam diagram (dari diagramFontCap). */
+  fontCap?: number;
 }
 
 
 const HANDLE_SIZE = 7;
 
-const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick, onDragStart }) => {
+const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick, onDragStart, fontCap }) => {
   const { type, width, height } = node;
 
   const curX = node.x + (node.offsetX || 0);
@@ -29,6 +32,9 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
   const renderShape = () => {
     switch (type) {
       case 'start':
+      case 'end':
+        // Terminator (Mulai/Selesai): satu oval bergaris tunggal. Ukuran oval
+        // dihitung dari panjang label (lihat terminatorSize) supaya teks tidak keluar.
         return (
           <ellipse
             cx={curX + width / 2}
@@ -39,30 +45,6 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             stroke={borderColor}
             strokeWidth={borderWidth}
           />
-        );
-      case 'end':
-        // Terminator akhir: oval putih dengan cincin ganda agar label tetap terbaca.
-        return (
-          <g>
-            <ellipse
-              cx={curX + width / 2}
-              cy={curY + height / 2}
-              rx={width / 2}
-              ry={height / 2}
-              fill="white"
-              stroke={borderColor}
-              strokeWidth={borderWidth}
-            />
-            <ellipse
-              cx={curX + width / 2}
-              cy={curY + height / 2}
-              rx={Math.max(8, width / 2 - 5)}
-              ry={Math.max(8, height / 2 - 5)}
-              fill="none"
-              stroke={borderColor}
-              strokeWidth={1.2}
-            />
-          </g>
         );
       case 'process':
         return (
@@ -175,16 +157,12 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
     }
   };
 
-  const LINE_HEIGHT = 20;
-  const totalTextHeight = (node.lines.length - 1) * LINE_HEIGHT;
-  const startY = curY + height / 2 - totalTextHeight / 2;
-  
-  let textY = startY;
-  if (type === 'actor' || type === 'fork' || type === 'join') {
-    textY = curY + height + 15;
-  } else if (type === 'lifeline') {
-    textY = curY + 23 - totalTextHeight / 2;
-  }
+  // Auto-fit: font terbesar yang muat di dalam bentuk, wrap ulang sesuai lebar
+  // bentuk (oval/ketupat menyempit di atas-bawah). Ukuran node tidak berubah.
+  const textLayout = useMemo(
+    () => layoutNodeText({ type, text: node.text, lines: node.lines, width, height }, curX, curY, fontCap),
+    [type, node.text, node.lines, width, height, curX, curY, fontCap],
+  );
 
   const resizeHandles = isSelected && type !== 'actor' ? [
     { cx: curX, cy: curY, cursor: 'nw-resize' },
@@ -212,19 +190,19 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
 
       <text
         x={curX + width / 2}
-        y={textY}
+        y={textLayout.firstLineY}
         textAnchor="middle"
-        dominantBaseline={type === 'actor' ? 'hanging' : 'middle'}
+        dominantBaseline={textLayout.baseline}
         style={{
           pointerEvents: 'none',
-          fontSize: '13px',
-          fontWeight: type === 'actor' ? '600' : '500',
+          fontSize: `${textLayout.fontSize}px`,
+          fontWeight: textLayout.fontWeight,
           fill: '#1e293b',
           fontFamily: 'Inter, sans-serif',
         }}
       >
-        {node.lines.map((line, index) => (
-          <tspan key={index} x={curX + width / 2} dy={index === 0 ? 0 : LINE_HEIGHT}>
+        {textLayout.lines.map((line, index) => (
+          <tspan key={index} x={curX + width / 2} dy={index === 0 ? 0 : textLayout.lineHeight}>
             {line}
           </tspan>
         ))}

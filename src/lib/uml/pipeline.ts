@@ -16,6 +16,7 @@ import {
   type DiagramValidationResult,
 } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { terminatorSize, wrapTerminatorText } from "@/lib/uml/node-size";
 
 // LiteSpeed/Passenger di hosting memutus request di ~120 s → total budget route harus di bawah itu.
 export const ROUTE_BUDGET_MS = 95_000;
@@ -115,15 +116,19 @@ const wrapText = (text: string, max = 20) => {
   return lines.slice(0, 5);
 };
 
-/** Lebar wrap per tipe node: terminator (elips) & decision (belah ketupat) butuh baris lebih pendek. */
-const wrapWidthFor = (type: string) => (type === "start" || type === "end" ? 14 : type === "decision" ? 16 : 20);
+/** Lebar wrap per tipe node: decision (belah ketupat) butuh baris lebih pendek. Terminator lewat node-size.ts. */
+const wrapWidthFor = (type: string) => (type === "decision" ? 16 : 20);
+
+/** Label node: terminator memakai wrap khusus agar konsisten dengan editor. */
+const linesFor = (type: string, text: string) =>
+  type === "start" || type === "end" ? wrapTerminatorText(text) : wrapText(text, wrapWidthFor(type));
 
 const nodeSize = (type: string, text: string) => {
-  const lines = wrapText(text, wrapWidthFor(type));
+  const lines = linesFor(type, text);
   const longest = Math.max(...lines.map((l) => l.length), 1);
   if (type === "start" || type === "end") {
-    // Elips: teks harus muat di dalam area ~70% lebar, jadi beri margin ekstra.
-    return { width: Math.max(96, Math.min(220, longest * 8.5 + 44)), height: Math.max(56, lines.length * 20 + 28) };
+    // Elips: area teks efektif ≈ 70% → ukuran dihitung di terminatorSize.
+    return terminatorSize(lines);
   }
   if (type === "decision") {
     // Belah ketupat: area teks efektif ≈ setengah bounding box → ukuran 2x teks.
@@ -553,7 +558,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
       id: step.id,
       type,
       text: step.text,
-      lines: wrapText(step.text, wrapWidthFor(type)),
+      lines: linesFor(type, step.text),
       x: laneX(step.lane) - size.width / 2,
       y,
       width: size.width,

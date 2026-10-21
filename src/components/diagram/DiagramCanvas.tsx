@@ -1,5 +1,6 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { DiagramNode, DiagramEdge } from '@/lib/types/diagram';
+import { diagramFontCap } from '@/lib/uml/text-fit';
 import Node from './Node';
 import Edge from './Edge';
 
@@ -77,6 +78,11 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   const laneStartX = 20;
   const laneHeaderHeight = 52;
   const laneHeight = Math.max(canvasHeight - 80, 900, ...nodes.map((node) => node.y + node.height + 80));
+  // Plafon font seragam: dihitung dari teks & ukuran saja (bukan posisi) → tidak
+  // dihitung ulang saat drag.
+  const fontKey = nodes.map((n) => `${n.type}|${n.width}|${n.height}|${n.text}`).join('\n');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const fontCap = useMemo(() => diagramFontCap(nodes), [fontKey]);
 
   const getSvgPoint = useCallback((e: React.MouseEvent | React.PointerEvent | MouseEvent | PointerEvent): { x: number; y: number } => {
     const svg = svgRef.current;
@@ -355,6 +361,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
               isConnectSource={node.id === connectFromId}
               onClick={() => onNodeClick?.(node.id)}
               onDragStart={handleNodeDragStart}
+              fontCap={fontCap}
             />
           ))}
         </g>
