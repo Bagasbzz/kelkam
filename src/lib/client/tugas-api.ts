@@ -20,10 +20,20 @@ import { authenticatedFetch } from "@/components/AuthProvider";
 // Error class
 // ---------------------------------------------------------------------------
 
+/**
+ * Jenis kegagalan, dipakai UI untuk memilih pesan yang tepat:
+ *   - "offline" : perangkat tidak tersambung internet sama sekali (navigator.onLine=false).
+ *   - "network" : request terkirim tapi koneksi putus / diblokir sebelum ada balasan.
+ *   - "timeout" : server tidak membalas dalam batas waktu.
+ *   - "http"    : server membalas dengan status error (4xx/5xx).
+ */
+export type ApiErrorKind = "offline" | "network" | "timeout" | "http";
+
 export class ApiClientError extends Error {
   constructor(
     public readonly status: number,
     public readonly apiError: string,
+    public readonly kind: ApiErrorKind = "http",
   ) {
     super(apiError);
     this.name = "ApiClientError";
@@ -37,20 +47,49 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
+function isBrowserOffline(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/**
+ * Pesan ramah untuk status HTTP ketika server/hosting tidak mengirim JSON
+ * (mis. halaman error LiteSpeed 413/502/503 saat restart).
+ */
+export function httpStatusMessage(status: number): string {
+  if (status === 401) return "Sesi login kamu sudah habis. Masuk lagi, lalu ulangi.";
+  if (status === 403) return "Kamu tidak punya akses untuk melakukan ini.";
+  if (status === 404) return "Data tidak ditemukan. Muat ulang halaman lalu coba lagi.";
+  if (status === 413) return "File terlalu besar untuk server. Kecilkan atau kompres file dulu.";
+  if (status === 415) return "Jenis file ini tidak diterima. Simpan ulang sebagai PDF, DOCX, atau ZIP.";
+  if (status === 429) return "Terlalu sering mencoba. Tunggu beberapa menit lalu coba lagi.";
+  if (status === 502 || status === 503 || status === 504) {
+    return "Server sedang dimuat ulang atau sibuk. Tunggu 1-2 menit lalu coba lagi.";
+  }
+  if (status >= 500) return "Terjadi gangguan di server. Coba lagi beberapa saat.";
+  return `Permintaan gagal (kode ${status}). Coba lagi.`;
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit,
   timeoutMs: number,
 ): Promise<Response> {
+  if (isBrowserOffline()) {
+    throw new ApiClientError(0, "Perangkat kamu sedang tidak tersambung ke internet.", "offline");
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await authenticatedFetch(input, { ...init, signal: controller.signal });
   } catch (error) {
-    const message = isAbortError(error)
-      ? "Koneksi ke server terlalu lama. Coba lagi."
-      : "Koneksi ke server terputus. Periksa internet lalu coba lagi.";
-    throw new ApiClientError(0, message);
+    if (isAbortError(error)) {
+      throw new ApiClientError(0, "Server tidak membalas dalam batas waktu. Coba lagi.", "timeout");
+    }
+    // Koneksi bisa putus justru karena perangkat baru saja offline.
+    if (isBrowserOffline()) {
+      throw new ApiClientError(0, "Perangkat kamu sedang tidak tersambung ke internet.", "offline");
+    }
+    throw new ApiClientError(0, "Koneksi ke server terputus. Periksa internet lalu coba lagi.", "network");
   } finally {
     clearTimeout(timeout);
   }
@@ -196,7 +235,7 @@ async function request<T>(
   } & T;
 
   if (!resp.ok || payload?.success === false) {
-    throw new ApiClientError(resp.status, payload?.error || `HTTP ${resp.status}`);
+    throw new ApiClientError(resp.status, payload?.error || httpStatusMessage(resp.status));
   }
   return payload as T;
 }
@@ -608,14 +647,17 @@ export async function uploadSubmissionFile(file: File): Promise<{
         data?: { fileId: string; sha256: string; size: number; mime: string };
       };
       if (!resp.ok || !json?.success || !json.data) {
-        throw new ApiClientError(resp.status, json?.error || "Upload gagal.");
+        throw new ApiClientError(resp.status, json?.error || httpStatusMessage(resp.status));
       }
       return json.data;
     } catch (error) {
       lastError = error;
-      if (!(error instanceof ApiClientError) || error.status !== 0 || attempt === 1) {
+      // Ulangi hanya untuk koneksi putus/timeout; offline & error HTTP langsung dilaporkan.
+      const retriable = error instanceof ApiClientError && (error.kind === "network" || error.kind === "timeout");
+      if (!retriable || attempt === 1) {
         throw error;
       }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
     }
   }
 
@@ -623,6 +665,48 @@ export async function uploadSubmissionFile(file: File): Promise<{
 }
 
 export const VIDEO_MIME_CLIENT_RE = /^video\/(mp4|webm|ogg|quicktime|x-matroska|x-msvideo|3gpp)$/i;
+
+// ---------------------------------------------------------------------------
+// Laporan error klien (diagnostik)
+// ---------------------------------------------------------------------------
+
+export interface ClientErrorReport {
+  /** Tahap yang gagal, mis. "read-file" | "upload" | "submit". */
+  stage: string;
+  kind?: ApiErrorKind | "file-read";
+  status?: number;
+  message?: string;
+  tugasId?: string;
+  fileSize?: number;
+  fileType?: string;
+}
+
+/**
+ * Kirim catatan kegagalan ke server supaya admin bisa melihat pola
+ * (perangkat, browser, jaringan). Best-effort: tidak pernah melempar error,
+ * dan pakai `keepalive` supaya tetap terkirim walau halaman ditutup.
+ */
+export function reportClientError(report: ClientErrorReport): void {
+  try {
+    const nav = typeof navigator !== "undefined" ? navigator : undefined;
+    const connection = (nav as (Navigator & { connection?: { effectiveType?: string } }) | undefined)?.connection;
+    const body = JSON.stringify({
+      ...report,
+      online: nav?.onLine ?? null,
+      connection: connection?.effectiveType ?? null,
+      path: typeof location !== "undefined" ? location.pathname : null,
+    });
+    void fetch("/api/client-errors", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body,
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // Diagnostik tidak boleh mengganggu alur utama.
+  }
+}
 
 /**
  * Upload file APAPUN untuk ADMIN via `POST /api/files/upload-admin` (tanpa batas ukuran).
@@ -650,8 +734,13 @@ export function uploadAdminFile(
     xhr.upload.onprogress = (ev) => {
       if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total);
     };
-    xhr.onerror = () => reject(new ApiClientError(0, `Koneksi ke server terputus saat mengunggah "${file.name}".`));
-    xhr.onabort = () => reject(new ApiClientError(0, "Upload dibatalkan."));
+    xhr.onerror = () =>
+      reject(
+        isBrowserOffline()
+          ? new ApiClientError(0, "Perangkat kamu sedang tidak tersambung ke internet.", "offline")
+          : new ApiClientError(0, `Koneksi ke server terputus saat mengunggah "${file.name}".`, "network"),
+      );
+    xhr.onabort = () => reject(new ApiClientError(0, "Upload dibatalkan.", "network"));
     xhr.onload = () => {
       const json = (xhr.response ?? null) as {
         success?: boolean;
@@ -665,7 +754,7 @@ export function uploadAdminFile(
       const fallback =
         xhr.status === 413
           ? "File ditolak server (terlalu besar untuk batas server hosting)."
-          : "Upload gagal.";
+          : httpStatusMessage(xhr.status);
       reject(new ApiClientError(xhr.status, json?.error || fallback));
     };
     xhr.send(file);
