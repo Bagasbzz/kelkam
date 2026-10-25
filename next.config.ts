@@ -96,11 +96,29 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   /** Build sebagai standalone → .next/standalone/ siap di-deploy ke JKC. */
   output: "standalone",
-  /** resvg (WASM) dimuat via fs saat runtime, jangan dibundel webpack. */
-  serverExternalPackages: ["@resvg/resvg-wasm"],
-  /** File yang dibaca via fs (bukan import) harus ikut ditrace ke standalone. */
+  /**
+   * Jangan dibundel, dimuat langsung dari node_modules saat runtime:
+   *  - resvg (WASM) dimuat via fs.
+   *  - pdf-parse/pdfjs-dist: pdfjs memuat worker lewat `import("./pdf.worker.mjs")`
+   *    relatif ke file pdf.mjs. Kalau dibundel ke .next/server/chunks, file worker
+   *    itu tidak ada → "Setting up fake worker failed" → SEMUA PDF gagal dibaca.
+   *  - @napi-rs/canvas: binary native (render halaman PDF ke gambar).
+   */
+  serverExternalPackages: ["@resvg/resvg-wasm", "pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  /** File yang dibaca via fs / dynamic import (bukan import statis) harus ikut ditrace ke standalone. */
   outputFileTracingIncludes: {
-    "/**": ["./node_modules/@resvg/resvg-wasm/**", "./node_modules/dejavu-fonts-ttf/ttf/DejaVuSans*.ttf", "./node_modules/dejavu-fonts-ttf/package.json"],
+    "/**": [
+      "./node_modules/@resvg/resvg-wasm/**",
+      "./node_modules/dejavu-fonts-ttf/ttf/DejaVuSans*.ttf",
+      "./node_modules/dejavu-fonts-ttf/package.json",
+      // Worker pdfjs di-import dinamis (webpackIgnore) → tidak terdeteksi tracer.
+      "./node_modules/pdf-parse/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+      "./node_modules/pdf-parse/node_modules/pdfjs-dist/legacy/build/pdf.mjs",
+      // Canvas native untuk render halaman PDF scan → gambar (viewSubmissionPages).
+      // Binding OS (mis. canvas-linux-x64-gnu) ikut terpasang oleh `npm ci` di CI.
+      "./node_modules/@napi-rs/canvas/**",
+      "./node_modules/@napi-rs/canvas-*/**",
+    ],
   },
   /** Hilangkan header "X-Powered-By: Next.js" (info disclosure). */
   poweredByHeader: false,
