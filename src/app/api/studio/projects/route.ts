@@ -23,6 +23,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
+import { ensureOwnedProject, isValidProjectId } from "@/lib/server/projects";
 
 export async function GET() {
   const auth = await authenticateRequestFromCookie();
@@ -48,18 +49,29 @@ export async function POST(req: Request) {
   if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
 
   try {
-    const body = await req.json().catch(() => null) as { name?: string; projectId?: string } | null;
-    const projectId = body?.projectId || `studio_${crypto.randomUUID().slice(0, 8)}`;
-    const name = (body?.name || "Proyek baru").toString().slice(0, 200);
+    const body = await req.json().catch(() => null) as { name?: unknown; projectId?: unknown } | null;
+    // projectId dari klien WAJIB string berformat valid (anti operator injection / ID aneh).
+    if (body?.projectId !== undefined && body?.projectId !== null && body?.projectId !== "" && !isValidProjectId(body.projectId)) {
+      return NextResponse.json({ success: false, error: "projectId tidak valid." }, { status: 400 });
+    }
+    const projectId = isValidProjectId(body?.projectId) ? body.projectId : `studio_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const name = (typeof body?.name === "string" && body.name.trim() ? body.name : "Proyek baru").slice(0, 200);
 
-    // FK ke tabel `projects` (parent). Upsert idempotent.
-    await prisma.project.upsert({
-      where: { projectId },
-      create: { projectId, ownerId: auth.user.id },
-      update: { ownerId: auth.user.id },
-    });
+    // Keamanan: JANGAN pernah memindahkan kepemilikan project yang sudah ada.
+    // Dulu upsert menimpa ownerId → user lain bisa mengambil alih project orang
+    // hanya dengan menebak projectId. Sekarang: buat baru atau tolak bila milik orang lain.
+    const owned = await ensureOwnedProject(auth.user.id, projectId);
+    if (!owned.ok) {
+      const status = owned.reason === "lookup_failed" || owned.reason === "create_failed" ? 500 : 409;
+      return NextResponse.json({ success: false, error: "projectId sudah dipakai. Gunakan ID lain." }, { status });
+    }
 
-    // Upsert StudioProject, kalau projectId sudah ada (mis. user retry), cuma update name.
+    const existing = await prisma.studioProject.findUnique({ where: { projectId }, select: { ownerId: true } });
+    if (existing && existing.ownerId !== auth.user.id) {
+      return NextResponse.json({ success: false, error: "projectId sudah dipakai. Gunakan ID lain." }, { status: 409 });
+    }
+
+    // Upsert StudioProject milik user sendiri (idempotent saat retry): cuma update name.
     const project = await prisma.studioProject.upsert({
       where: { projectId },
       create: {

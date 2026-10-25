@@ -20,9 +20,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { ApiRequestError, publicErrorResponse } from "@/lib/server/request-guards";
+import { ApiRequestError, enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
 import { requireCourseAdmin } from "@/lib/server/auth";
 import { sendToAIForPurpose } from "@/lib/ai/client";
+import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 
 const EntrySchema = z.object({
   nim: z.string().trim().min(1).max(40),
@@ -102,7 +103,7 @@ export async function POST(
 ) {
   try {
     const { courseId } = await context.params;
-    await requireCourseAdmin(courseId);
+    const admin = await requireCourseAdmin(courseId);
 
     let body: unknown;
     try {
@@ -132,12 +133,14 @@ export async function POST(
     if ("entries" in parsed.data) {
       entries = parsed.data.entries;
     } else {
-      // Raw text mode → AI parse.
+      // Raw text mode → AI parse. Rate limit khusus (import roster jarang, jadi ketat).
+      const limited = enforceRateLimit(`ai:mahasiswa-parse:${admin.id}`, { limit: 15, windowMs: 10 * 60 * 1000 });
+      if (limited) return limited;
       let aiRaw: string;
       try {
         aiRaw = await sendToAIForPurpose(
-          parsed.data.rawText.slice(0, 6000),
-          AI_SYSTEM,
+          `Parse daftar mahasiswa berikut.\n\n${wrapUntrusted("Daftar mahasiswa", parsed.data.rawText.slice(0, 6000))}`,
+          `${AI_SYSTEM}\n${UNTRUSTED_DATA_NOTICE}`,
           "fast",
         );
       } catch (err) {

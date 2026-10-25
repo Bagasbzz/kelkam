@@ -72,12 +72,14 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectI
   if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
   const { projectId } = await params;
   try {
-    const body = await req.json().catch(() => null) as { questionKey?: string; patch?: Record<string, unknown> } | null;
-    if (!body?.questionKey) return NextResponse.json({ success: false, error: "questionKey wajib diisi." }, { status: 400 });
+    const body = await req.json().catch(() => null) as { questionKey?: unknown; patch?: Record<string, unknown> } | null;
+    // typeof string wajib: objek seperti {"not":""} akan jadi operator Prisma (update massal).
+    if (typeof body?.questionKey !== "string" || !body.questionKey) return NextResponse.json({ success: false, error: "questionKey wajib diisi." }, { status: 400 });
+    const questionKey = body.questionKey.slice(0, 200);
 
     // Filter by ownerId + projectId → tidak bisa update pertanyaan user lain.
     const updated = await prisma.studioQuestion.updateMany({
-      where: { projectId, ownerId: auth.user.id, questionKey: body.questionKey },
+      where: { projectId, ownerId: auth.user.id, questionKey },
       data: {
         status: typeof body.patch?.status === "string" ? body.patch.status.slice(0, 20) : undefined,
         answer: typeof body.patch?.answer === "string" ? body.patch.answer.slice(0, 5_000) : undefined,

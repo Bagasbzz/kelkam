@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { AI_SECURITY_POLICY, AI_SECURITY_POLICY_MARKER, leaksSystemPrompt, sanitizeForPrompt } from "@/lib/ai/guard";
+import { safeFetch } from "@/lib/server/safe-fetch";
 
 /**
  * Model configuration (diukur 2026-10-08 di api.z0ne.ai):
@@ -42,6 +44,68 @@ function getAiRuntimeConfig() {
 
 let runtimeClient: OpenAI | null = null;
 
+/** Batas atas output per panggilan (anti penyalahgunaan biaya). Panggilan tanpa max_tokens dapat default. */
+const MAX_OUTPUT_TOKENS_CAP = Number(process.env.AI_MAX_OUTPUT_TOKENS_CAP || 8_000);
+const DEFAULT_OUTPUT_TOKENS = Number(process.env.AI_DEFAULT_OUTPUT_TOKENS || 2_500);
+const LEAK_REPLACEMENT = "Maaf, permintaan itu tidak bisa diproses.";
+
+type ChatParams = OpenAI.Chat.Completions.ChatCompletionCreateParams;
+type ChatMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
+
+/** Bersihkan karakter tersembunyi pada konten teks (string atau part teks). */
+function sanitizeMessageContent(msg: ChatMsg): ChatMsg {
+  if (msg.role === "system") return msg;
+  if (typeof msg.content === "string") return { ...msg, content: sanitizeForPrompt(msg.content, 2_000_000) } as ChatMsg;
+  if (Array.isArray(msg.content)) {
+    const parts = (msg.content as Array<{ type: string; text?: string }>).map((part) =>
+      part.type === "text" && typeof part.text === "string" ? { ...part, text: sanitizeForPrompt(part.text, 2_000_000) } : part,
+    );
+    return { ...msg, content: parts } as ChatMsg;
+  }
+  return msg;
+}
+
+/**
+ * Pengerasan SETIAP request chat sebelum dikirim ke provider:
+ *  1. Kebijakan keamanan (anti prompt injection) ditempel di system prompt pertama.
+ *  2. Karakter tersembunyi di pesan user/tool/assistant dibuang.
+ *  3. max_tokens wajib ada & dibatasi (anti boros biaya).
+ *  4. Nama model lambat (gpt-5/6) dipetakan ke model cepat.
+ */
+function hardenChatRequest(body: ChatParams): ChatParams {
+  const messages = body.messages.map(sanitizeMessageContent);
+  const firstSystem = messages.findIndex((m) => m.role === "system");
+  if (firstSystem >= 0) {
+    const sys = messages[firstSystem];
+    const text = typeof sys.content === "string" ? sys.content : (sys.content ?? []).map((p) => ("text" in p ? p.text : "")).join("\n");
+    if (!text.includes(AI_SECURITY_POLICY_MARKER)) {
+      messages[firstSystem] = { role: "system", content: `${AI_SECURITY_POLICY}\n\n${text}` };
+    }
+  } else {
+    messages.unshift({ role: "system", content: AI_SECURITY_POLICY });
+  }
+  const requested = typeof body.max_tokens === "number" && body.max_tokens > 0 ? body.max_tokens : DEFAULT_OUTPUT_TOKENS;
+  return {
+    ...body,
+    model: pickModel(body.model, AI_MODEL_FAST),
+    messages,
+    max_tokens: Math.min(requested, MAX_OUTPUT_TOKENS_CAP),
+  };
+}
+
+/** Ganti output yang membocorkan system prompt (non-stream saja). */
+function scrubCompletion(result: unknown) {
+  const choices = (result as { choices?: Array<{ message?: { content?: string | null } }> })?.choices;
+  if (!Array.isArray(choices)) return;
+  for (const choice of choices) {
+    const content = choice.message?.content;
+    if (typeof content === "string" && leaksSystemPrompt(content)) {
+      console.warn("[ai-guard] output terindikasi membocorkan system prompt, diganti.");
+      choice.message!.content = LEAK_REPLACEMENT;
+    }
+  }
+}
+
 export function getAiClient() {
   const { apiKey, baseURL } = getAiRuntimeConfig();
   if (!apiKey) {
@@ -49,7 +113,18 @@ export function getAiClient() {
   }
 
   if (!runtimeClient) {
-    runtimeClient = new OpenAI({ apiKey, baseURL });
+    const client = new OpenAI({ apiKey, baseURL });
+    // Bungkus chat.completions.create sekali di sini supaya SEMUA pemanggil
+    // (route lama maupun baru) otomatis lewat pengaman yang sama.
+    const completions = client.chat.completions;
+    const original = completions.create.bind(completions);
+    const guarded = async (body: ChatParams, options?: Parameters<typeof original>[1]) => {
+      const result = await original(hardenChatRequest(body) as never, options);
+      if (!body.stream) scrubCompletion(result);
+      return result;
+    };
+    completions.create = guarded as unknown as typeof completions.create;
+    runtimeClient = client;
   }
 
   return runtimeClient;
@@ -122,9 +197,10 @@ export async function generateImage(prompt: string, options: { size?: "1024x1024
   if (item.b64_json) {
     png = Buffer.from(item.b64_json, "base64");
   } else if (item.url) {
-    const res = await fetch(item.url, { signal: AbortSignal.timeout(30_000) });
+    // safeFetch: URL dari provider tetap divalidasi (blok IP privat / redirect ke jaringan internal).
+    const res = await safeFetch(item.url, { timeoutMs: 30_000, maxBytes: 25 * 1024 * 1024 });
     if (!res.ok) throw new Error(`Gagal mengunduh gambar (${res.status}).`);
-    png = Buffer.from(await res.arrayBuffer());
+    png = res.body;
   } else {
     throw new Error("Format respons gambar tidak dikenal.");
   }
@@ -133,13 +209,13 @@ export async function generateImage(prompt: string, options: { size?: "1024x1024
 
 /**
  * sendToAI(prompt, system?, model?)
- * - prompt: user content
+ * - prompt: user content (bungkus teks tak tepercaya dengan wrapUntrusted dari guard.ts)
  * - system: optional system prompt
- * - model: optional model name override; if omitted uses AI_MODEL_DEFAULT
+ * - model: optional model name override; if omitted uses AI_MODEL_FAST
  *
  * Returns the AI text response (string).
  */
-export async function sendToAI(prompt: string, system?: string, model?: string) {
+export async function sendToAI(prompt: string, system?: string, model?: string, options: { maxTokens?: number } = {}) {
   assertAiConfigured();
 
   const chosenModel = model || AI_MODEL_FAST;
@@ -156,6 +232,7 @@ export async function sendToAI(prompt: string, system?: string, model?: string) 
       { role: "user", content: prompt },
     ],
     temperature: 0.25,
+    max_tokens: options.maxTokens ?? DEFAULT_OUTPUT_TOKENS,
   }, { timeout: AI_TIMEOUT_MS });
 
   return stripThinking(response.choices[0].message.content) || "Tidak ada respons dari AI.";

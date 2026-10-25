@@ -12,10 +12,15 @@ import {
   type UmlStreamEvent,
 } from "@/lib/uml/pipeline";
 import { readJsonBody } from "@/lib/server/request-guards";
+import { guardAiRequest } from "@/lib/server/ai-access";
 
 export const maxDuration = 120;
 
 export async function POST(req: Request) {
+  // Auth DB + rate limit + kuota harian (generator UML = panggilan berat, bobot 2).
+  const gate = await guardAiRequest("generate-uml", { limit: 20, cost: 2 });
+  if (!gate.ok) return gate.response;
+
   // Body dibatasi 512 KB: deskripsi alur + konteks spec cukup, payload besar = indikasi penyalahgunaan.
   const rawBody: unknown = await readJsonBody<unknown>(req, 512 * 1024).catch(() => null);
   if (!isRecord(rawBody)) {

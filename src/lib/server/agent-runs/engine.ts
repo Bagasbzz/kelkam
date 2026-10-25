@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, stripDashes, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { detectInjection, injectionWarning } from "@/lib/ai/guard";
 import { toPublicErrorMessage } from "@/lib/errors";
 
 export type AgentKind = "laporan" | "tugas";
@@ -50,6 +51,10 @@ export interface AgentToolContext {
   /** Laporkan progres detail ke user (disimpan + distream). */
   emit: (text: string) => void;
   attachments: AgentAttachment[];
+  /** Nama tool yang sudah dipanggil di run ini (termasuk panggilan saat ini). */
+  toolsUsed: readonly string[];
+  /** Riwayat pesan run saat ini (read-only; untuk cek izin berbasis perintah user). */
+  messages: readonly Msg[];
 }
 
 export interface AgentRunPublic {
@@ -197,7 +202,62 @@ async function loadDriver(kind: AgentKind): Promise<AgentDriver> {
 
 function clipToolResult(obj: unknown): string {
   const s = JSON.stringify(obj ?? null);
-  return s.length > TOOL_RESULT_MAX_CHARS ? `${s.slice(0, TOOL_RESULT_MAX_CHARS)}…[dipotong]` : s;
+  const clipped = s.length > TOOL_RESULT_MAX_CHARS ? `${s.slice(0, TOOL_RESULT_MAX_CHARS)}…[dipotong]` : s;
+  // Hasil tool bisa memuat konten pihak ketiga (file mahasiswa, PDF, web) → scan pola prompt injection.
+  const warning = injectionWarning(detectInjection(s), "Hasil tool ini");
+  return warning ? `${JSON.stringify({ securityWarning: warning })}\n${clipped}` : clipped;
+}
+
+// ---------------------------------------------------------------------------
+// Validasi argumen tool (output model = tak tepercaya)
+// ---------------------------------------------------------------------------
+
+type JsonSchemaLite = { type?: string | string[]; properties?: Record<string, JsonSchemaLite>; items?: JsonSchemaLite; required?: string[]; enum?: unknown[] };
+
+const TOOL_STRING_MAX = 20_000;
+
+/** Cek satu nilai terhadap skema ringan. Return pesan error atau null. */
+function checkValue(value: unknown, schema: JsonSchemaLite | undefined, path: string, depth = 0): string | null {
+  if (!schema || value === undefined || value === null) return null;
+  if (depth > 5) return `${path}: struktur terlalu dalam`;
+  const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
+  if (schema.enum && !schema.enum.includes(value)) return `${path}: nilai di luar pilihan`;
+  if (!types.length) return null;
+  const actual = Array.isArray(value) ? "array" : typeof value === "number" && Number.isInteger(value) ? "integer" : typeof value;
+  // Model sering mengirim angka sebagai string ("85"); tetap aman karena bukan objek.
+  const numericString = typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value.trim());
+  const ok = types.some((t) => t === actual || (t === "number" && actual === "integer") || ((t === "number" || t === "integer") && numericString));
+  if (!ok) return `${path}: harus ${types.join("/")}, bukan ${actual}`;
+  if (typeof value === "string" && value.length > TOOL_STRING_MAX) return `${path}: terlalu panjang`;
+  if (Array.isArray(value)) {
+    if (value.length > 200) return `${path}: terlalu banyak item`;
+    for (let i = 0; i < value.length; i++) {
+      const err = checkValue(value[i], schema.items, `${path}[${i}]`, depth + 1);
+      if (err) return err;
+    }
+  }
+  if (actual === "object" && schema.properties) {
+    for (const [key, sub] of Object.entries(schema.properties)) {
+      const err = checkValue((value as Record<string, unknown>)[key], sub, `${path}.${key}`, depth + 1);
+      if (err) return err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Validasi argumen tool terhadap JSON schema di `driver.tools`.
+ * Mencegah model (yang bisa terkena prompt injection) mengirim objek ke field
+ * string/ID (mis. `{"not": ""}` → injeksi operator Prisma) atau tool fiktif.
+ */
+export function validateToolArgs(tools: AgentDriver["tools"], name: string, args: Record<string, unknown>): string | null {
+  const tool = tools.find((t) => t.type === "function" && t.function.name === name);
+  if (!tool || tool.type !== "function") return `Tool "${name.slice(0, 60)}" tidak tersedia.`;
+  const schema = (tool.function.parameters ?? {}) as JsonSchemaLite;
+  for (const key of schema.required ?? []) {
+    if (args[key] === undefined || args[key] === null || args[key] === "") return `Argumen wajib "${key}" kosong.`;
+  }
+  return checkValue(args, { ...schema, type: "object" }, "args");
 }
 
 /** Gambar yang ingin tool tunjukkan ke model vision (mis. halaman PDF scan). */
@@ -623,7 +683,10 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         if (call.type !== "function") continue;
         const name = call.function.name;
         let args: Record<string, unknown> = {};
-        try { args = call.function.arguments ? JSON.parse(call.function.arguments) : {}; } catch { args = {}; }
+        try {
+          const parsedArgs: unknown = call.function.arguments ? JSON.parse(call.function.arguments) : {};
+          args = asObj(parsedArgs);
+        } catch { args = {}; }
         toolsUsed.push(name);
 
         if (driver.askUserTool && name === driver.askUserTool) {
@@ -638,8 +701,14 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         emit(driver.describeToolCall?.(name, args) || defaultDescribe(), "tool");
         const t0 = Date.now();
         let result: unknown;
+        const argError = validateToolArgs(driver.tools, name, args);
+        if (argError) {
+          console.warn(`[agent-run ${runId}] argumen tool ${name.slice(0, 60)} ditolak: ${argError}`);
+          messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: `Argumen ditolak: ${argError}` }) });
+          continue;
+        }
         try {
-          result = await driver.runTool(name, args, { run: ref, emit: (text) => emit(text), attachments });
+          result = await driver.runTool(name, args, { run: ref, emit: (text) => emit(text), attachments, toolsUsed, messages });
         } catch (err) {
           // Pesan mentah hanya untuk konteks model (bukan user); log + event publik disaring.
           const raw = err instanceof Error ? err.message : "Tool gagal.";

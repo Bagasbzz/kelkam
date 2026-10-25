@@ -62,10 +62,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ projectI
   if (!auth.ok) return NextResponse.json({ success: false, error: auth.error }, { status: auth.status });
   const { projectId } = await params;
   try {
-    const body = await req.json().catch(() => null) as { decisionKey?: string; patch?: Record<string, unknown> } | null;
-    if (!body?.decisionKey) return NextResponse.json({ success: false, error: "decisionKey wajib diisi." }, { status: 400 });
+    const body = await req.json().catch(() => null) as { decisionKey?: unknown; patch?: Record<string, unknown> } | null;
+    // typeof string wajib: objek seperti {"not":""} akan jadi operator Prisma (update massal).
+    if (typeof body?.decisionKey !== "string" || !body.decisionKey) return NextResponse.json({ success: false, error: "decisionKey wajib diisi." }, { status: 400 });
+    const decisionKey = body.decisionKey.slice(0, 200);
     const updated = await prisma.studioDecision.updateMany({
-      where: { projectId, ownerId: auth.user.id, decisionKey: body.decisionKey },
+      where: { projectId, ownerId: auth.user.id, decisionKey },
       data: {
         status: typeof body.patch?.status === "string" ? body.patch.status.slice(0, 20) : undefined,
         value: typeof body.patch?.value === "string" ? body.patch.value.slice(0, 2_000) : undefined,

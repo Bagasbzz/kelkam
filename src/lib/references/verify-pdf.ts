@@ -16,13 +16,15 @@
  * -----------------------------------------------------------------------------
  */
 
+import { safeFetch, type SafeFetchResult } from "@/lib/server/safe-fetch";
+
 export type PdfStatus = "verified" | "landing_page" | "closed" | "broken" | "unknown";
 
 const TIMEOUT_MS = 5000;
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const cache = new Map<string, { ts: number; status: PdfStatus }>();
 
-function classify(resp: Response): PdfStatus {
+function classify(resp: SafeFetchResult): PdfStatus {
   if (resp.status === 401 || resp.status === 402 || resp.status === 403) return "closed";
   if (!resp.ok) return "broken";
   const type = (resp.headers.get("content-type") || "").toLowerCase();
@@ -30,23 +32,18 @@ function classify(resp: Response): PdfStatus {
   return "landing_page";
 }
 
-async function probe(url: string, method: "HEAD" | "GET"): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    return await fetch(url, {
-      method,
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        Accept: "application/pdf,*/*;q=0.8",
-        "User-Agent": "keluhkampus-reference-checker/1.0 (+https://keluhkampus.my.id)",
-        ...(method === "GET" ? { Range: "bytes=0-0" } : {}),
-      },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
+/** Probe lewat safeFetch (anti SSRF: IP privat & redirect ke jaringan internal ditolak). Body tidak dibaca. */
+async function probe(url: string, method: "HEAD" | "GET"): Promise<SafeFetchResult> {
+  return safeFetch(url, {
+    method,
+    timeoutMs: TIMEOUT_MS,
+    skipBody: true,
+    headers: {
+      Accept: "application/pdf,*/*;q=0.8",
+      "User-Agent": "keluhkampus-reference-checker/1.0 (+https://keluhkampus.my.id)",
+      ...(method === "GET" ? { Range: "bytes=0-0" } : {}),
+    },
+  });
 }
 
 export async function verifyPdfUrl(url: string | null | undefined): Promise<PdfStatus> {

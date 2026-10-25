@@ -15,6 +15,7 @@
  * -----------------------------------------------------------------------------
  */
 import { extractPdf, hasPdfSignature } from "@/lib/server/extract-text";
+import { safeFetch } from "@/lib/server/safe-fetch";
 import type { VerifiedSource } from "./find-sources";
 
 export const FULLTEXT_MAX_CHARS = 45_000;
@@ -23,27 +24,21 @@ const DOWNLOAD_TIMEOUT_MS = 20_000;
 const CONCURRENCY = 3;
 
 async function downloadPdf(url: string): Promise<Buffer | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
+    // safeFetch: tolak IP privat & cek ulang setiap redirect (anti SSRF).
+    const resp = await safeFetch(url, {
+      timeoutMs: DOWNLOAD_TIMEOUT_MS,
+      maxBytes: MAX_BYTES,
       headers: {
         Accept: "application/pdf,*/*;q=0.8",
         "User-Agent": "keluhkampus-reference-reader/1.0 (+https://keluhkampus.my.id)",
       },
     });
     if (!resp.ok) return null;
-    const declared = Number(resp.headers.get("content-length") || 0);
-    if (declared > MAX_BYTES) return null;
-    const buffer = Buffer.from(await resp.arrayBuffer());
-    if (buffer.length > MAX_BYTES || !hasPdfSignature(buffer)) return null;
-    return buffer;
+    if (!hasPdfSignature(resp.body)) return null;
+    return resp.body;
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

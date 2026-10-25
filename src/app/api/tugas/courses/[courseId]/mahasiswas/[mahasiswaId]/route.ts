@@ -43,8 +43,16 @@ export async function PATCH(
     if (Object.keys(data).length === 0) {
       return NextResponse.json({ success: false, error: "Tidak ada field yang diubah." }, { status: 400 });
     }
+    // Anti IDOR: mahasiswa harus milik course ini (admin course A tidak boleh ubah roster course B).
+    const owned = await prisma.mahasiswa.findFirst({ where: { id: mahasiswaId, courseId }, select: { id: true } });
+    if (!owned) throw new ApiRequestError(404, "Mahasiswa tidak ditemukan di course ini.");
+    // classId juga harus kelas milik course yang sama.
+    if (parsed.data.classId) {
+      const cls = await prisma.courseClass.findFirst({ where: { id: parsed.data.classId, courseId }, select: { id: true } });
+      if (!cls) throw new ApiRequestError(400, "Kelas tidak ditemukan di course ini.");
+    }
     const m = await prisma.mahasiswa.update({
-      where: { id: mahasiswaId },
+      where: { id: owned.id },
       data,
       select: { id: true, nim: true, name: true, email: true, classId: true },
     });
@@ -65,7 +73,9 @@ export async function DELETE(
   try {
     const { courseId, mahasiswaId } = await context.params;
     await requireCourseAdmin(courseId);
-    await prisma.mahasiswa.delete({ where: { id: mahasiswaId } });
+    // Anti IDOR: hanya hapus bila mahasiswa milik course ini.
+    const removed = await prisma.mahasiswa.deleteMany({ where: { id: mahasiswaId, courseId } });
+    if (removed.count === 0) throw new ApiRequestError(404, "Mahasiswa tidak ditemukan di course ini.");
     return NextResponse.json({ success: true });
   } catch (error) {
     if (error instanceof ApiRequestError) {
