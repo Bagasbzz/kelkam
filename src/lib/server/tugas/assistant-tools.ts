@@ -17,8 +17,9 @@ import { nilaiToHuruf } from "@/lib/server/tugas/serialize";
 import { normalizeNim } from "@/lib/server/tugas/pertemuan";
 import { getOrExtractFileText, getSubmissionText, getTugasSubmissionTexts } from "@/lib/server/tugas/submission-text";
 import { compareAll, detectAiIndication, textHash } from "@/lib/server/tugas/text-analysis";
-import { extractTextFromBuffer, hasPdfSignature, hasZipSignature, readZipEntries, readZipEntry, readZipEntryBytes, renderPdfPages } from "@/lib/server/extract-text";
+import { extractImagesFromFile, extractTextFromBuffer, hasPdfSignature, hasZipSignature, readZipEntries, readZipEntry, readZipEntryBytes, renderPdfPages } from "@/lib/server/extract-text";
 import { exportDocxForUser, type DocxSection } from "@/lib/server/tugas/export-docx";
+import { exportZipForUser, MAX_ZIP_OUTPUT_BYTES, safeZipSegment, type ZipItem } from "@/lib/server/tugas/export-zip";
 import { TOOL_IMAGES_KEY, type ToolImage } from "@/lib/server/agent-runs/engine";
 
 export interface ToolContext {
@@ -699,6 +700,222 @@ async function exportReportDocx(ctx: ToolContext, args: { title: string; markdow
   return { ok: true, ...out };
 }
 
+// ---------------------------------------------------------------------------
+// Gambar pengumpulan & paket ZIP
+// ---------------------------------------------------------------------------
+
+/** Maks pengumpulan per ZIP (mode satu tugas). */
+const MAX_ZIP_SUBMISSIONS = 80;
+/** Maks gambar per pengumpulan yang diekstrak. */
+const MAX_IMAGES_PER_SUBMISSION = 60;
+
+type SubmissionRow = Awaited<ReturnType<typeof submissionInCourse>>;
+
+/** Nama folder per mahasiswa di dalam ZIP: "NIM_Nama". */
+const studentFolder = (s: { nim: string; name: string }) => safeZipSegment(`${s.nim}_${s.name}`, "mahasiswa");
+
+/** Target pengumpulan: satu submissionId, daftar submissionIds, atau semua pengumpulan satu tugas. */
+async function resolveSubmissionTargets(
+  ctx: ToolContext,
+  args: { submissionId?: string; submissionIds?: string[]; tugasId?: string; pertemuan?: number; title?: string; classId?: string },
+): Promise<{ subs: SubmissionRow[]; judul: string }> {
+  const ids = [...new Set([args.submissionId, ...(args.submissionIds ?? [])].filter((x): x is string => typeof x === "string" && !!x.trim()))];
+  if (ids.length) {
+    if (ids.length > MAX_ZIP_SUBMISSIONS) throw new Error(`Maksimal ${MAX_ZIP_SUBMISSIONS} pengumpulan per permintaan.`);
+    const subs = await Promise.all(ids.map((id) => submissionInCourse(ctx, id)));
+    const judul = subs.length === 1 ? `${subs[0].tugas.title}_${subs[0].nim}_${subs[0].name}` : `${subs[0].tugas.title}_${subs.length}_mahasiswa`;
+    return { subs, judul };
+  }
+  if (!args.tugasId && !args.pertemuan && !args.title) throw new Error("Berikan submissionId/submissionIds atau pilih tugas (tugasId/pertemuan/title).");
+  const [t] = await resolveTugas(ctx, args);
+  const rows = await prisma.tugasSubmission.findMany({
+    where: { tugasId: t.id, ...(args.classId ? { classId: args.classId } : {}) },
+    select: { id: true },
+    orderBy: { position: "asc" },
+  });
+  if (!rows.length) throw new Error("Belum ada pengumpulan untuk tugas ini.");
+  if (rows.length > MAX_ZIP_SUBMISSIONS) throw new Error(`Terlalu banyak pengumpulan (${rows.length}). Maksimal ${MAX_ZIP_SUBMISSIONS}; filter per kelas (classId).`);
+  const subs = await Promise.all(rows.map((r) => submissionInCourse(ctx, r.id)));
+  return { subs, judul: `${t.title}${t.pertemuan ? `_Pertemuan_${t.pertemuan}` : ""}` };
+}
+
+/** Baca file pengumpulan dari disk; null bila tidak ada file / hilang dari penyimpanan. */
+async function readSubmissionFileBytes(s: SubmissionRow) {
+  if (!s.fileUploadId) return null;
+  const file = await prisma.fileUpload.findUnique({ where: { id: s.fileUploadId }, select: { filePath: true, originalName: true, size: true } });
+  if (!file) return null;
+  if (file.size > MAX_ZIP_OUTPUT_BYTES) throw new Error(`File ${file.originalName} milik ${s.name} terlalu besar untuk dipaketkan.`);
+  try {
+    return { buffer: await fs.readFile(file.filePath), originalName: file.originalName };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ambil semua gambar dari pengumpulan (screenshot di laporan DOCX/PDF/PPTX,
+ * file gambar di ZIP, atau file gambar langsung). Satu pengumpulan: gambar
+ * ditampilkan ke model (maks 6 per panggilan). saveZip=true: semua gambar
+ * dibungkus ZIP yang bisa diunduh admin (bisa untuk semua pengumpulan satu tugas).
+ */
+async function extractSubmissionImages(
+  ctx: ToolContext,
+  args: {
+    submissionId?: string; submissionIds?: string[]; tugasId?: string; pertemuan?: number; title?: string; classId?: string;
+    path?: string; show?: boolean; showFrom?: number; saveZip?: boolean; fileName?: string;
+  },
+): Promise<ToolResult> {
+  const { subs, judul } = await resolveSubmissionTargets(ctx, args);
+  const single = subs.length === 1;
+  // Banyak pengumpulan tanpa ZIP tidak berguna (gambar tidak bisa ditampilkan semua ke model).
+  const saveZip = args.saveZip ?? !single;
+  const show = single && (args.show ?? true);
+
+  const zipItems: ZipItem[] = [];
+  const images: ToolImage[] = [];
+  const perMahasiswa: ToolResult[] = [];
+  let zipBytes = 0;
+  let zipFull = false;
+
+  for (const s of subs) {
+    ctx.emit?.(`Mengambil gambar dari pengumpulan ${s.name}`);
+    const file = await readSubmissionFileBytes(s);
+    if (!file) {
+      perMahasiswa.push({ submissionId: s.id, nim: s.nim, nama: s.name, jumlahGambar: 0, catatan: "tidak ada file / file hilang" });
+      continue;
+    }
+    const r = await extractImagesFromFile(file.buffer, file.originalName, { maxImages: MAX_IMAGES_PER_SUBMISSION, pathFilter: args.path });
+
+    if (saveZip && !zipFull) {
+      const folder = studentFolder(s);
+      for (const img of r.images) {
+        if (zipBytes + img.bytes.length > MAX_ZIP_OUTPUT_BYTES) { zipFull = true; break; }
+        zipItems.push({ path: `${folder}/${img.path}`, bytes: img.bytes });
+        zipBytes += img.bytes.length;
+      }
+    }
+
+    const daftar = r.images.map((img, i) => ({
+      no: i + 1, path: img.path, ukuranKB: Math.max(1, Math.round(img.bytes.length / 1024)),
+      ...(img.width ? { lebar: img.width, tinggi: img.height } : {}), ...(img.page ? { halaman: img.page } : {}),
+    }));
+
+    if (show) {
+      // Tampilkan ke model maks VIEW_PAGES_MAX gambar mulai showFrom; gambar > 4 MB dilewati.
+      const start = Math.max((args.showFrom ?? 1) - 1, 0);
+      for (const [i, img] of r.images.entries()) {
+        if (i < start || images.length >= VIEW_PAGES_MAX) continue;
+        if (img.bytes.length > MAX_TUGAS_IMAGE_BYTES) continue;
+        images.push({ dataUrl: `data:${img.mime};base64,${img.bytes.toString("base64")}`, label: `${s.name}: gambar ${i + 1} (${img.path})` });
+      }
+    }
+
+    perMahasiswa.push({
+      submissionId: s.id, nim: s.nim, nama: s.name, file: file.originalName,
+      jumlahGambar: r.images.length, terpotong: r.truncated,
+      ...(single ? { daftarGambar: daftar.slice(0, 100) } : {}),
+      ...(r.skipped.length ? { dilewati: r.skipped.slice(0, 15) } : {}),
+    });
+  }
+
+  const totalGambar = perMahasiswa.reduce((sum, p) => sum + Number(p.jumlahGambar ?? 0), 0);
+  let unduhan: ToolResult | null = null;
+  if (saveZip && zipItems.length) {
+    const out = await exportZipForUser(ctx.adminId, args.fileName ?? `Gambar_${judul}`, zipItems);
+    ctx.attachments?.push({ fileId: out.fileId, name: out.name, url: out.url, size: out.size });
+    unduhan = out;
+  }
+
+  return {
+    jumlahPengumpulan: subs.length,
+    totalGambar,
+    ...(single ? perMahasiswa[0] : { perMahasiswa }),
+    ...(show ? { gambarDitampilkan: images.length, catatanTampilan: images.length ? "Gambar dikirim di pesan berikutnya. Untuk gambar lain panggil lagi dengan showFrom=n." : "Tidak ada gambar yang bisa ditampilkan." } : {}),
+    zip: unduhan
+      ? { ...unduhan, catatan: `Beritahu admin file ZIP siap diunduh (tautan tampil otomatis).${zipFull ? " Sebagian gambar tidak masuk karena batas ukuran ZIP." : ""}` }
+      : saveZip ? "Tidak ada gambar untuk dibungkus ZIP." : "Tidak dibuat (saveZip=false).",
+    ...(images.length ? { [TOOL_IMAGES_KEY]: images } : {}),
+  };
+}
+
+/**
+ * Bungkus beberapa file menjadi satu ZIP yang bisa diunduh admin:
+ * file asli pengumpulan (per mahasiswa), gambar hasil ekstraksi, dan file
+ * milik admin (hasil ekspor DOCX/ZIP sebelumnya atau lampiran chat).
+ */
+async function packageZip(
+  ctx: ToolContext,
+  args: {
+    submissionId?: string; submissionIds?: string[]; tugasId?: string; pertemuan?: number; title?: string; classId?: string;
+    includeFiles?: boolean; includeImages?: boolean; fileIds?: string[]; fileName?: string;
+  },
+): Promise<ToolResult> {
+  const includeFiles = args.includeFiles ?? true;
+  const includeImages = args.includeImages ?? false;
+  const hasSubmissionTarget = !!(args.submissionId || args.submissionIds?.length || args.tugasId || args.pertemuan || args.title);
+  const fileIds = [...new Set(args.fileIds ?? [])].slice(0, 50);
+  if (!hasSubmissionTarget && !fileIds.length) throw new Error("Pilih isi ZIP: submissionId/submissionIds, tugas (tugasId/pertemuan/title), dan/atau fileIds.");
+  if (hasSubmissionTarget && !includeFiles && !includeImages) throw new Error("includeFiles dan includeImages tidak boleh keduanya false.");
+
+  const items: ZipItem[] = [];
+  const ringkasan: ToolResult[] = [];
+  const kosong: string[] = [];
+  let total = 0;
+  /** Tambah item dengan batas ukuran total; lempar error jelas bila melebihi. */
+  const add = (path: string, bytes: Buffer) => {
+    total += bytes.length;
+    if (total > MAX_ZIP_OUTPUT_BYTES) throw new Error(`Total isi ZIP melebihi ${MAX_ZIP_OUTPUT_BYTES / 1048576} MB. Persempit pilihan (per kelas / per mahasiswa).`);
+    items.push({ path, bytes });
+  };
+
+  let judul = "Paket_file";
+  if (hasSubmissionTarget) {
+    const target = await resolveSubmissionTargets(ctx, args);
+    judul = target.judul;
+    for (const s of target.subs) {
+      ctx.emit?.(`Mengemas file ${s.name}`);
+      const file = await readSubmissionFileBytes(s);
+      const folder = studentFolder(s);
+      if (!file) { kosong.push(`${s.name} (${s.nim})`); continue; }
+      if (includeFiles) add(`${folder}/${file.originalName}`, file.buffer);
+      let jumlahGambar = 0;
+      if (includeImages) {
+        const r = await extractImagesFromFile(file.buffer, file.originalName, { maxImages: MAX_IMAGES_PER_SUBMISSION });
+        for (const img of r.images) add(`${folder}/gambar/${img.path}`, img.bytes);
+        jumlahGambar = r.images.length;
+      }
+      ringkasan.push({ nim: s.nim, nama: s.name, file: includeFiles ? file.originalName : null, ...(includeImages ? { jumlahGambar } : {}) });
+    }
+  }
+
+  // File milik admin: hasil ekspor (DOCX/ZIP) atau lampiran chat. Kepemilikan diverifikasi lewat ownerId.
+  if (fileIds.length) {
+    const files = await prisma.fileUpload.findMany({ where: { id: { in: fileIds }, ownerId: ctx.adminId }, select: { id: true, filePath: true, originalName: true, size: true } });
+    const missing = fileIds.filter((id) => !files.some((f) => f.id === id));
+    if (missing.length) throw new Error(`File tidak ditemukan atau bukan milik Anda: ${missing.join(", ")}`);
+    for (const f of files) {
+      if (f.size > MAX_ZIP_OUTPUT_BYTES) throw new Error(`File ${f.originalName} terlalu besar untuk dipaketkan.`);
+      try {
+        add(`dokumen/${f.originalName}`, await fs.readFile(f.filePath));
+      } catch (err) {
+        if (err instanceof Error && err.message.startsWith("Total isi ZIP")) throw err;
+        kosong.push(f.originalName);
+      }
+    }
+  }
+
+  if (!items.length) throw new Error("Tidak ada file yang bisa dimasukkan ke ZIP.");
+  const out = await exportZipForUser(ctx.adminId, args.fileName ?? judul, items);
+  ctx.attachments?.push({ fileId: out.fileId, name: out.name, url: out.url, size: out.size });
+  return {
+    ok: true, ...out,
+    isi: ringkasan.slice(0, 100),
+    ...(fileIds.length ? { dokumenTambahan: fileIds.length } : {}),
+    ...(kosong.length ? { tanpaFile: kosong } : {}),
+    catatan: "Beritahu admin file ZIP siap diunduh (tautan tampil otomatis di chat).",
+  };
+}
+
 async function setFeedback(
   ctx: ToolContext,
   args: { submissionId: string; feedback?: string; nilai?: number | null },
@@ -886,6 +1103,8 @@ export const TOOL_IMPL: Record<string, ToolFn> = {
   getTugasAttachmentContent,
   exportSubmissionDocx,
   exportReportDocx,
+  extractSubmissionImages,
+  packageZip,
 };
 
 const tugasSelector = {
@@ -1041,6 +1260,47 @@ export const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       name: "exportReportDocx",
       description: "Simpan laporan/analisis yang Anda tulis (markdown: heading #, bullet -, paragraf) menjadi DOCX yang bisa diunduh admin. Pakai saat admin minta hasil review/rekap dalam bentuk Word.",
       parameters: { type: "object", properties: { title: { type: "string" }, markdown: { type: "string" }, fileName: { type: "string" } }, required: ["title", "markdown"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "extractSubmissionImages",
+      description: "Ambil SEMUA gambar dari pengumpulan: screenshot/foto di dalam laporan DOCX/PDF/PPTX, file gambar di dalam ZIP (termasuk DOCX/PDF di dalam ZIP), atau file gambar langsung. Satu pengumpulan: daftar gambar + maks 6 gambar ditampilkan ke Anda (showFrom=n untuk lanjutan). saveZip=true: semua gambar dibungkus ZIP yang bisa diunduh admin (per folder NIM_Nama). Tanpa submissionId tapi dengan tugas → semua pengumpulan tugas itu (otomatis jadi ZIP). path untuk membatasi ke file/folder tertentu di ZIP.",
+      parameters: {
+        type: "object",
+        properties: {
+          submissionId: { type: "string" },
+          submissionIds: { type: "array", items: { type: "string" } },
+          ...tugasSelector,
+          classId: { type: "string" },
+          path: { type: "string", description: "Batasi ke file/folder di ZIP, mis. 'screenshots' atau 'laporan.docx'." },
+          show: { type: "boolean", description: "Tampilkan gambar ke Anda (default true untuk satu pengumpulan)." },
+          showFrom: { type: "integer", description: "Nomor gambar awal yang ditampilkan (default 1)." },
+          saveZip: { type: "boolean", description: "Bungkus gambar jadi ZIP unduhan (default false untuk satu pengumpulan, true untuk banyak)." },
+          fileName: { type: "string" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "packageZip",
+      description: "Buat SATU file ZIP yang bisa diunduh admin berisi: file asli pengumpulan (includeFiles, default true) dan/atau gambar hasil ekstraksi (includeImages), dikelompokkan per folder NIM_Nama; plus file milik admin lewat fileIds (hasil exportSubmissionDocx/exportReportDocx/ZIP sebelumnya, atau lampiran chat). Target: submissionId, submissionIds, atau semua pengumpulan satu tugas (maks 80, filter classId). Maks 200 MB.",
+      parameters: {
+        type: "object",
+        properties: {
+          submissionId: { type: "string" },
+          submissionIds: { type: "array", items: { type: "string" } },
+          ...tugasSelector,
+          classId: { type: "string" },
+          includeFiles: { type: "boolean" },
+          includeImages: { type: "boolean" },
+          fileIds: { type: "array", items: { type: "string" }, description: "fileId dokumen hasil ekspor atau lampiran admin yang ikut dimasukkan." },
+          fileName: { type: "string" },
+        },
+      },
     },
   },
   {

@@ -462,6 +462,188 @@ export async function readZipEntryBytes(buffer: Buffer, entryPath: string): Prom
   return { path: entry.name, bytes: await entry.bytes() };
 }
 
+// ---------------------------------------------------------------------------
+// Ekstraksi gambar (screenshot di laporan, foto, gambar di ZIP/DOCX/PPTX/PDF)
+// ---------------------------------------------------------------------------
+
+export interface ExtractedImage {
+  /** Path asal, mis. "laporan.docx::word/media/image1.png" atau "laporan.pdf#hal3-img1.png". */
+  path: string;
+  mime: string;
+  bytes: Buffer;
+  width?: number;
+  height?: number;
+  /** Nomor halaman (khusus gambar dari PDF). */
+  page?: number;
+}
+
+export interface ImageExtractOptions {
+  /** Maksimal gambar yang dikumpulkan (default 60). */
+  maxImages?: number;
+  /** Batas total bytes semua gambar (default 80 MB). */
+  maxTotalBytes?: number;
+  /** Filter entry ZIP: nama file, akhiran path, atau folder. */
+  pathFilter?: string;
+  /** Maksimal halaman PDF yang dipindai (default 40). */
+  maxPdfPages?: number;
+}
+
+export interface ImageExtractResult {
+  images: ExtractedImage[];
+  /** Catatan entry yang dilewati (terlalu besar, format tidak didukung, gagal dibuka). */
+  skipped: string[];
+  /** True kalau berhenti karena batas jumlah/ukuran. */
+  truncated: boolean;
+}
+
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp)$/i;
+const MAX_IMAGE_ENTRY_BYTES = 15 * 1024 * 1024;
+/** Gambar PDF lebih kecil dari ini (px) dianggap ikon/logo dan dilewati. */
+const PDF_IMAGE_MIN_PX = 80;
+
+/** Deteksi MIME gambar dari magic bytes (format yang didukung model vision). */
+export function detectImageMime(buffer: Buffer): string | null {
+  if (buffer.length < 12) return null;
+  if (buffer[0] === 0x89 && buffer.toString("ascii", 1, 4) === "PNG") return "image/png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.toString("ascii", 0, 4) === "GIF8") return "image/gif";
+  if (buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+/** Ambil gambar yang tertanam di PDF (bukan render halaman). Hasil berupa PNG. */
+async function extractPdfImages(buffer: Buffer, label: string, maxPages: number): Promise<ExtractedImage[]> {
+  const { PDFParse } = await import("pdf-parse");
+  const parser = new PDFParse({ data: new Uint8Array(buffer), verbosity: 0 });
+  try {
+    const result = await withTimeout(
+      parser.getImage({ first: maxPages, imageThreshold: PDF_IMAGE_MIN_PX, imageBuffer: true, imageDataUrl: false }),
+      90_000,
+    );
+    const out: ExtractedImage[] = [];
+    for (const page of result.pages) {
+      page.images.forEach((img, i) => {
+        if (!img.data?.length) return;
+        out.push({
+          path: `${label}#hal${page.pageNumber}-img${i + 1}.png`,
+          mime: "image/png",
+          bytes: Buffer.from(img.data),
+          width: img.width,
+          height: img.height,
+          page: page.pageNumber,
+        });
+      });
+    }
+    return out;
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
+}
+
+/** Cocokkan entry ZIP dengan filter path (persis, akhiran, atau folder). */
+function matchesPathFilter(name: string, filter?: string) {
+  if (!filter) return true;
+  const f = filter.replace(/\\/g, "/").replace(/^\.?\//, "").replace(/\/+$/, "").toLowerCase();
+  const n = name.toLowerCase();
+  return n === f || n.endsWith(`/${f}`) || n.startsWith(`${f}/`) || n.includes(`/${f}/`) || n.startsWith(`${f}${NESTED_ZIP_SEPARATOR}`);
+}
+
+/**
+ * Kumpulkan gambar dari satu file pengumpulan:
+ * - file gambar langsung (PNG/JPG/GIF/WEBP)
+ * - ZIP (termasuk ZIP di dalam ZIP 1 level) → file gambar di dalamnya
+ * - DOCX/PPTX/XLSX → folder media (word/media, ppt/media, xl/media)
+ * - PDF → gambar yang tertanam (screenshot/foto)
+ * DOCX/PPTX/PDF yang berada di dalam ZIP ikut dibuka (1 tingkat).
+ */
+export async function extractImagesFromFile(buffer: Buffer, fileName: string, options: ImageExtractOptions = {}): Promise<ImageExtractResult> {
+  const maxImages = Math.max(1, options.maxImages ?? 60);
+  const maxTotal = options.maxTotalBytes ?? 80 * 1024 * 1024;
+  const maxPdfPages = Math.max(1, options.maxPdfPages ?? 40);
+  const state: ImageExtractResult = { images: [], skipped: [], truncated: false };
+  let totalBytes = 0;
+
+  /** Tambah gambar; false = batas tercapai, hentikan pemindaian. */
+  const push = (img: ExtractedImage) => {
+    if (state.images.length >= maxImages || totalBytes + img.bytes.length > maxTotal) {
+      state.truncated = true;
+      return false;
+    }
+    state.images.push(img);
+    totalBytes += img.bytes.length;
+    return true;
+  };
+
+  const scan = async (buf: Buffer, label: string, depth: number, filter?: string): Promise<boolean> => {
+    const mime = detectImageMime(buf);
+    if (mime) return push({ path: label, mime, bytes: buf });
+
+    if (hasPdfSignature(buf)) {
+      try {
+        for (const img of await extractPdfImages(buf, label, maxPdfPages)) if (!push(img)) return false;
+      } catch {
+        state.skipped.push(`${label}: gambar PDF gagal dibaca (coba viewSubmissionPages)`);
+      }
+      return true;
+    }
+
+    if (!hasZipSignature(buf)) {
+      state.skipped.push(`${label}: bukan gambar/PDF/ZIP/DOCX/PPTX`);
+      return true;
+    }
+
+    // ZIP / DOCX / PPTX / XLSX (semuanya arsip ZIP).
+    let entries: FlatEntry[];
+    try {
+      entries = await loadArchiveEntries(buf);
+    } catch {
+      state.skipped.push(`${label}: arsip gagal dibuka`);
+      return true;
+    }
+    // ZIP pengumpulan tingkat atas: path apa adanya. Dokumen Office / arsip bertingkat: diberi prefix asal.
+    const isPlainTopZip = depth === 0 && !/\.(docx|pptx|xlsx)$/i.test(label);
+    const prefix = isPlainTopZip ? "" : `${label}${NESTED_ZIP_SEPARATOR}`;
+    const candidates = entries
+      .filter((e) => !shouldIgnorePath(e.name) && matchesPathFilter(e.name, filter))
+      .filter((e) => IMAGE_EXTENSIONS.test(e.name) || (depth === 0 && /\.(docx|pptx|xlsx|pdf)$/i.test(e.name)))
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+    for (const entry of candidates) {
+      const name = `${prefix}${entry.name}`;
+      if (entry.declaredSize > MAX_IMAGE_ENTRY_BYTES) {
+        state.skipped.push(`${name}: terlalu besar (> ${MAX_IMAGE_ENTRY_BYTES / 1048576} MB)`);
+        continue;
+      }
+      let bytes: Buffer;
+      try {
+        bytes = await entry.bytes();
+      } catch {
+        state.skipped.push(`${name}: gagal dibaca`);
+        continue;
+      }
+      if (IMAGE_EXTENSIONS.test(entry.name)) {
+        const entryMime = detectImageMime(bytes);
+        if (!entryMime) {
+          state.skipped.push(`${name}: isi bukan gambar valid`);
+          continue;
+        }
+        if (!push({ path: name, mime: entryMime, bytes })) return false;
+      } else if (!(await scan(bytes, name, depth + 1))) {
+        // DOCX/PPTX/PDF di dalam ZIP sudah dipindai rekursif; false = batas tercapai.
+        return false;
+      }
+    }
+    return true;
+  };
+
+  // Filter path hanya berlaku untuk entry arsip tingkat pertama.
+  await scan(buffer, fileName, 0, options.pathFilter?.trim() || undefined);
+  if (options.pathFilter && !state.images.length && !state.skipped.length) {
+    state.skipped.push(`Tidak ada gambar yang cocok dengan path "${options.pathFilter}".`);
+  }
+  return state;
+}
+
 /**
  * Baca BANYAK file di dalam ZIP sekaligus (untuk ekspor DOCX / review utuh).
  * `paths` kosong → semua file kode/teks + dokumen (dibatasi maxFiles).

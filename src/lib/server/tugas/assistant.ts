@@ -333,7 +333,7 @@ export const tugasAgentDriver: AgentDriver = {
       if (denied) return { error: denied };
     }
     const userFiles = Array.isArray(ctx.run.meta.userFiles) ? (ctx.run.meta.userFiles as UserAttachmentMeta[]) : [];
-    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments, userFileIds: userFiles.map((f) => f.fileId) };
+    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments, userFileIds: userFiles.map((f) => f.fileId), emit: ctx.emit };
     return impl(toolCtx, args as never);
   },
   async onFinish(run: AgentRunPublic) {
