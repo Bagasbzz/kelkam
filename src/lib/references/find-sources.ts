@@ -14,7 +14,7 @@
 import { searchSemanticScholar } from "./semantic-scholar";
 import { searchOpenAlex } from "./openalex";
 import { searchCrossref, verifyCrossrefDoi } from "./crossref";
-import { verifyPdfUrls, type PdfStatus } from "./verify-pdf";
+import { checkPdfUrls, type PdfStatus } from "./verify-pdf";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import type { ProviderPaper, SearchOptions } from "./types";
 
@@ -165,7 +165,7 @@ export function toApaFromProvider(paper: ProviderPaper) {
   const title = paper.title || "Tanpa judul";
   const venue = paper.venue || "";
   const doi = normalizeDoi(paper.doi);
-  return `${authors || "Penulis tidak tersedia"} (${year}). ${title}.${venue ? ` ${venue}.` : ""}${doi ? ` https://doi.org/${doi}` : ""}`;
+  return `${authors || "Penulis tidak tersedia"} (${year}). ${title}.${venue ? ` ${venue}.` : ""}${doi ? ` ${doiToUrl(doi)}` : ""}`;
 }
 
 function qualitySignals(p: ProviderPaper, pdfStatus: PdfStatus): string[] {
@@ -182,16 +182,21 @@ function qualitySignals(p: ProviderPaper, pdfStatus: PdfStatus): string[] {
   return out;
 }
 
+/** URL doi.org yang aman: tiap segmen di-encode (DOI boleh berisi <>#?;), "/" dipertahankan. */
+export function doiToUrl(doi: string) {
+  return `https://doi.org/${doi.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
+}
+
 function checkLinks(p: ProviderPaper): { label: string; url: string }[] {
   const links: { label: string; url: string }[] = [];
-  const issn = p.issn?.[0];
+  // SINTA hanya cocok dengan ISSN TANPA tanda hubung (12345678); "1234-5678" → 0 hasil.
+  const issn = (p.issn?.[0] || "").replace(/[^0-9xX]/g, "").toUpperCase();
   const venue = (p.venue || "").trim();
-  if (issn) {
-    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(issn)}` });
-    links.push({ label: "Cek SINTA", url: `https://sinta.kemdikbud.go.id/journals?q=${encodeURIComponent(issn)}` });
-  } else if (venue) {
-    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(venue)}` });
-    links.push({ label: "Cek SINTA", url: `https://sinta.kemdikbud.go.id/journals?q=${encodeURIComponent(venue)}` });
+  const q = issn.length === 8 ? issn : venue;
+  if (q) {
+    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(q)}` });
+    // Domain lama sinta.kemdikbud.go.id sudah mati sejak pindah ke Kemdiktisaintek.
+    links.push({ label: "Cek SINTA", url: `https://sinta.kemdiktisaintek.go.id/journals?q=${encodeURIComponent(q)}` });
   }
   return links;
 }
@@ -315,20 +320,31 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
-  progress(`${eligibleRanked.length} lolos verifikasi DOI & syarat jurnal, mencari PDF open access…`);
-  // Lengkapi PDF OA legal via Unpaywall untuk yang belum punya pdfUrl.
-  const withOa = await Promise.all(eligibleRanked.map(async ({ paper, score }) => {
-    if (paper.pdfUrl || !paper.doi) return { paper, score };
-    const oaPdf = await unpaywallPdf(normalizeDoi(paper.doi) || paper.doi);
-    return { paper: oaPdf ? { ...paper, pdfUrl: oaPdf, isOpenAccess: true } : paper, score };
-  }));
+  progress(`${eligibleRanked.length} lolos verifikasi DOI & syarat jurnal, mengecek PDF open access…`);
+  // Tahap 1: cek pdfUrl dari provider (sekaligus cari PDF asli bila ternyata landing page).
+  let checks = await checkPdfUrls(eligibleRanked.map(({ paper }) => paper.pdfUrl));
 
-  progress("Mengecek ketersediaan PDF…");
-  const pdfStatuses = await verifyPdfUrls(withOa.map(({ paper }) => paper.pdfUrl));
+  // Tahap 2: yang belum verified → coba Unpaywall (by DOI), lalu halaman penerbit (citation_pdf_url).
+  const retry = eligibleRanked
+    .map(({ paper }, i) => ({ paper, i }))
+    .filter(({ i }) => checks[i].status !== "verified");
+  if (retry.length) {
+    const fallbackUrls = await Promise.all(retry.map(async ({ paper }) => {
+      const doi = normalizeDoi(paper.doi);
+      const oaPdf = doi ? await unpaywallPdf(doi) : null;
+      if (oaPdf && oaPdf !== paper.pdfUrl) return oaPdf;
+      return paper.url && paper.url !== paper.pdfUrl ? paper.url : null;
+    }));
+    const second = await checkPdfUrls(fallbackUrls);
+    checks = checks.slice();
+    retry.forEach(({ i }, k) => {
+      if (second[k].status === "verified") checks[i] = second[k];
+    });
+  }
 
-  return withOa.map(({ paper: p, score }, i) => {
+  return eligibleRanked.map(({ paper: p, score }, i) => {
     const doi = normalizeDoi(p.doi);
-    const pdfStatus = pdfStatuses[i];
+    const { status: pdfStatus, url: verifiedPdf } = checks[i];
     return {
       id: doi || p.id,
       title: p.title,
@@ -336,10 +352,11 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
       year: p.year ?? null,
       venue: p.venue || "",
       abstract: p.abstract || "",
-      url: p.url || (doi ? `https://doi.org/${doi}` : null),
-      pdfUrl: pdfStatus === "verified" || pdfStatus === "landing_page" ? p.pdfUrl || null : null,
+      url: p.url || (doi ? doiToUrl(doi) : null),
+      // Hanya link yang benar-benar PDF; landing page tetap bisa dibuka lewat DOI/url.
+      pdfUrl: pdfStatus === "verified" ? verifiedPdf || p.pdfUrl || null : null,
       doi,
-      doiUrl: doi ? `https://doi.org/${doi}` : null,
+      doiUrl: doi ? doiToUrl(doi) : null,
       doiVerified: Boolean(p.doiVerified),
       pdfStatus,
       citationCount: Number(p.citationCount || 0),

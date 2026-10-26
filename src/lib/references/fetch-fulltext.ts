@@ -16,6 +16,7 @@
  */
 import { extractPdf, hasPdfSignature } from "@/lib/server/extract-text";
 import { safeFetch } from "@/lib/server/safe-fetch";
+import { BROWSER_USER_AGENT } from "./verify-pdf";
 import type { VerifiedSource } from "./find-sources";
 
 export const FULLTEXT_MAX_CHARS = 45_000;
@@ -31,7 +32,7 @@ async function downloadPdf(url: string): Promise<Buffer | null> {
       maxBytes: MAX_BYTES,
       headers: {
         Accept: "application/pdf,*/*;q=0.8",
-        "User-Agent": "keluhkampus-reference-reader/1.0 (+https://keluhkampus.my.id)",
+        "User-Agent": BROWSER_USER_AGENT,
       },
     });
     if (!resp.ok) return null;

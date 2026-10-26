@@ -3,7 +3,7 @@ import { getErrorMessage } from "@/lib/errors";
 import { searchSemanticScholar } from "@/lib/references/semantic-scholar";
 import { searchOpenAlex } from "@/lib/references/openalex";
 import { searchCrossref, verifyCrossrefDoi } from "@/lib/references/crossref";
-import { verifyPdfUrls } from "@/lib/references/verify-pdf";
+import { checkPdfUrls } from "@/lib/references/verify-pdf";
 import type { ProviderPaper } from "@/lib/references/types";
 
 function toApaFromProvider(paper: ProviderPaper) {
@@ -176,12 +176,13 @@ export async function POST(req: Request) {
       })
     );
 
-    // Cek nyata link PDF (HEAD/GET ringan), "verified" hanya kalau content-type PDF.
-    const pdfStatuses = await verifyPdfUrls(doiChecked.map((paper) => paper.pdfUrl));
+    // Cek nyata link PDF (baca signature %PDF-, cari citation_pdf_url bila landing page).
+    const pdfChecks = await checkPdfUrls(doiChecked.map((paper) => paper.pdfUrl || paper.url));
     const verified = doiChecked.map((paper, index) => ({
       ...paper,
-      pdfStatus: pdfStatuses[index],
-      isOpenAccess: Boolean(paper.isOpenAccess) || pdfStatuses[index] === "verified",
+      pdfUrl: pdfChecks[index].status === "verified" ? pdfChecks[index].url || paper.pdfUrl : null,
+      pdfStatus: pdfChecks[index].status,
+      isOpenAccess: Boolean(paper.isOpenAccess) || pdfChecks[index].status === "verified",
     }));
 
     const mapped = verified.map((p) => ({

@@ -9,7 +9,7 @@
  * metadata cloud, dsb) sehingga server kita dipakai untuk mengintip layanan dalam.
  *
  * Cara kerja:
- *   - Hanya http/https, port standar (80/443) atau tanpa port.
+ *   - Hanya http/https, port standar (80/443/8080/8443) atau tanpa port.
  *   - Hostname di-resolve via DNS; SEMUA alamat hasil resolve harus publik.
  *   - Redirect diikuti manual (maks 5), tiap lompatan dicek ulang.
  *   - Ukuran body dibatasi (stream dibaca bertahap, berhenti saat lewat batas).
@@ -62,6 +62,8 @@ export function isPrivateAddress(ip: string): boolean {
   return true; // bukan IP valid → anggap tidak aman
 }
 
+const ALLOWED_PORTS = new Set(["80", "443", "8080", "8443"]);
+
 /** Validasi URL + resolve DNS. Lempar SafeFetchError bila tidak aman. */
 export async function assertPublicUrl(raw: string): Promise<URL> {
   let url: URL;
@@ -72,7 +74,8 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new SafeFetchError("Skema URL tidak diizinkan.");
   if (url.username || url.password) throw new SafeFetchError("URL dengan kredensial tidak diizinkan.");
-  if (url.port && url.port !== "80" && url.port !== "443") throw new SafeFetchError("Port tidak diizinkan.");
+  // 8080/8443 dipakai banyak server OJS jurnal kampus; port lain tetap ditolak.
+  if (url.port && !ALLOWED_PORTS.has(url.port)) throw new SafeFetchError("Port tidak diizinkan.");
 
   const host = url.hostname.replace(/^\[|\]$/g, "");
   if (!host || /^localhost$/i.test(host) || /\.(localhost|local|internal|lan|home|corp)$/i.test(host)) {
@@ -94,6 +97,11 @@ export interface SafeFetchOptions {
   maxRedirects?: number;
   /** Lewati pembacaan body (mis. hanya butuh header). */
   skipBody?: boolean;
+  /**
+   * Baca body hanya sampai N byte lalu putus koneksi (tanpa error).
+   * Dipakai untuk mengintip signature file / meta HTML tanpa mengunduh semuanya.
+   */
+  peekBytes?: number;
 }
 
 export interface SafeFetchResult {
@@ -108,11 +116,15 @@ export interface SafeFetchResult {
 export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}): Promise<SafeFetchResult> {
   const maxBytes = options.maxBytes ?? 15 * 1024 * 1024;
   const maxRedirects = options.maxRedirects ?? 5;
-  const signal = AbortSignal.timeout(options.timeoutMs ?? 20_000);
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  // Batas total supaya rantai redirect lambat tetap berhenti; tiap hop juga punya
+  // timeout sendiri agar satu hop lambat tidak memakan jatah hop berikutnya.
+  const overall = AbortSignal.timeout(timeoutMs * 2);
 
   let current = rawUrl;
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const url = await assertPublicUrl(current);
+    const signal = AbortSignal.any([overall, AbortSignal.timeout(timeoutMs)]);
     const resp = await fetch(url, { method: options.method ?? "GET", headers: options.headers, redirect: "manual", signal });
 
     if (resp.status >= 300 && resp.status < 400 && resp.headers.get("location")) {
@@ -126,8 +138,9 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
       return { ok: resp.ok, status: resp.status, headers: resp.headers, finalUrl: url.toString(), body: Buffer.alloc(0) };
     }
 
+    const peek = options.peekBytes && options.peekBytes > 0 ? Math.min(options.peekBytes, maxBytes) : 0;
     const declared = Number(resp.headers.get("content-length") || 0);
-    if (declared > maxBytes) {
+    if (!peek && declared > maxBytes) {
       await resp.body.cancel().catch(() => undefined);
       throw new SafeFetchError("Ukuran respons melebihi batas.");
     }
@@ -140,6 +153,11 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
+      if (peek && total >= peek) {
+        chunks.push(value);
+        await reader.cancel().catch(() => undefined);
+        return { ok: resp.ok, status: resp.status, headers: resp.headers, finalUrl: url.toString(), body: Buffer.concat(chunks).subarray(0, peek) };
+      }
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);
         throw new SafeFetchError("Ukuran respons melebihi batas.");

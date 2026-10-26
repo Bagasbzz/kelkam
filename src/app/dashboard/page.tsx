@@ -55,6 +55,13 @@ const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF terbuka", landing_page: "Halaman penerbit", closed: "Berbayar", broken: "Tautan rusak", unknown: "PDF ?" };
 
+/** Sumber lama tersimpan dengan domain SINTA yang sudah mati + ISSN bertanda hubung (0 hasil). */
+function fixCheckLink(url: string) {
+  return url
+    .replace("://sinta.kemdikbud.go.id/", "://sinta.kemdiktisaintek.go.id/")
+    .replace(/([?&]q=)(\d{4})-(\d{3}[\dXx])\b/, "$1$2$3");
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
   const data = (await res.json().catch(() => null)) as (T & { success?: boolean; error?: string }) | null;
@@ -565,8 +572,9 @@ export default function LaporanPage() {
                         </div>
                         <div className="mt-2 flex flex-wrap gap-3 text-sm font-semibold">
                           {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" />DOI</a>}
-                          {s.pdfUrl && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline"><Download className="h-3.5 w-3.5" />Unduh PDF</a>}
-                          {s.checkLinks.map((c) => <a key={c.url} href={c.url} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>)}
+                          {s.pdfUrl && s.pdfStatus === "verified" && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline"><Download className="h-3.5 w-3.5" />Unduh PDF</a>}
+                          {!s.doiUrl && s.url && s.pdfStatus !== "verified" && <a href={s.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" />Halaman artikel</a>}
+                          {s.checkLinks.map((c) => { const href = fixCheckLink(c.url); return <a key={href} href={href} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>; })}
                         </div>
                       </div>
                     </div>
