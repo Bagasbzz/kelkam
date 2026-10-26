@@ -1,18 +1,23 @@
 /**
  * src/utils/markdown-docx-exporter.ts
  * -----------------------------------------------------------------------------
- * Export markdown laporan → DOCX dengan profil format kampus.
+ * Export markdown laporan → DOCX dengan format laporan akademik Indonesia.
  *
  * Fitur:
- *   - Profil format: margin (preset 4/4/3/3 cm, 3/3/3/3, custom), font, ukuran,
- *     spasi baris, halaman sampul opsional.
- *   - Daftar isi otomatis (TOC field, Word minta "update field" saat dibuka).
- *   - Nomor halaman di footer.
- *   - Heading H1-H4, paragraf justified, bullet/numbered list, tabel dengan
- *     caption "Tabel N." otomatis.
- *   - Placeholder gambar `[Gambar: ...]` → caption "Gambar N." + (opsional)
- *     embed PNG dari map `images` (key = judul gambar lowercase).
- *   - Inline **bold** / *italic* / `code`.
+ *   - Profil format: kertas (A4/F4/Letter), margin, font, ukuran, spasi,
+ *     sampul (judul, jenis, nama, NIM, dosen, prodi, institusi, tahun).
+ *     `parseFormatRules()` membaca ketentuan kampus dari teks bebas user.
+ *   - Struktur: tiap BAB di section baru (halaman baru), judul "BAB I" +
+ *     nama bab di tengah. Draft yang memakai `#` judul + `##` bab dikenali
+ *     otomatis (level heading digeser).
+ *   - Bagian depan (Kata Pengantar, Abstrak, Daftar Isi/Gambar/Tabel) bernomor
+ *     romawi; isi bernomor arab. Gaya "academic": halaman pertama bab di
+ *     bawah-tengah, halaman lain kanan-atas.
+ *   - Caption "Gambar 2.1 Judul" (di bawah gambar) dan "Tabel 2.1 Judul"
+ *     (di atas tabel), nomor reset per bab.
+ *   - Daftar pustaka spasi 1, hanging indent 1,27 cm, antar-entri 1 baris.
+ *   - List bernomor mulai ulang tiap list, code block, link markdown.
+ *   - Inline **bold** / *italic* / `code`, istilah asing otomatis italic.
  * -----------------------------------------------------------------------------
  */
 
@@ -22,6 +27,7 @@ import {
   Bookmark,
   Document,
   Footer,
+  Header,
   HeadingLevel,
   ImageRun,
   LeaderType,
@@ -47,45 +53,132 @@ import {
 // Profil format
 // ---------------------------------------------------------------------------
 
+export type PaperSize = "A4" | "F4" | "Letter";
+/**
+ * academic      : halaman pertama tiap bab nomor di bawah-tengah, halaman lain kanan-atas
+ * bottom-center : semua halaman bawah-tengah
+ * bottom-right  : semua halaman bawah-kanan
+ */
+export type PageNumberStyle = "academic" | "bottom-center" | "bottom-right";
+
+export interface DocxCover {
+  title: string;
+  /** Jenis dokumen, mis. "Laporan Praktikum Basis Data". */
+  subtitle?: string;
+  author?: string;
+  studentId?: string;
+  lecturer?: string;
+  program?: string;
+  faculty?: string;
+  institution?: string;
+  year?: string;
+}
+
 export interface DocxFormatProfile {
   /** cm */
   margin: { top: number; right: number; bottom: number; left: number };
   font: string;
   /** pt */
   fontSize: number;
-  /** 1, 1.5, 2 */
+  /** 1, 1.15, 1.5, 2 */
   lineSpacing: number;
   includeToc: boolean;
   includePageNumbers: boolean;
-  cover?: {
-    title: string;
-    subtitle?: string;
-    author?: string;
-    institution?: string;
-    year?: string;
-  } | null;
+  paperSize?: PaperSize;
+  pageNumberStyle?: PageNumberStyle;
+  cover?: DocxCover | null;
 }
 
 export const DOCX_PRESETS: Record<string, { label: string; profile: Omit<DocxFormatProfile, "cover"> }> = {
   kampus4433: {
-    label: "Kampus umum (4-4-3-3 cm, TNR 12, spasi 1.5)",
-    profile: { margin: { top: 4, left: 4, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 1.5, includeToc: true, includePageNumbers: true },
+    label: "Kampus umum (A4, 4-4-3-3 cm, TNR 12, spasi 1.5)",
+    profile: { paperSize: "A4", margin: { top: 4, left: 4, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 1.5, includeToc: true, includePageNumbers: true, pageNumberStyle: "academic" },
   },
   kampus3333: {
-    label: "Standar (3-3-3-3 cm, TNR 12, spasi 1.5)",
-    profile: { margin: { top: 3, left: 3, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 1.5, includeToc: true, includePageNumbers: true },
+    label: "Standar (A4, 3-3-3-3 cm, TNR 12, spasi 1.5)",
+    profile: { paperSize: "A4", margin: { top: 3, left: 3, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 1.5, includeToc: true, includePageNumbers: true, pageNumberStyle: "academic" },
   },
   skripsi: {
-    label: "Skripsi (4-4-3-3 cm, TNR 12, spasi 2)",
-    profile: { margin: { top: 4, left: 4, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 2, includeToc: true, includePageNumbers: true },
+    label: "Skripsi (A4, 4-4-3-3 cm, TNR 12, spasi 2)",
+    profile: { paperSize: "A4", margin: { top: 4, left: 4, bottom: 3, right: 3 }, font: "Times New Roman", fontSize: 12, lineSpacing: 2, includeToc: true, includePageNumbers: true, pageNumberStyle: "academic" },
   },
   ringkas: {
-    label: "Ringkas (2.5 cm, Arial 11, spasi 1.15, tanpa daftar isi)",
-    profile: { margin: { top: 2.5, left: 2.5, bottom: 2.5, right: 2.5 }, font: "Arial", fontSize: 11, lineSpacing: 1.15, includeToc: false, includePageNumbers: true },
+    label: "Ringkas (A4, 2.5 cm, Arial 11, spasi 1.15, tanpa daftar isi)",
+    profile: { paperSize: "A4", margin: { top: 2.5, left: 2.5, bottom: 2.5, right: 2.5 }, font: "Arial", fontSize: 11, lineSpacing: 1.15, includeToc: false, includePageNumbers: true, pageNumberStyle: "bottom-center" },
   },
 };
 
 export const DEFAULT_DOCX_PROFILE: DocxFormatProfile = { ...DOCX_PRESETS.kampus4433.profile, cover: null };
+
+/** Ukuran kertas (mm). F4/Folio Indonesia = 215 x 330 mm. */
+const PAPER_MM: Record<PaperSize, { width: number; height: number }> = {
+  A4: { width: 210, height: 297 },
+  F4: { width: 215, height: 330 },
+  Letter: { width: 215.9, height: 279.4 },
+};
+
+const KNOWN_FONTS = ["Times New Roman", "Arial", "Calibri", "Cambria", "Book Antiqua", "Georgia", "Garamond", "Tahoma", "Verdana", "Bookman Old Style", "Century Gothic"];
+
+const num = (v: string) => Number(v.replace(",", "."));
+const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+/**
+ * Baca ketentuan format kampus dari teks bebas user, mis.
+ * "A4, margin 4-4-3-3, Times New Roman 12, spasi 1,5, nomor halaman bawah tengah".
+ * Hanya nilai yang dikenali yang dikembalikan; sisanya pakai preset.
+ * Urutan "4-4-3-3" mengikuti konvensi Indonesia: atas-kiri-bawah-kanan.
+ */
+export function parseFormatRules(text: string | undefined | null): Partial<DocxFormatProfile> {
+  const t = String(text || "").toLowerCase();
+  if (!t.trim()) return {};
+  const out: Partial<DocxFormatProfile> = {};
+  const n = "(\\d+(?:[.,]\\d+)?)";
+
+  const four = new RegExp(`margin[^\\d]{0,20}${n}\\s*(?:cm)?\\s*[-/ ,x]\\s*${n}\\s*(?:cm)?\\s*[-/ ,x]\\s*${n}\\s*(?:cm)?\\s*[-/ ,x]\\s*${n}`).exec(t);
+  const margin = { ...DEFAULT_DOCX_PROFILE.margin };
+  let marginFound = false;
+  if (four) {
+    [margin.top, margin.left, margin.bottom, margin.right] = [four[1], four[2], four[3], four[4]].map((v) => clamp(num(v), 1, 6));
+    marginFound = true;
+  } else {
+    const single = new RegExp(`margin[^\\d]{0,12}${n}\\s*cm`).exec(t);
+    if (single && !/(atas|kiri|bawah|kanan|top|left|bottom|right)/.test(t)) {
+      const v = clamp(num(single[1]), 1, 6);
+      Object.assign(margin, { top: v, left: v, bottom: v, right: v });
+      marginFound = true;
+    }
+  }
+  const sides: Array<[keyof typeof margin, string]> = [["top", "atas|top"], ["left", "kiri|left"], ["bottom", "bawah|bottom"], ["right", "kanan|right"]];
+  for (const [key, words] of sides) {
+    const m = new RegExp(`(?:${words})\\s*[:=]?\\s*${n}\\s*cm`).exec(t);
+    if (m) { margin[key] = clamp(num(m[1]), 1, 6); marginFound = true; }
+  }
+  if (marginFound) out.margin = margin;
+
+  const font = KNOWN_FONTS.find((f) => t.includes(f.toLowerCase()));
+  if (font) out.font = font;
+  const size = /(?:ukuran\s*(?:huruf|font)?|font\s*size|size)\s*[:=]?\s*(\d{1,2})/.exec(t)
+    || (font ? new RegExp(`${font.toLowerCase()}\\s*,?\\s*(\\d{1,2})`).exec(t) : null)
+    || /\b(\d{1,2})\s*(?:pt|point|poin)\b/.exec(t);
+  if (size) out.fontSize = clamp(Number(size[1]), 9, 16);
+  const spacing = /(?:spasi|spacing|jarak\s*baris)\s*[:=]?\s*(1[.,]15|1[.,]5|2[.,]0|2|1[.,]0|1)\b/.exec(t);
+  if (spacing) out.lineSpacing = clamp(num(spacing[1]), 1, 2.5);
+
+  if (/\b(f4|folio)\b/.test(t)) out.paperSize = "F4";
+  else if (/\ba4\b/.test(t)) out.paperSize = "A4";
+  else if (/\bletter\b/.test(t)) out.paperSize = "Letter";
+
+  if (/(nomor|no\.?)\s*halaman[^.]{0,30}(bawah\s*tengah|tengah\s*bawah)/.test(t)) out.pageNumberStyle = "bottom-center";
+  else if (/(nomor|no\.?)\s*halaman[^.]{0,30}(bawah\s*kanan|kanan\s*bawah)/.test(t)) out.pageNumberStyle = "bottom-right";
+  else if (/(nomor|no\.?)\s*halaman[^.]{0,30}(kanan\s*atas|atas\s*kanan)/.test(t)) out.pageNumberStyle = "academic";
+  if (/tanpa\s*daftar\s*isi/.test(t)) out.includeToc = false;
+  return out;
+}
+
+/** Pilih preset dari jenis dokumen (skripsi/tesis → spasi 2). */
+export function presetForDocumentType(documentType?: string | null): keyof typeof DOCX_PRESETS {
+  return /skripsi|tesis|thesis|tugas akhir|disertasi/i.test(documentType || "") ? "skripsi" : "kampus4433";
+}
 
 // ---------------------------------------------------------------------------
 // Markdown parsing
@@ -98,10 +191,11 @@ type Block =
   | { type: "list"; ordered: boolean; items: string[] }
   | { type: "table"; rows: string[][]; title?: string }
   | { type: "figure"; title: string; caption: string }
+  | { type: "code"; lines: string[] }
   | { type: "pagebreak" };
 
-/** Baris `**Tabel: Judul**` tepat sebelum tabel → judul tabel (bukan paragraf). */
-const TABLE_TITLE_RE = /^\*\*\s*Tabel\s*[:.]\s*(.+?)\s*\*\*\s*$/i;
+/** Baris `**Tabel: Judul**` / `**Tabel 2.1 Judul**` tepat sebelum tabel → judul tabel (bukan paragraf). */
+const TABLE_TITLE_RE = /^\*\*\s*Tabel\s*(?:[\d.]+\s*)?[:.]?\s*(.+?)\s*\*\*\s*$/i;
 /** `[Gambar: Judul - keterangan]`; pemisah " - " terakhir, judul boleh mengandung tanda hubung. */
 const FIGURE_RE = /^\[Gambar:\s*(.+?)\]\s*(.*)$/i;
 
@@ -129,6 +223,7 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
   let paragraph: string[] = [];
   let table: string[] = [];
   let list: { ordered: boolean; items: string[] } | null = null;
+  let code: string[] | null = null;
 
   const flushParagraph = () => {
     if (!paragraph.length) return;
@@ -171,6 +266,15 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
 
   for (const raw of lines) {
     const line = raw.trimEnd();
+
+    // Code block ``` ... ``` → blok monospace (isi tidak diparse sebagai markdown).
+    if (/^\s*```/.test(line)) {
+      if (code) { blocks.push({ type: "code", lines: code }); code = null; }
+      else { flushTable(); flushParagraph(); flushList(); code = []; }
+      continue;
+    }
+    if (code) { code.push(raw.replace(/\t/g, "    ")); continue; }
+
     if (!line.trim()) { flushTable(); flushParagraph(); flushList(); continue; }
 
     if (line.trim().startsWith("|")) { flushParagraph(); flushList(); table.push(line.trim()); continue; }
@@ -179,7 +283,9 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     // Judul tabel berdiri sendiri → paragraf tersendiri agar bisa diambil flushTable
     if (TABLE_TITLE_RE.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "paragraph", text: line.trim() }); continue; }
 
-    if (/^(---|\*\*\*|<!--\s*pagebreak\s*-->)\s*$/.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "pagebreak" }); continue; }
+    // Pemisah eksplisit halaman. `---` dari AI hanya garis pemisah → diabaikan (bukan halaman kosong).
+    if (/^(<!--\s*pagebreak\s*-->|\\pagebreak|\\newpage)\s*$/i.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "pagebreak" }); continue; }
+    if (/^(---+|\*\*\*+|___+)\s*$/.test(line.trim())) { flushParagraph(); flushList(); continue; }
 
     const heading = line.match(/^(#{1,6})\s+(.*)$/);
     if (heading) { flushParagraph(); flushList(); blocks.push({ type: "heading", level: heading[1].length, text: heading[2].trim() }); continue; }
@@ -210,6 +316,7 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     flushList();
     paragraph.push(line.trim());
   }
+  if (code) blocks.push({ type: "code", lines: code });
   flushTable(); flushParagraph(); flushList();
   return blocks;
 }
@@ -247,8 +354,10 @@ const FOREIGN_RE = new RegExp(
   "gi",
 );
 
+type RunBase = { font: string; size: number; bold?: boolean; italics?: boolean; color?: string };
+
 /** Pecah teks polos menjadi run, bagian istilah asing di-italic. */
-function plainRuns(text: string, base: { font: string; size: number; bold?: boolean; italics?: boolean; color?: string }, autoItalic: boolean) {
+function plainRuns(text: string, base: RunBase, autoItalic: boolean) {
   if (!autoItalic || base.italics) return [new TextRun({ ...base, text })];
   const runs: TextRun[] = [];
   let last = 0;
@@ -262,9 +371,15 @@ function plainRuns(text: string, base: { font: string; size: number; bold?: bool
   return runs.length ? runs : [new TextRun({ ...base, text })];
 }
 
-function inlineRuns(text: string, base: { font: string; size: number; bold?: boolean; italics?: boolean; color?: string }, autoItalic = false) {
+/** `[teks](url)` → "teks (url)"; link telanjang dibiarkan. */
+function flattenLinks(text: string) {
+  return text.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_m, label: string, url: string) => (label.trim() === url ? url : `${label} (${url})`));
+}
+
+function inlineRuns(rawText: string, base: RunBase, autoItalic = false) {
+  const text = flattenLinks(rawText);
   const runs: TextRun[] = [];
-  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|_[^_]+_)/g;
+  const pattern = /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|(?<![\w])_[^_]+_(?![\w]))/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const index = match.index ?? 0;
@@ -291,8 +406,14 @@ function pngSize(data: Uint8Array): { width: number; height: number } {
 
 const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV"];
 /** Heading level-1 yang bukan bab bernomor (bagian depan/belakang). */
-const NON_CHAPTER_RE = /^(daftar pustaka|referensi|bibliograf|lampiran|abstrak|abstract|kata pengantar|ringkasan|daftar isi|daftar gambar|daftar tabel|halaman|lembar|glosarium)/i;
+const NON_CHAPTER_RE = /^(daftar pustaka|referensi|bibliograf|lampiran|abstrak|abstract|kata pengantar|ringkasan|daftar isi|daftar gambar|daftar tabel|halaman|lembar|glosarium|daftar singkatan|daftar istilah|pernyataan|persembahan|motto)/i;
 const BIBLIOGRAPHY_RE = /^(daftar pustaka|referensi|bibliograf)/i;
+/** Bagian belakang: tetap di bagian isi (nomor arab), bukan bagian depan. */
+const BACK_MATTER_RE = /^(daftar pustaka|referensi|bibliograf|lampiran|glosarium)/i;
+/** "BAB II LANDASAN TEORI" / "BAB 2: Landasan Teori" → nomor + judul. */
+const NUMBERED_CHAPTER_RE = /^bab\s+([ivxlc]+|\d+)\b\s*[:.\-\u2013]?\s*(.*)$/i;
+
+const cleanHeading = (text: string) => text.replace(/^\*\*|\*\*$/g, "").trim();
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -306,6 +427,8 @@ export interface ExportOptions {
   autoItalic?: boolean;
 }
 
+type BodyChild = Paragraph | Table;
+
 /** Bangun objek Document (dipakai klien via toBlob dan server via toBuffer). */
 export function buildDocxDocument(markdown: string, options: ExportOptions = {}): Document {
   const profile: DocxFormatProfile = { ...DEFAULT_DOCX_PROFILE, ...options.profile, margin: { ...DEFAULT_DOCX_PROFILE.margin, ...options.profile?.margin } };
@@ -314,277 +437,380 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   const sizeHalfPt = Math.round(profile.fontSize * 2);
   const lineTwips = Math.round(240 * profile.lineSpacing);
   const base = { font: profile.font, size: sizeHalfPt };
-  const maxImageWidthPx = 480;
+  const paper = PAPER_MM[profile.paperSize || "A4"];
+  const numberStyle: PageNumberStyle = profile.pageNumberStyle || "academic";
+
+  // Lebar/tinggi area teks (px @96dpi) → gambar memenuhi lebar teks, tidak keluar margin.
+  const mmToPx = (mm: number) => (mm / 25.4) * 96;
+  const maxImageWidthPx = Math.round(mmToPx(paper.width - (profile.margin.left + profile.margin.right) * 10));
+  const maxImageHeightPx = Math.round(mmToPx(paper.height - (profile.margin.top + profile.margin.bottom) * 10) * 0.72);
+
+  const blocks = parseMarkdownToBlocks(markdown);
+
+  // Judul H1 pertama dianggap judul dokumen (dipakai sampul) bila diikuti struktur bab.
+  const firstHeading = blocks.find((b) => b.type === "heading");
+  const docTitleIndex = firstHeading && firstHeading.type === "heading" && firstHeading.level === 1 && !NON_CHAPTER_RE.test(cleanHeading(firstHeading.text)) && !NUMBERED_CHAPTER_RE.test(cleanHeading(firstHeading.text))
+    ? blocks.indexOf(firstHeading)
+    : -1;
+  // Draft generator memakai `# Judul` + `## Bab`. Bila tidak ada bab di level 1,
+  // geser semua heading satu level supaya `##` menjadi BAB (halaman baru, "BAB I").
+  const h1Chapters = blocks.filter((b, i) => b.type === "heading" && b.level === 1 && i !== docTitleIndex && !NON_CHAPTER_RE.test(cleanHeading(b.text))).length;
+  const hasH2 = blocks.some((b) => b.type === "heading" && b.level === 2);
+  const shift = h1Chapters === 0 && hasH2 ? 1 : 0;
 
   let tableCounter = 0;
   let figureCounter = 0;
   let chapterCounter = 0;
   let subChapterCounter = 0;
-  let seenH1 = false;
+  let subSubCounter = 0;
+  let listInstance = 0;
+  let bookmarkSeq = 0;
   let inBibliography = false;
-  const blocks = parseMarkdownToBlocks(markdown);
 
-  // Daftar isi/gambar/tabel: bookmark pada heading/caption → PAGEREF di bagian depan
-  // (statis, tampil tanpa "update field"; TOC field Word tetap disertakan sebagai cadangan).
+  // Daftar isi/gambar/tabel: bookmark pada heading/caption → PAGEREF di bagian depan.
   const tocEntries: Array<{ label: string; bookmark: string; level: number }> = [];
   const figureEntries: Array<{ label: string; bookmark: string }> = [];
   const tableEntries: Array<{ label: string; bookmark: string }> = [];
 
-  // Judul H1 pertama di markdown dianggap judul dokumen (dipakai cover bila ada)
-  // dan tidak dirender ulang sebagai bab bila cover aktif.
-  const firstHeading = blocks.find((b) => b.type === "heading");
-  const docTitleIndex = firstHeading && firstHeading.type === "heading" && firstHeading.level === 1 ? blocks.indexOf(firstHeading) : -1;
-
-  const front: Array<Paragraph | Table> = [];
-  const children: Array<Paragraph | Table> = [];
+  const coverChildren: BodyChild[] = [];
+  /** Kata pengantar/abstrak (sebelum bab pertama) → bagian depan bernomor romawi. */
+  const preface: BodyChild[] = [];
+  /** Tiap elemen = satu section (bab/daftar pustaka/lampiran) → mulai halaman baru. */
+  const chunks: BodyChild[][] = [[]];
+  let current: BodyChild[] = chunks[0];
 
   if (profile.cover) {
     const cover = profile.cover;
     const centered = (text: string, size: number, bold = false, spacingBefore = 0) => new Paragraph({
       alignment: AlignmentType.CENTER,
-      spacing: { before: spacingBefore, after: 200, line: 360 },
+      spacing: { before: spacingBefore, after: 120, line: 276 },
       children: [new TextRun({ text, bold, size, font: profile.font })],
     });
-    const title = cover.title || (docTitleIndex >= 0 && blocks[docTitleIndex].type === "heading" ? (blocks[docTitleIndex] as { text: string }).text : "LAPORAN");
-    if (cover.subtitle) front.push(centered(cover.subtitle.toUpperCase(), sizeHalfPt + 2, true, 1200));
-    front.push(centered(title.toUpperCase(), sizeHalfPt + 8, true, cover.subtitle ? 600 : 1800));
-    if (cover.author) {
-      front.push(centered("Disusun oleh:", sizeHalfPt, false, 2400));
-      front.push(centered(cover.author, sizeHalfPt, true));
+    const title = cover.title || (docTitleIndex >= 0 ? cleanHeading((blocks[docTitleIndex] as { text: string }).text) : "LAPORAN");
+    coverChildren.push(centered(title.toUpperCase(), sizeHalfPt + 4, true, 600));
+    if (cover.subtitle) coverChildren.push(centered(cover.subtitle.toUpperCase(), sizeHalfPt + 2, true, 360));
+    // Ruang logo kampus (diisi manual oleh mahasiswa).
+    coverChildren.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      spacing: { before: 1200, after: 1200 },
+      children: [new TextRun({ text: "[Logo kampus]", italics: true, color: "999999", font: profile.font, size: sizeHalfPt - 2 })],
+    }));
+    if (cover.author || cover.studentId) {
+      coverChildren.push(centered("Disusun oleh:", sizeHalfPt));
+      if (cover.author) coverChildren.push(centered(cover.author, sizeHalfPt, true));
+      if (cover.studentId) coverChildren.push(centered(`NIM ${cover.studentId}`, sizeHalfPt, true));
     }
-    if (cover.institution) front.push(centered(cover.institution.toUpperCase(), sizeHalfPt + 2, true, 2400));
-    if (cover.year) front.push(centered(cover.year, sizeHalfPt, true, cover.institution ? 0 : 2400));
+    if (cover.lecturer) {
+      coverChildren.push(centered("Dosen Pengampu:", sizeHalfPt, false, 360));
+      coverChildren.push(centered(cover.lecturer, sizeHalfPt, true));
+    }
+    const affiliation = [cover.program && `PROGRAM STUDI ${cover.program.replace(/^program studi\s*/i, "")}`, cover.faculty && `FAKULTAS ${cover.faculty.replace(/^fakultas\s*/i, "")}`, cover.institution]
+      .filter((v): v is string => Boolean(v));
+    affiliation.forEach((line, i) => coverChildren.push(centered(line.toUpperCase(), sizeHalfPt + 2, true, i === 0 ? 1200 : 0)));
+    if (cover.year) coverChildren.push(centered(cover.year, sizeHalfPt + 2, true, affiliation.length ? 0 : 1200));
   }
 
-  const frontTitle = (text: string) => new Paragraph({
+  const frontTitle = (text: string, breakBefore: boolean) => new Paragraph({
     alignment: AlignmentType.CENTER,
     spacing: { after: 360, line: lineTwips },
-    // Halaman baru untuk tiap daftar; bila tanpa cover, daftar pertama mulai di halaman 1
-    pageBreakBefore: front.length > 0,
-    children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 4 })],
+    pageBreakBefore: breakBefore,
+    children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 2 })],
   });
-  const listEntry = (label: string, bookmark: string, indentMm = 12) => new Paragraph({
+  const listEntry = (label: string, bookmark: string, indentMm: number, bold = false) => new Paragraph({
     tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX, leader: LeaderType.DOT }],
-    spacing: { after: 80, line: lineTwips },
-    indent: { left: convertMillimetersToTwip(indentMm), hanging: convertMillimetersToTwip(12) },
-    children: [new TextRun({ ...base, text: label }), new TextRun({ ...base, children: ["\t"] }), new PageReference(bookmark, { hyperlink: true })],
+    spacing: { after: 60, line: 276 },
+    indent: { left: convertMillimetersToTwip(indentMm), hanging: convertMillimetersToTwip(10) },
+    children: [new TextRun({ ...base, text: label, bold }), new TextRun({ ...base, children: ["\t"] }), new PageReference(bookmark, { hyperlink: true })],
   });
 
-  const headingBase = (level: number, text: string, bookmark?: string) => {
-    const run = new TextRun({ text, bold: true, font: profile.font, size: level === 1 ? sizeHalfPt + 4 : sizeHalfPt, color: "000000" });
+  const headingParagraph = (level: number, lines: string[], bookmark: string | undefined, breakBefore = false) => {
+    const size = level === 1 ? sizeHalfPt + 2 : sizeHalfPt;
+    const runs = lines.map((text, i) => new TextRun({ text, bold: true, font: profile.font, size, color: "000000", ...(i > 0 ? { break: 1 } : {}) }));
     return new Paragraph({
       heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4][level - 1],
       alignment: level === 1 ? AlignmentType.CENTER : AlignmentType.LEFT,
-      spacing: { before: level === 1 ? 0 : 360, after: level === 1 ? 360 : 200, line: lineTwips },
-      pageBreakBefore: level === 1 && seenH1,
+      spacing: { before: level === 1 ? 0 : 240, after: level === 1 ? 480 : 120, line: lineTwips },
+      pageBreakBefore: breakBefore,
       keepNext: true,
-      children: [bookmark ? new Bookmark({ id: bookmark, children: [run] }) : run],
+      keepLines: true,
+      children: bookmark ? [new Bookmark({ id: bookmark, children: runs })] : runs,
     });
   };
 
-  const captionParagraph = (label: string, bookmark: string) => new Paragraph({
+  const captionParagraph = (prefix: string, text: string, bookmark: string, position: "above" | "below") => new Paragraph({
     alignment: AlignmentType.CENTER,
-    spacing: { before: 80, after: 240, line: lineTwips },
-    children: [new Bookmark({ id: bookmark, children: [new TextRun({ text: label, bold: true, font: profile.font, size: sizeHalfPt - 2 })] })],
+    spacing: position === "above" ? { before: 240, after: 120, line: 240 } : { before: 120, after: 240, line: 240 },
+    keepNext: position === "above",
+    children: [new Bookmark({
+      id: bookmark,
+      children: [
+        new TextRun({ text: `${prefix} `, bold: true, font: profile.font, size: sizeHalfPt }),
+        ...inlineRuns(text, { ...base }, false),
+      ],
+    })],
   });
 
+  const nextBookmark = (kind: string) => `${kind}_${++bookmarkSeq}`;
+
   blocks.forEach((block, blockIndex) => {
-    if (blockIndex === docTitleIndex && profile.cover) return; // judul dokumen sudah di cover
+    if (blockIndex === docTitleIndex && profile.cover) return; // judul dokumen sudah di sampul
     switch (block.type) {
       case "heading": {
-        let level = Math.min(block.level, 4);
-        let text = block.text.replace(/^\*\*|\*\*$/g, "").trim();
+        const text0 = cleanHeading(block.text);
+        let level = block.level === 1 ? 1 : Math.max(1, Math.min(block.level - shift, 4));
         // "## Daftar Pustaka" / "## Lampiran" dari AI → bagian setara bab (bukan subbab).
-        if (level === 2 && NON_CHAPTER_RE.test(text)) level = 1;
-        const bookmark = `toc_${tocEntries.length + 1}`;
+        if (NON_CHAPTER_RE.test(text0) && level <= 2) level = 1;
+
+        if (blockIndex === docTitleIndex) {
+          // Tanpa sampul: judul dokumen di atas halaman pertama isi.
+          current.push(headingParagraph(1, [text0.toUpperCase()], undefined));
+          break;
+        }
+
+        const bookmark = nextBookmark("toc");
         if (level === 1) {
-          inBibliography = BIBLIOGRAPHY_RE.test(text);
+          inBibliography = BIBLIOGRAPHY_RE.test(text0);
           subChapterCounter = 0;
-          const alreadyNumbered = /^bab\s+[ivxlc\d]+/i.test(text);
-          if (!NON_CHAPTER_RE.test(text) && !alreadyNumbered && blockIndex !== docTitleIndex) {
+          subSubCounter = 0;
+          let lines: string[];
+          if (NON_CHAPTER_RE.test(text0)) {
+            lines = [text0.toUpperCase()];
+          } else {
             chapterCounter += 1;
-            text = `BAB ${ROMAN[chapterCounter - 1] || chapterCounter}\n${text}`;
+            tableCounter = 0;
+            figureCounter = 0;
+            const numbered = NUMBERED_CHAPTER_RE.exec(text0);
+            const name = (numbered ? numbered[2] : text0).toUpperCase();
+            lines = name ? [`BAB ${ROMAN[chapterCounter - 1] || chapterCounter}`, name] : [`BAB ${ROMAN[chapterCounter - 1] || chapterCounter}`];
           }
-          const [first, ...rest] = text.toUpperCase().split("\n");
-          const para = headingBase(1, first, bookmark);
-          if (rest.length) {
-            para.addChildElement(new TextRun({ text: rest.join(" "), bold: true, font: profile.font, size: sizeHalfPt + 4, color: "000000", break: 1 }));
+          tocEntries.push({ label: lines.join(" "), bookmark, level: 1 });
+
+          // Kata pengantar/abstrak sebelum BAB I → bagian depan (romawi).
+          const isPreface = NON_CHAPTER_RE.test(text0) && !BACK_MATTER_RE.test(text0) && chapterCounter === 0;
+          if (isPreface) {
+            current = preface;
+            preface.push(headingParagraph(1, lines, bookmark, preface.length > 0 || coverChildren.length > 0));
+          } else {
+            // Bab baru = section baru (otomatis halaman baru, nomor halaman bab di bawah-tengah).
+            current = chunks[chunks.length - 1].length ? (chunks.push([]), chunks[chunks.length - 1]) : chunks[chunks.length - 1];
+            current.push(headingParagraph(1, lines, bookmark));
           }
-          tocEntries.push({ label: [first, ...rest].join(" "), bookmark, level: 1 });
-          children.push(para);
-          seenH1 = true;
         } else {
-          // Subbab tanpa nomor → "N.M Judul" mengikuti nomor bab aktif.
+          // Subbab tanpa nomor → "N.M Judul" / "N.M.K Judul" mengikuti bab aktif.
+          let text = text0;
           const hasNumber = /^\d+(\.\d+)*\.?\s/.test(text);
-          if (level === 2 && !hasNumber && chapterCounter > 0 && !inBibliography) {
-            subChapterCounter += 1;
-            text = `${chapterCounter}.${subChapterCounter} ${text}`;
+          if (level === 2) { subChapterCounter += 1; subSubCounter = 0; }
+          if (level === 3) subSubCounter += 1;
+          if (!hasNumber && chapterCounter > 0 && !inBibliography) {
+            if (level === 2) text = `${chapterCounter}.${subChapterCounter} ${text}`;
+            else if (level === 3 && subChapterCounter > 0) text = `${chapterCounter}.${subChapterCounter}.${subSubCounter} ${text}`;
           }
           if (level <= 3) tocEntries.push({ label: text, bookmark, level });
-          children.push(headingBase(level, text, level <= 3 ? bookmark : undefined));
+          current.push(headingParagraph(level, [text], level <= 3 ? bookmark : undefined));
         }
         break;
       }
       case "paragraph":
         if (inBibliography) {
-          // Entri daftar pustaka: hanging indent, tanpa first-line indent, tanpa auto-italic.
-          children.push(new Paragraph({
+          // Entri daftar pustaka: spasi 1, hanging indent 1,27 cm, antar-entri 1 baris kosong.
+          current.push(new Paragraph({
             alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: 240, line: lineTwips },
-            indent: { left: convertMillimetersToTwip(12.5), hanging: convertMillimetersToTwip(12.5) },
+            spacing: { after: 240, line: 240 },
+            indent: { left: convertMillimetersToTwip(12.7), hanging: convertMillimetersToTwip(12.7) },
+            keepLines: true,
             children: inlineRuns(block.text, base, false),
           }));
         } else {
-          children.push(new Paragraph({
+          current.push(new Paragraph({
             alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: 120, line: lineTwips },
+            spacing: { after: 0, line: lineTwips },
             indent: { firstLine: convertMillimetersToTwip(12.5) },
             children: inlineRuns(block.text, base, autoItalic),
           }));
         }
         break;
       case "quote":
-        children.push(new Paragraph({
+        current.push(new Paragraph({
           alignment: AlignmentType.JUSTIFIED,
-          spacing: { after: 160, line: lineTwips },
+          spacing: { before: 120, after: 120, line: 240 },
           indent: { left: convertMillimetersToTwip(12.5), right: convertMillimetersToTwip(12.5) },
-          border: { left: { style: BorderStyle.SINGLE, size: 12, color: "999999", space: 8 } },
-          children: inlineRuns(block.text, { ...base, italics: true, color: "444444" }),
+          children: inlineRuns(block.text, { ...base, italics: true }),
         }));
         break;
-      case "list":
+      case "list": {
+        // Tiap list bernomor punya instance sendiri → penomoran mulai dari 1 lagi.
+        listInstance += 1;
         block.items.forEach((item) => {
-          children.push(new Paragraph({
-            numbering: { reference: block.ordered ? "numbered" : "bullets", level: 0 },
+          current.push(new Paragraph({
+            numbering: { reference: block.ordered ? "numbered" : "bullets", level: 0, instance: block.ordered ? listInstance : 0 },
             alignment: AlignmentType.JUSTIFIED,
-            spacing: { after: 60, line: lineTwips },
+            spacing: { after: 0, line: inBibliography ? 240 : lineTwips },
             children: inlineRuns(item, base, autoItalic && !inBibliography),
+          }));
+        });
+        break;
+      }
+      case "code":
+        block.lines.forEach((codeLine, i) => {
+          current.push(new Paragraph({
+            spacing: { before: i === 0 ? 120 : 0, after: i === block.lines.length - 1 ? 120 : 0, line: 240 },
+            indent: { left: convertMillimetersToTwip(5) },
+            shading: { fill: "F2F2F2" },
+            keepLines: true,
+            children: [new TextRun({ text: codeLine || " ", font: "Consolas", size: Math.max(16, sizeHalfPt - 4) })],
           }));
         });
         break;
       case "table": {
         tableCounter += 1;
         const header = block.rows[0];
-        const label = `Tabel ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${tableCounter}. ${block.title || header.slice(0, 3).join(" / ")}`;
-        const bookmark = `tabel_${tableCounter}`;
-        tableEntries.push({ label, bookmark });
+        const prefix = `Tabel ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${tableCounter}`;
+        const titleText = block.title || header.slice(0, 3).join(" / ");
+        const bookmark = nextBookmark("tabel");
+        tableEntries.push({ label: `${prefix} ${titleText.replace(/\*\*/g, "")}`, bookmark });
         // Standar akademik: judul tabel di ATAS tabel.
-        children.push(new Paragraph({
-          alignment: AlignmentType.CENTER,
-          spacing: { before: 240, after: 80, line: lineTwips },
-          keepNext: true,
-          children: [new Bookmark({ id: bookmark, children: [new TextRun({ text: label, bold: true, font: profile.font, size: sizeHalfPt - 2 })] })],
-        }));
-        children.push(new Table({
+        current.push(captionParagraph(prefix, titleText, bookmark, "above"));
+        current.push(new Table({
           width: { size: 100, type: WidthType.PERCENTAGE },
           rows: block.rows.map((row, rowIndex) => new TableRow({
             tableHeader: rowIndex === 0,
             cantSplit: true,
             children: row.map((cell) => new TableCell({
-              shading: rowIndex === 0 ? { fill: "E7E6E6" } : undefined,
+              shading: rowIndex === 0 ? { fill: "D9D9D9" } : undefined,
               children: [new Paragraph({
-                spacing: { before: 60, after: 60 },
+                spacing: { before: 40, after: 40, line: 240 },
                 alignment: rowIndex === 0 ? AlignmentType.CENTER : AlignmentType.LEFT,
                 children: inlineRuns(cell, { ...base, size: sizeHalfPt - 2, bold: rowIndex === 0 }),
               })],
             })),
           })),
         }));
-        children.push(new Paragraph({ spacing: { after: 200 }, children: [] }));
+        current.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
         break;
       }
       case "figure": {
         figureCounter += 1;
         const key = block.title.toLowerCase().trim();
         const image = images[key];
-        const label = `Gambar ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${figureCounter}. ${block.caption}`;
-        const bookmark = `gambar_${figureCounter}`;
-        figureEntries.push({ label, bookmark });
+        const prefix = `Gambar ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${figureCounter}`;
+        const bookmark = nextBookmark("gambar");
+        figureEntries.push({ label: `${prefix} ${block.caption.replace(/\*\*/g, "")}`, bookmark });
         if (image) {
           const data = image instanceof Uint8Array ? image : new Uint8Array(image);
           const natural = pngSize(data);
           const width = Math.min(maxImageWidthPx, natural.width);
           const height = Math.round(width * (natural.height / natural.width));
-          // Batasi tinggi agar gambar+caption muat satu halaman
-          const maxHeight = 560;
-          const scale = height > maxHeight ? maxHeight / height : 1;
-          children.push(new Paragraph({
+          // Batasi tinggi agar gambar + caption muat satu halaman.
+          const scale = height > maxImageHeightPx ? maxImageHeightPx / height : 1;
+          current.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 240, after: 80 },
+            spacing: { before: 240, after: 0, line: 240 },
             keepNext: true,
             children: [new ImageRun({ type: "png", data, transformation: { width: Math.round(width * scale), height: Math.round(height * scale) } })],
           }));
         } else {
-          children.push(new Paragraph({
+          const dashed = { style: BorderStyle.DASHED, size: 6, color: "999999" };
+          current.push(new Paragraph({
             alignment: AlignmentType.CENTER,
-            spacing: { before: 240, after: 80 },
+            spacing: { before: 240, after: 0 },
             keepNext: true,
-            border: { top: { style: BorderStyle.DASHED, size: 6, color: "999999" }, bottom: { style: BorderStyle.DASHED, size: 6, color: "999999" }, left: { style: BorderStyle.DASHED, size: 6, color: "999999" }, right: { style: BorderStyle.DASHED, size: 6, color: "999999" } },
+            border: { top: dashed, bottom: dashed, left: dashed, right: dashed },
             children: [new TextRun({ text: `[Tempatkan gambar: ${block.title}]`, italics: true, color: "666666", font: profile.font, size: sizeHalfPt - 2 })],
           }));
         }
-        children.push(captionParagraph(label, bookmark));
+        // Standar akademik: keterangan gambar di BAWAH gambar.
+        current.push(captionParagraph(prefix, block.caption, bookmark, "below"));
         break;
       }
       case "pagebreak":
-        children.push(new Paragraph({ children: [new PageBreak()] }));
+        current.push(new Paragraph({ children: [new PageBreak()] }));
         break;
     }
   });
 
-  // Daftar isi (statis) + daftar gambar & tabel (setelah daftar isi, hanya bila ada isinya)
+  // Bagian depan: sampul → kata pengantar/abstrak → daftar isi → daftar tabel → daftar gambar.
+  const front: BodyChild[] = [...coverChildren, ...preface];
   if (profile.includeToc && tocEntries.length) {
-    front.push(frontTitle("DAFTAR ISI"));
-    tocEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 12 + (e.level - 1) * 8)));
-  }
-  if (profile.includeToc && figureEntries.length) {
-    front.push(frontTitle("DAFTAR GAMBAR"));
-    figureEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark)));
+    front.push(frontTitle("DAFTAR ISI", front.length > 0));
+    tocEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 10 + (e.level - 1) * 8, e.level === 1)));
   }
   if (profile.includeToc && tableEntries.length) {
-    front.push(frontTitle("DAFTAR TABEL"));
-    tableEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark)));
+    front.push(frontTitle("DAFTAR TABEL", true));
+    tableEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 20)));
+  }
+  if (profile.includeToc && figureEntries.length) {
+    front.push(frontTitle("DAFTAR GAMBAR", true));
+    figureEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 20)));
   }
 
-  const pageMargin = {
-    top: convertMillimetersToTwip(profile.margin.top * 10),
-    right: convertMillimetersToTwip(profile.margin.right * 10),
-    bottom: convertMillimetersToTwip(profile.margin.bottom * 10),
-    left: convertMillimetersToTwip(profile.margin.left * 10),
+  const page = {
+    size: { width: convertMillimetersToTwip(paper.width), height: convertMillimetersToTwip(paper.height) },
+    margin: {
+      top: convertMillimetersToTwip(profile.margin.top * 10),
+      right: convertMillimetersToTwip(profile.margin.right * 10),
+      bottom: convertMillimetersToTwip(profile.margin.bottom * 10),
+      left: convertMillimetersToTwip(profile.margin.left * 10),
+      header: convertMillimetersToTwip(15),
+      footer: convertMillimetersToTwip(15),
+    },
   };
-  const pageNumberFooter = () => new Footer({
-    children: [new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [new TextRun({ children: [PageNumber.CURRENT], font: profile.font, size: sizeHalfPt - 2 })],
-    })],
+  const pageNumberParagraph = (alignment: (typeof AlignmentType)[keyof typeof AlignmentType]) => new Paragraph({
+    alignment,
+    children: [new TextRun({ children: [PageNumber.CURRENT], font: profile.font, size: sizeHalfPt })],
   });
+  const emptyHeader = () => new Header({ children: [new Paragraph({ children: [] })] });
+  const emptyFooter = () => new Footer({ children: [new Paragraph({ children: [] })] });
 
   const sections: ISectionOptions[] = [];
   if (front.length) {
-    // Bagian depan: nomor halaman romawi kecil; cover (halaman pertama) tanpa nomor.
+    // Bagian depan: nomor romawi kecil di bawah-tengah; sampul tanpa nomor.
     sections.push({
-      properties: { page: { margin: pageMargin, pageNumbers: { start: 1, formatType: NumberFormat.LOWER_ROMAN } }, titlePage: Boolean(profile.cover) },
+      properties: { page: { ...page, pageNumbers: { start: 1, formatType: NumberFormat.LOWER_ROMAN } }, titlePage: coverChildren.length > 0 },
+      headers: { default: emptyHeader(), first: emptyHeader() },
       footers: profile.includePageNumbers
-        ? { default: pageNumberFooter(), first: profile.cover ? new Footer({ children: [new Paragraph({ children: [] })] }) : undefined }
-        : undefined,
+        ? { default: new Footer({ children: [pageNumberParagraph(AlignmentType.CENTER)] }), first: coverChildren.length ? emptyFooter() : new Footer({ children: [pageNumberParagraph(AlignmentType.CENTER)] }) }
+        : { default: emptyFooter(), first: emptyFooter() },
       children: front,
     });
   }
-  sections.push({
-    properties: { page: { margin: pageMargin, pageNumbers: { start: 1, formatType: NumberFormat.DECIMAL } } },
-    footers: profile.includePageNumbers ? { default: pageNumberFooter() } : undefined,
-    children,
+
+  const bodyChunks = chunks.filter((c) => c.length);
+  if (!bodyChunks.length) bodyChunks.push([new Paragraph({ children: [] })]);
+  bodyChunks.forEach((chunk, i) => {
+    const pageNumbers = i === 0 ? { start: 1, formatType: NumberFormat.DECIMAL } : { formatType: NumberFormat.DECIMAL };
+    let headers: ISectionOptions["headers"];
+    let footers: ISectionOptions["footers"];
+    if (!profile.includePageNumbers) {
+      headers = { default: emptyHeader(), first: emptyHeader() };
+      footers = { default: emptyFooter(), first: emptyFooter() };
+    } else if (numberStyle === "academic") {
+      headers = { default: new Header({ children: [pageNumberParagraph(AlignmentType.RIGHT)] }), first: emptyHeader() };
+      footers = { default: emptyFooter(), first: new Footer({ children: [pageNumberParagraph(AlignmentType.CENTER)] }) };
+    } else {
+      const align = numberStyle === "bottom-right" ? AlignmentType.RIGHT : AlignmentType.CENTER;
+      headers = { default: emptyHeader(), first: emptyHeader() };
+      footers = { default: new Footer({ children: [pageNumberParagraph(align)] }), first: new Footer({ children: [pageNumberParagraph(align)] }) };
+    }
+    sections.push({
+      properties: { page: { ...page, pageNumbers }, titlePage: true },
+      headers,
+      footers,
+      children: chunk,
+    });
   });
 
   const doc = new Document({
     creator: "keluhkampus",
+    title: profile.cover?.title,
     styles: {
-      default: { document: { run: { font: profile.font, size: sizeHalfPt } } },
+      default: {
+        document: { run: { font: profile.font, size: sizeHalfPt, language: { value: "id-ID" } } },
+      },
       paragraphStyles: [
-        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt + 4, font: profile.font, color: "000000" }, paragraph: { alignment: AlignmentType.CENTER, spacing: { after: 240 } } },
-        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 360, after: 160 } } },
-        { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 240, after: 120 } } },
-        { id: "Heading4", name: "Heading 4", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, italics: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 200, after: 100 } } },
+        { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt + 2, font: profile.font, color: "000000" }, paragraph: { alignment: AlignmentType.CENTER, spacing: { after: 480 }, outlineLevel: 0 } },
+        { id: "Heading2", name: "Heading 2", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 1 } },
+        { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 2 } },
+        { id: "Heading4", name: "Heading 4", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, italics: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 200, after: 100 }, outlineLevel: 3 } },
         // Gaya TOC: tanpa warna/underline hyperlink bawaan Word
         { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true, font: profile.font, size: sizeHalfPt }, paragraph: { spacing: { after: 80 } } },
         { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt }, paragraph: { indent: { left: 440 }, spacing: { after: 60 } } },
@@ -598,6 +824,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
         { reference: "numbered", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
       ],
     },
+    // Nomor halaman di daftar isi/gambar/tabel (PAGEREF) diisi Word saat file dibuka.
     features: { updateFields: true },
     sections,
   });

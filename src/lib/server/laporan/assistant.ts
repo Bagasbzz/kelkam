@@ -51,6 +51,12 @@ export interface ReportBrief {
   topic?: string;
   course?: string;
   institution?: string;
+  /** Data sampul (opsional). */
+  studentName?: string;
+  studentId?: string;
+  lecturer?: string;
+  program?: string;
+  faculty?: string;
   formatRules?: string;           // ketentuan format dari user (margin, font, bab wajib)
   citationStyle?: "APA" | "IEEE" | "Bebas";
   formality?: "ringkas" | "formal" | "akademik";
@@ -169,7 +175,7 @@ function mergeBrief(prev: ReportBrief, patch: unknown): ReportBrief {
   const p = asObj(patch);
   const next: ReportBrief = { ...prev };
   const setStr = (k: keyof ReportBrief, max = 300) => { const v = asStr(p[k], max); if (v) (next as Record<string, unknown>)[k] = v; };
-  (["documentType", "title", "topic", "course", "institution", "formatRules", "targetLength"] as const).forEach((k) => setStr(k, k === "formatRules" ? 1500 : 300));
+  (["documentType", "title", "topic", "course", "institution", "studentName", "studentId", "lecturer", "program", "faculty", "formatRules", "targetLength"] as const).forEach((k) => setStr(k, k === "formatRules" ? 1500 : 300));
   const cs = asStr(p.citationStyle, 10).toUpperCase();
   if (cs === "APA" || cs === "IEEE" || cs === "BEBAS") next.citationStyle = cs === "BEBAS" ? "Bebas" : cs;
   const f = asStr(p.formality, 20);
@@ -266,7 +272,7 @@ function systemPrompt(state: { stage: string; brief: ReportBrief; plan: ReportPl
   return `Anda adalah Asisten Laporan keluhkampus: pembimbing penulisan akademik yang mengobrol natural (bukan formulir), lalu MENGERJAKAN laporan/skripsi untuk pengguna.
 
 ALUR:
-1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru, panggil updateBrief.
+1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. Wajib tahu: jenis dokumen, judul/topik, syarat jurnal (SINTA 1-2 / SINTA 1-4 / Scopus Q1-Q2 / Scopus / bebas) + jumlah minimal + tahun terbit minimal, gaya sitasi, ketentuan format kampus jika ada (kertas, margin, font, spasi), data sampul (nama, NIM, dosen pengampu, prodi) bila user mau dicantumkan, bahan yang user punya (kode ZIP, data, catatan). Setiap fakta baru, panggil updateBrief.
 2. PLANNED: bila brief cukup, panggil proposePlan (outline bab + sub-tujuan, daftar diagram, daftar tabel, daftar ilustrasi, query pencarian sumber) lalu panggil findSources untuk SETIAP query (minimal 3 query berbeda, campur Inggris dan Indonesia, limit 8-10 per query) agar literatur luas dan mendalam. Hasil otomatis diurutkan paling relevan dan terbaru, dan PDF open access dibaca penuh oleh sistem. Setelah itu panggil selectSources untuk mencentang sumber yang paling relevan dengan topik (buang yang melenceng), lalu tampilkan ringkasan rencana + sumber dan minta persetujuan/koreksi. User juga bisa mencentang sendiri di panel Sumber.
    JUMLAH BAB (wajib ikuti kecuali ketentuan format kampus user menyebut lain): makalah/paper/laporan praktikum/laporan tugas = 3-4 bab (Pendahuluan, Landasan Teori/Tinjauan Pustaka, Pembahasan, Penutup); laporan proyek/PKL/magang = 4-5 bab; skripsi/tugas akhir/tesis = 5 bab (Pendahuluan, Tinjauan Pustaka, Metode, Hasil dan Pembahasan, Penutup). Maksimal 6 bab hanya bila formatRules user menyebut eksplisit. Daftar Pustaka dan Lampiran BUKAN bab, jangan masukkan ke outline. Gabungkan materi ke sub-bab, bukan menambah bab baru.
 3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
@@ -306,7 +312,12 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: {
           documentType: { type: "string" }, title: { type: "string" }, topic: { type: "string" }, course: { type: "string" }, institution: { type: "string" },
-          formatRules: { type: "string", description: "Ketentuan format kampus apa adanya." },
+          studentName: { type: "string", description: "Nama penyusun untuk sampul (bila user menyebut)." },
+          studentId: { type: "string", description: "NIM/NPM untuk sampul." },
+          lecturer: { type: "string", description: "Nama dosen pengampu/pembimbing untuk sampul." },
+          program: { type: "string", description: "Program studi, mis. 'Teknik Informatika'." },
+          faculty: { type: "string", description: "Fakultas." },
+          formatRules: { type: "string", description: "Ketentuan format kampus apa adanya (kertas, margin, font, spasi, posisi nomor halaman). Dipakai langsung saat ekspor Word." },
           citationStyle: { type: "string", enum: ["APA", "IEEE", "Bebas"] },
           formality: { type: "string", enum: ["ringkas", "formal", "akademik"] },
           journalRequirement: { type: "string", enum: Object.keys(JOURNAL_REQUIREMENT_LABEL) },

@@ -9,7 +9,7 @@ import { stripDashes } from "@/lib/ai/client";
 import { prisma } from "@/lib/db/prisma";
 import { listImageJobs } from "@/lib/server/image-jobs";
 import { readUpload, saveUpload } from "@/lib/storage/upload";
-import { buildDocxDocument, docxFileName, DOCX_PRESETS } from "@/utils/markdown-docx-exporter";
+import { buildDocxDocument, docxFileName, DOCX_PRESETS, parseFormatRules, presetForDocumentType } from "@/utils/markdown-docx-exporter";
 import { svgToPngServer } from "./svg-raster";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -19,7 +19,10 @@ export interface SessionDocxInput {
   ownerId: string;
   title: string;
   draft: string;
-  brief: { documentType?: string; course?: string; institution?: string };
+  brief: {
+    documentType?: string; course?: string; institution?: string; formatRules?: string;
+    studentName?: string; studentId?: string; lecturer?: string; program?: string; faculty?: string;
+  };
   diagrams: { title: string; svg?: string }[];
   /** Gambar dari bahan user (PNG tersimpan sebagai FileUpload milik owner). */
   figures?: { title: string; fileId?: string }[];
@@ -71,11 +74,26 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
   const missingImages = placeholders.filter((key) => !images[key]).length;
   const pendingFigures = imageJobs.filter((job) => job.status === "queued" || job.status === "running").length;
 
-  const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` (${input.brief.course})` : ""}` : undefined;
+  const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` ${input.brief.course}` : ""}` : undefined;
+  // Preset dari jenis dokumen, lalu ditimpa ketentuan format kampus yang ditulis user.
+  const preset = DOCX_PRESETS[presetForDocumentType(input.brief.documentType)].profile;
+  const rules = parseFormatRules(input.brief.formatRules);
   const doc = buildDocxDocument(draft, {
     profile: {
-      ...DOCX_PRESETS.kampus4433.profile,
-      cover: { title: input.title, subtitle, author: user?.name || undefined, institution: input.brief.institution || undefined, year: String(new Date().getFullYear()) },
+      ...preset,
+      ...rules,
+      margin: { ...preset.margin, ...rules.margin },
+      cover: {
+        title: input.title,
+        subtitle,
+        author: input.brief.studentName || user?.name || undefined,
+        studentId: input.brief.studentId,
+        lecturer: input.brief.lecturer,
+        program: input.brief.program,
+        faculty: input.brief.faculty,
+        institution: input.brief.institution || undefined,
+        year: String(new Date().getFullYear()),
+      },
     },
     images,
   });

@@ -21,7 +21,7 @@ import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/clien
 import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
 import type { VerifiedSource } from "@/lib/references/find-sources";
 import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
-import { DOCX_PRESETS, exportMarkdownToDocx } from "@/utils/markdown-docx-exporter";
+import { DOCX_PRESETS, exportMarkdownToDocx, parseFormatRules } from "@/utils/markdown-docx-exporter";
 import { MAX_FILE_BYTES } from "@/lib/file-limits";
 
 /** Format bahan Laporan: dokumen, spreadsheet, arsip, teks/kode, dan gambar (dibaca AI vision). */
@@ -399,14 +399,22 @@ export default function LaporanPage() {
         try { images[d.title.trim().toLowerCase()] = await svgToPng(d.svg!); } catch { /* placeholder tetap tercetak */ }
       }));
       const title = detail.title || detail.brief.title || "Laporan";
+      const b = detail.brief;
       const cover = {
         title,
-        subtitle: detail.brief.documentType ? `${detail.brief.documentType}${detail.brief.course ? `, ${detail.brief.course}` : ""}` : undefined,
-        author: user?.name || undefined,
-        institution: detail.brief.institution || undefined,
+        subtitle: b.documentType ? `${b.documentType}${b.course ? ` ${b.course}` : ""}` : undefined,
+        author: b.studentName || user?.name || undefined,
+        studentId: b.studentId,
+        lecturer: b.lecturer,
+        program: b.program,
+        faculty: b.faculty,
+        institution: b.institution || undefined,
         year: String(new Date().getFullYear()),
       };
-      await exportMarkdownToDocx(detail.draft, title, { profile: { ...DOCX_PRESETS[preset].profile, cover }, images });
+      // Preset pilihan user, lalu ditimpa ketentuan format kampus dari brief (margin/font/spasi).
+      const base = DOCX_PRESETS[preset].profile;
+      const rules = parseFormatRules(b.formatRules);
+      await exportMarkdownToDocx(detail.draft, title, { profile: { ...base, ...rules, margin: { ...base.margin, ...rules.margin }, cover }, images });
     } catch (e) { setError(getErrorMessage(e)); }
     finally { setExporting(false); }
   };
@@ -835,6 +843,8 @@ function Chip({ children, onClick, tone, disabled }: { children: React.ReactNode
 function BriefView({ brief }: { brief: ReportBrief }) {
   const rows: Array<[string, string | undefined]> = [
     ["Jenis", brief.documentType], ["Judul", brief.title], ["Topik", brief.topic], ["Mata kuliah", brief.course], ["Kampus", brief.institution],
+    ["Penyusun", [brief.studentName, brief.studentId && `NIM ${brief.studentId}`].filter(Boolean).join(" · ") || undefined],
+    ["Dosen", brief.lecturer], ["Prodi", [brief.program, brief.faculty].filter(Boolean).join(" · ") || undefined],
     ["Sitasi", brief.citationStyle], ["Syarat jurnal", brief.journalRequirement ? `${brief.journalRequirement}${brief.minSources ? ` · min ${brief.minSources}` : ""}${brief.yearFrom ? ` · ≥${brief.yearFrom}` : ""}` : undefined],
     ["Format", brief.formatRules], ["Target", brief.targetLength],
   ];
