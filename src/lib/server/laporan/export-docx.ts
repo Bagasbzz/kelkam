@@ -21,6 +21,8 @@ export interface SessionDocxInput {
   draft: string;
   brief: { documentType?: string; course?: string; institution?: string };
   diagrams: { title: string; svg?: string }[];
+  /** Gambar dari bahan user (PNG tersimpan sebagai FileUpload milik owner). */
+  figures?: { title: string; fileId?: string }[];
 }
 
 export interface SessionDocxResult {
@@ -45,6 +47,10 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
   await Promise.all(imageJobs.filter((job) => job.status === "done" && job.fileId && job.title).map(async (job) => {
     const bytes = await readUpload(job.fileId!, input.ownerId).catch(() => null);
     if (bytes) images[imageKey(job.title)] = new Uint8Array(bytes);
+  }));
+  await Promise.all((input.figures || []).filter((f) => f.fileId && f.title).map(async (f) => {
+    const bytes = await readUpload(f.fileId!, input.ownerId).catch(() => null);
+    if (bytes) images[imageKey(f.title)] = new Uint8Array(bytes);
   }));
   // Rasterisasi berurutan: WASM single-thread, hindari lonjakan memori.
   for (const diagram of input.diagrams) {

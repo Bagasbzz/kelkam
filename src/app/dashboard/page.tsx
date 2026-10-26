@@ -27,7 +27,8 @@ import { MAX_FILE_BYTES } from "@/lib/file-limits";
 /** Format bahan Laporan: dokumen, spreadsheet, arsip, teks/kode, dan gambar (dibaca AI vision). */
 const MATERIAL_ACCEPT = [
   ".pdf", ".docx", ".pptx", ".xlsx", ".zip", ".txt", ".md", ".csv", ".json",
-  ".py", ".js", ".ts", ".java", ".php", ".c", ".cpp", ".sql",
+  ".py", ".js", ".jsx", ".ts", ".tsx", ".mjs", ".java", ".kt", ".php", ".c", ".cpp", ".cs", ".go", ".rb", ".dart",
+  ".sql", ".prisma", ".html", ".css", ".scss", ".vue", ".svelte", ".xml", ".yml", ".yaml",
   ".png", ".jpg", ".jpeg", ".webp", ".gif",
   "image/png", "image/jpeg", "image/webp", "image/gif",
 ].join(",");
@@ -341,10 +342,11 @@ export default function LaporanPage() {
       const form = new FormData();
       form.append("file", file);
       const res = await authenticatedFetch("/api/context/extract", { method: "POST", body: form });
-      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string; data?: { title: string; fileName: string; kind: string; content: string } } | null;
+      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string; data?: { title: string; fileName: string; kind: string; content: string; fileId?: string } } | null;
       if (!res.ok || !data?.success || !data.data) throw new Error(data?.error || "Gagal membaca file.");
       await api(`/api/laporan/sessions/${activeId}/materials`, {
-        method: "POST", body: JSON.stringify({ kind: data.data.kind, title: data.data.title || file.name, content: data.data.content, fileName: data.data.fileName || file.name }),
+        // fileId: file asli disimpan agar AI bisa membuka ulang isi ZIP/PDF/gambar secara utuh.
+        method: "POST", body: JSON.stringify({ kind: data.data.kind, title: data.data.title || file.name, content: data.data.content, fileName: data.data.fileName || file.name, fileId: data.data.fileId }),
       });
       await loadDetail(activeId);
       focusTab("bahan");

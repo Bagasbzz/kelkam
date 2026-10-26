@@ -918,6 +918,12 @@ async function annotateMissingFigures(markdown: string, payload: unknown, ownerI
   for (const diagram of payloadDiagrams(payload)) {
     if (diagram.status === "approved" && typeof diagram.svg === "string") available.add(String(diagram.title || "").trim().toLowerCase());
   }
+  // Gambar dari bahan user (screenshot/foto) sudah tersimpan sebagai file.
+  if (isRecord(payload) && Array.isArray(payload.figures)) {
+    for (const figure of payload.figures) {
+      if (isRecord(figure) && typeof figure.fileId === "string" && figure.fileId) available.add(String(figure.title || "").trim().toLowerCase());
+    }
+  }
   const sessionId = isRecord(payload) && typeof payload.reportSessionId === "string" ? payload.reportSessionId : undefined;
   const pending = new Set<string>();
   if (sessionId) {

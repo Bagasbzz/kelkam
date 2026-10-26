@@ -88,9 +88,12 @@ export async function POST(req: Request) {
           : `Isi "${name}" bukan gambar PNG/JPEG/WebP/GIF yang valid.`,
       );
     }
+    // ZIP proyek (kode web) diberi jatah lebih besar: muat struktur + lebih banyak file inti.
+    // Sisa file tetap bisa dibaca utuh oleh agen lewat fileId (tool readMaterialFile).
+    const isArchive = /\.zip$/i.test(name);
     const extracted = looksImage
       ? await extractImageText(buffer, name)
-      : await extractTextFromBuffer(buffer, name);
+      : await extractTextFromBuffer(buffer, name, isArchive ? { maxChars: 110_000, maxCharsPerZipFile: 6_000 } : {});
 
     if (!extracted.content.trim()) {
       return NextResponse.json(

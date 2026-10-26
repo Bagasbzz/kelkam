@@ -61,14 +61,32 @@ export interface ExtractOptions {
 // ---------------------------------------------------------------------------
 
 export const TEXT_EXTENSIONS =
-  /\.(txt|md|csv|json|js|jsx|ts|tsx|php|py|java|kt|go|rs|c|cpp|h|cs|rb|dart|sql|html|css|scss|xml|yml|yaml|log|env\.example|blade\.php|vue|svelte)$/i;
+  /\.(txt|md|mdx|csv|tsv|json|jsonc|js|jsx|mjs|cjs|ts|tsx|mts|cts|php|py|ipynb|java|kt|kts|scala|groovy|gradle|go|rs|c|cc|cpp|hpp|h|cs|cshtml|razor|vb|rb|erb|dart|swift|m|mm|lua|pl|r|sql|prisma|graphql|gql|proto|html|htm|css|scss|sass|less|styl|xml|yml|yaml|toml|ini|cfg|conf|properties|log|sh|bash|zsh|ps1|bat|cmd|env\.example|blade\.php|twig|ejs|hbs|handlebars|njk|pug|jsp|vue|svelte|astro|tf)$/i;
+
+/** File teks tanpa ekstensi yang umum di proyek web (Dockerfile, Makefile, .htaccess, ...). */
+const TEXT_FILE_NAMES = /(^|\/)(Dockerfile|Makefile|Procfile|Gemfile|Rakefile|Jenkinsfile|\.htaccess|\.editorconfig|\.babelrc|\.eslintrc|\.prettierrc|\.npmrc|\.nvmrc|\.gitignore|\.dockerignore)$/i;
+
+/** File yang bisa dibaca sebagai teks (dari ekstensi atau nama file). */
+export function isTextLikePath(path: string) {
+  return TEXT_EXTENSIONS.test(path) || TEXT_FILE_NAMES.test(path.replace(/\\/g, "/"));
+}
+
+/**
+ * File "berisik": lockfile, bundle minified, source map. Tetap tampil di pohon
+ * dan bisa dibaca bila diminta path-nya, tapi tidak menghabiskan jatah ringkasan.
+ */
+const NOISE_FILE = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|composer\.lock|Cargo\.lock|poetry\.lock|Pipfile\.lock|Gemfile\.lock|go\.sum)$|\.(min\.(js|css)|map|chunk\.js|bundle\.js)$/i;
 
 export const DEFAULT_MAX_CHARS = 60_000;
 const DEFAULT_MAX_CHARS_PER_ZIP_FILE = 5_000;
 
-const MAX_ZIP_ENTRIES = 400;
+/** Batas file terlihat (di luar node_modules/vendor/dll) agar proyek web besar tetap bisa dibaca. */
+const MAX_ZIP_VISIBLE_ENTRIES = 8_000;
+const MAX_ZIP_TREE = 400;
 const MAX_ZIP_FILES_READ = 80;
 const MAX_ZIP_ENTRY_BYTES = 2 * 1024 * 1024;
+/** Batas satu file yang dibaca utuh lewat path (lebih longgar, hasil tetap dipotong maxChars). */
+const MAX_ZIP_SINGLE_READ_BYTES = 8 * 1024 * 1024;
 const MAX_ZIP_UNCOMPRESSED_BYTES = 24 * 1024 * 1024;
 const MAX_ZIP_RATIO = 80;
 const PARSER_TIMEOUT_MS = 30_000;
@@ -107,13 +125,16 @@ const FRAMEWORK_MARKERS: Array<[RegExp, string]> = [
 /** Prioritas file saat membaca ZIP: file penting dibaca lebih dulu. */
 function filePriority(path: string): number {
   const lower = path.toLowerCase();
+  if (NOISE_FILE.test(lower)) return 9;
   if (/(^|\/)readme(\.|$)/.test(lower)) return 0;
-  if (/(^|\/)(package|composer)\.json$/.test(lower)) return 1;
-  if (/schema\.prisma$|\.sql$/.test(lower)) return 2;
-  if (/(^|\/)(routes?|controllers?|models?|services?|api)\//.test(lower)) return 3;
-  if (/(^|\/)(src|app|lib)\//.test(lower)) return 4;
+  if (/(^|\/)(package|composer)\.json$|(^|\/)(requirements\.txt|pyproject\.toml|pom\.xml|build\.gradle(\.kts)?|go\.mod|pubspec\.yaml)$/.test(lower)) return 1;
+  if (/schema\.prisma$|\.sql$|(^|\/)(migrations?|database\/migrations)\//.test(lower)) return 2;
+  // Entry point & routing framework web (Next.js app/pages, Laravel routes, Express, Django urls).
+  if (/(^|\/)(routes?|controllers?|models?|services?|api|handlers?|middleware|urls\.py|views\.py)(\/|$)|(^|\/)(app|pages)\/.*(page|layout|route|index)\.(t|j)sx?$|(^|\/)(main|index|app|server)\.(t|j)sx?$|next\.config\.|vite\.config\.|nuxt\.config\./.test(lower)) return 3;
+  if (/(^|\/)(tests?|__tests__|spec|e2e|cypress|stories)\//.test(lower) || /\.(test|spec|stories)\.[a-z]+$/.test(lower)) return 8;
+  if (/(^|\/)(src|app|lib|components|resources\/views|hooks|store|utils)\//.test(lower)) return 4;
   if (/\.(md|txt)$/.test(lower)) return 6;
-  if (/\.(json|yml|yaml|xml|css|scss|log|csv)$/.test(lower)) return 7;
+  if (/\.(json|yml|yaml|xml|css|scss|sass|less|log|csv|svg)$/.test(lower)) return 7;
   return 5;
 }
 
@@ -161,7 +182,7 @@ function shouldIgnorePath(path: string) {
   return (
     !isSafeArchivePath(normalized) ||
     isSensitivePath(normalized) ||
-    /(^|\/)(node_modules|\.git|\.next|dist|build|vendor|__pycache__|\.idea|\.vscode|coverage)\//.test(normalized) ||
+    /(^|\/)(node_modules|bower_components|jspm_packages|\.git|\.svn|\.hg|\.next|\.nuxt|\.svelte-kit|\.angular|\.turbo|\.vercel|\.output|\.cache|\.parcel-cache|\.gradle|\.dart_tool|\.pub-cache|dist|build|out|target|vendor|Pods|DerivedData|__pycache__|\.pytest_cache|\.mypy_cache|\.venv|venv|\.tox|\.idea|\.vscode|\.vs|coverage|bin\/(Debug|Release)|obj|storage\/framework|storage\/logs|public\/build|public\/hot)\//.test(normalized) ||
     /(^|\/)__MACOSX\//.test(normalized) ||
     /(^|\/)\.DS_Store$/.test(normalized)
   );
@@ -219,8 +240,11 @@ async function loadArchiveEntries(buffer: Buffer): Promise<FlatEntry[]> {
       let count = 0;
       for (const ie of Object.values(inner.files)) {
         if (ie.dir) continue;
-        if (++count > MAX_ZIP_ENTRIES) break;
-        out.push(wrap(ie, `${n.name}${NESTED_ZIP_SEPARATOR}${ie.name}`));
+        const nestedName = `${n.name}${NESTED_ZIP_SEPARATOR}${ie.name}`;
+        // node_modules/vendor di ZIP dalam tidak dihitung ke batas jumlah file.
+        if (shouldIgnorePath(nestedName)) continue;
+        if (++count > MAX_ZIP_VISIBLE_ENTRIES) break;
+        out.push(wrap(ie, nestedName));
       }
     } catch {
       out.push({ name: `${n.name}${NESTED_ZIP_SEPARATOR}[gagal dibuka]`, declaredSize: 0, text: async () => "", bytes: async () => Buffer.alloc(0) });
@@ -436,19 +460,46 @@ export async function readZipEntry(
   const entries = await loadArchiveEntries(buffer);
   const entry = findEntry(entries, normalized);
   if (!entry) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
-  if (entry.declaredSize > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
+  if (entry.declaredSize > MAX_ZIP_SINGLE_READ_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
 
   const lower = entry.name.toLowerCase();
-  if (/\.(docx|pdf|pptx)$/.test(lower)) {
+  if (/\.(docx|pdf|pptx|xlsx)$/.test(lower)) {
     const buf = await entry.bytes();
     const inner = lower.endsWith(".docx") ? await extractDocx(buf, maxChars)
       : lower.endsWith(".pdf") ? await extractPdf(buf, maxChars)
+      : lower.endsWith(".xlsx") ? await extractXlsx(buf, maxChars)
       : await extractPptx(buf, maxChars);
     return { path: entry.name, size: buf.length, content: inner.content, truncated: inner.truncated };
+  }
+  if (IMAGE_EXTENSIONS.test(lower) || /\.(ico|woff2?|ttf|otf|eot|mp[34]|wav|ogg|webm|exe|dll|so|jar|class|wasm)$/.test(lower)) {
+    throw new ApiRequestError(415, `"${entry.name}" adalah file biner (gambar/font/media), bukan teks. Gunakan tool gambar untuk melihat gambar.`);
   }
   const raw = await entry.text();
   const { text, truncated } = sanitizeText(raw, maxChars);
   return { path: entry.name, size: Buffer.byteLength(raw, "utf8"), content: text, truncated };
+}
+
+/**
+ * Daftar file di ZIP (sudah difilter node_modules/vendor/dll), untuk menjelajah
+ * proyek besar per folder. `filter` = folder / akhiran path / kata di path.
+ */
+export async function listZipEntries(
+  buffer: Buffer,
+  options: { filter?: string; offset?: number; limit?: number } = {},
+): Promise<{ total: number; ignored: number; files: Array<{ path: string; size: number }> }> {
+  if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File ZIP tidak valid.");
+  const entries = await loadArchiveEntries(buffer);
+  const visible = entries.filter((e) => !shouldIgnorePath(e.name));
+  const f = options.filter?.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase().trim();
+  const matched = (f ? visible.filter((e) => matchesPathFilter(e.name, f) || e.name.toLowerCase().includes(f)) : visible)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const offset = Math.max(0, options.offset ?? 0);
+  const limit = Math.min(Math.max(options.limit ?? 300, 1), 1_000);
+  return {
+    total: matched.length,
+    ignored: entries.length - visible.length,
+    files: matched.slice(offset, offset + limit).map((e) => ({ path: e.name, size: e.declaredSize })),
+  };
 }
 
 /** Ambil bytes mentah satu entry ZIP (mis. PDF untuk dirender). Mendukung ZIP bertingkat. */
@@ -458,7 +509,7 @@ export async function readZipEntryBytes(buffer: Buffer, entryPath: string): Prom
   if (shouldIgnorePath(normalized)) throw new ApiRequestError(400, "Path tidak diizinkan.");
   const entry = findEntry(await loadArchiveEntries(buffer), normalized);
   if (!entry) throw new ApiRequestError(404, `File "${entryPath}" tidak ada di dalam ZIP.`);
-  if (entry.declaredSize > MAX_ZIP_ENTRY_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
+  if (entry.declaredSize > MAX_ZIP_SINGLE_READ_BYTES) throw new ApiRequestError(413, "File di dalam ZIP terlalu besar.");
   return { path: entry.name, bytes: await entry.bytes() };
 }
 
@@ -658,8 +709,8 @@ export async function readZipEntries(
   const wanted = options.paths?.map((p) => p.replace(/\\/g, "/").replace(/^\.?\//, "").toLowerCase());
   const entries = (await loadArchiveEntries(buffer))
     .filter((e) => !shouldIgnorePath(e.name) && e.declaredSize <= MAX_ZIP_ENTRY_BYTES)
-    .filter((e) => (wanted?.length ? wanted.some((w) => e.name.toLowerCase() === w || e.name.toLowerCase().endsWith(`/${w}`) || e.name.toLowerCase().endsWith(`${NESTED_ZIP_SEPARATOR}${w}`)) : true))
-    .filter((e) => TEXT_EXTENSIONS.test(e.name) || /\.(docx|pdf|pptx)$/i.test(e.name) || /(^|\/)README(\.|$)/i.test(e.name))
+    .filter((e) => (wanted?.length ? wanted.some((w) => e.name.toLowerCase() === w || e.name.toLowerCase().endsWith(`/${w}`) || e.name.toLowerCase().endsWith(`${NESTED_ZIP_SEPARATOR}${w}`)) : !NOISE_FILE.test(e.name)))
+    .filter((e) => isTextLikePath(e.name) || /\.(docx|pdf|pptx)$/i.test(e.name) || /(^|\/)README(\.|$)/i.test(e.name))
     .sort((a, b) => filePriority(a.name) - filePriority(b.name))
     .slice(0, maxFiles);
 
@@ -698,65 +749,71 @@ export async function extractZip(
 
   const entries = await loadArchiveEntries(buffer);
 
-  if (entries.length > MAX_ZIP_ENTRIES * 2) {
-    throw new ApiRequestError(413, "Arsip berisi terlalu banyak file.");
-  }
-
-  // ZIP bomb defense
-  let declaredTotal = 0;
-  for (const entry of entries) {
-    const size = entry.declaredSize;
-    if (size > MAX_ZIP_ENTRY_BYTES) {
-      throw new ApiRequestError(413, "Arsip memiliki file internal yang terlalu besar.");
-    }
-    declaredTotal += size;
-  }
-  if (
-    declaredTotal > MAX_ZIP_UNCOMPRESSED_BYTES ||
-    (buffer.length > 0 && declaredTotal / buffer.length > MAX_ZIP_RATIO)
-  ) {
+  // ZIP bomb defense: rasio kompresi dihitung dari SELURUH entry (sinyal bom),
+  // tapi batas jumlah/ukuran hanya untuk file yang terlihat (node_modules, vendor,
+  // build, .git dibuang dulu). Proyek web lengkap tidak lagi ditolak.
+  let declaredAll = 0;
+  for (const entry of entries) declaredAll += entry.declaredSize;
+  if (buffer.length > 0 && declaredAll / buffer.length > MAX_ZIP_RATIO) {
     throw new ApiRequestError(413, "Rasio kompresi arsip tidak aman untuk diproses.");
   }
 
   const visible = entries.filter((entry) => !shouldIgnorePath(entry.name));
+  const ignoredCount = entries.length - visible.length;
+  if (visible.length > MAX_ZIP_VISIBLE_ENTRIES) {
+    throw new ApiRequestError(413, `Arsip berisi terlalu banyak file (${visible.length} di luar node_modules/vendor). Maksimal ${MAX_ZIP_VISIBLE_ENTRIES}.`);
+  }
 
   // Manifest: ekstensi, framework, tree
   const extCounts: Record<string, number> = {};
   const frameworks = new Set<string>();
+  const folderCounts = new Map<string, number>();
   for (const entry of visible) {
     const ext = extOf(entry.name) || "(tanpa ekstensi)";
     extCounts[ext] = (extCounts[ext] || 0) + 1;
     for (const [re, name] of FRAMEWORK_MARKERS) {
       if (re.test(entry.name)) frameworks.add(name);
     }
+    // Ringkasan folder 2 tingkat: berguna saat pohon lengkap terlalu panjang.
+    const parts = entry.name.replace(NESTED_ZIP_SEPARATOR, "/").split("/");
+    if (parts.length > 1) {
+      const key = parts.slice(0, Math.min(2, parts.length - 1)).join("/");
+      folderCounts.set(key, (folderCounts.get(key) || 0) + 1);
+    }
   }
-  const tree = visible.slice(0, 250).map((e) => e.name.replace(/[\r\n]/g, ""));
+  // Pohon: file penting dulu agar struktur inti tetap terlihat pada proyek besar.
+  const tree = [...visible]
+    .sort((a, b) => filePriority(a.name) - filePriority(b.name) || a.name.localeCompare(b.name))
+    .slice(0, MAX_ZIP_TREE)
+    .map((e) => e.name.replace(/[\r\n]/g, ""))
+    .sort((a, b) => a.localeCompare(b));
 
-  // Entry yang bisa dibaca → urut prioritas
+  // Entry yang bisa dibaca → urut prioritas. File > 2 MB dan lockfile/minified dilewati.
   const readable = visible
-    .filter(
-      (entry) =>
-        TEXT_EXTENSIONS.test(entry.name) ||
-        /(^|\/)(package|composer)\.json$/i.test(entry.name) ||
-        /(^|\/)README(\.|$)/i.test(entry.name),
-    )
+    .filter((entry) => (isTextLikePath(entry.name) || /(^|\/)README(\.|$)/i.test(entry.name)) && !NOISE_FILE.test(entry.name))
+    .filter((entry) => entry.declaredSize <= MAX_ZIP_ENTRY_BYTES)
     .sort((a, b) => filePriority(a.name) - filePriority(b.name))
     .slice(0, MAX_ZIP_FILES_READ);
 
+  const folders = [...folderCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
   const header =
-    `Struktur ZIP (${visible.length} file${frameworks.size ? `, stack: ${[...frameworks].join(", ")}` : ""}${visible.some((e) => e.name.includes(NESTED_ZIP_SEPARATOR)) ? `; entri "x.zip::path" berasal dari ZIP di dalam ZIP` : ""}):\n` +
-    tree.map((p) => `- ${p}`).join("\n");
+    `Struktur ZIP (${visible.length} file${ignoredCount ? `, ${ignoredCount} file dependensi/build diabaikan` : ""}${frameworks.size ? `, stack: ${[...frameworks].join(", ")}` : ""}${visible.some((e) => e.name.includes(NESTED_ZIP_SEPARATOR)) ? `; entri "x.zip::path" berasal dari ZIP di dalam ZIP` : ""}):\n` +
+    (folders.length ? `Folder: ${folders.map(([f, n]) => `${f} (${n})`).join(", ")}\n` : "") +
+    tree.map((p) => `- ${p}`).join("\n") +
+    (visible.length > tree.length ? `\n- ... ${visible.length - tree.length} file lain (baca per path bila perlu)` : "");
   const chunks: string[] = [header];
   let extractedBytes = 0;
   let total = header.length;
 
   for (const entry of readable) {
-    if (total >= maxChars) break;
-    const raw = await entry.text();
-    extractedBytes += Buffer.byteLength(raw, "utf8");
-    if (extractedBytes > MAX_ZIP_UNCOMPRESSED_BYTES) {
-      throw new ApiRequestError(413, "Isi arsip terlalu besar untuk diproses.");
+    if (total >= maxChars || extractedBytes > MAX_ZIP_UNCOMPRESSED_BYTES) break;
+    let raw: string;
+    try {
+      raw = await entry.text();
+    } catch {
+      continue;
     }
+    extractedBytes += Buffer.byteLength(raw, "utf8");
     const { text } = sanitizeText(raw, perFile);
     const block = `\n\n[File: ${entry.name.replace(/[\r\n]/g, "")}]\n${text}`;
     chunks.push(block);
@@ -765,7 +822,7 @@ export async function extractZip(
 
   // DOCX/PDF/PPTX di dalam ZIP (umum untuk tugas laporan), baca maksimal 3.
   const docs = visible
-    .filter((e) => /\.(docx|pdf|pptx)$/i.test(e.name))
+    .filter((e) => /\.(docx|pdf|pptx)$/i.test(e.name) && e.declaredSize <= MAX_ZIP_SINGLE_READ_BYTES)
     .slice(0, 3);
   for (const entry of docs) {
     if (total >= maxChars) break;
@@ -825,7 +882,7 @@ export async function extractTextFromBuffer(
   if (lower.endsWith(".xls")) throw new ApiRequestError(415, "Format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau CSV.");
   if (lower.endsWith(".doc")) throw new ApiRequestError(415, "Format .doc lama tidak didukung; simpan ulang sebagai .docx atau PDF.");
   if (lower.endsWith(".zip")) return extractZip(buffer, options);
-  if (TEXT_EXTENSIONS.test(lower)) {
+  if (isTextLikePath(lower)) {
     const { text, truncated } = sanitizeText(buffer.toString("utf8"), maxChars);
     const kind: ExtractKind = /readme|package/.test(lower) ? "code" : "note";
     return { content: text, charCount: text.length, kind, truncated };

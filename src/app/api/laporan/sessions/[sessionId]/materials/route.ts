@@ -19,6 +19,8 @@ const BodySchema = z.object({
   title: z.string().trim().min(1).max(200),
   content: z.string().min(1).max(120_000),
   fileName: z.string().max(200).optional(),
+  /** FileUpload asli (dari /api/context/extract); kepemilikan dicek di addSessionMaterial. */
+  fileId: z.string().trim().min(1).max(64).optional(),
 });
 
 export async function POST(req: Request, context: Ctx) {

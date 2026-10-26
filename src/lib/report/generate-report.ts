@@ -579,21 +579,27 @@ function chunkText(text: string) {
 function selectSourceMaterial(project: unknown, section: ChapterInput["section"], budgetChars: number) {
   const raw = isRecord(project) ? records(project.sources).slice(0, 30) : [];
   const keywords = keywordsOf(`${section.title} ${section.purpose}`);
+  // Bahan kode (ZIP proyek): kepala = struktur folder/stack, jadi diberi jatah lebih
+  // besar; kata kunci bab berbahasa Indonesia jarang cocok dengan isi kode.
+  const headLen = (source: Record<string, unknown>) => (String(source.kind) === "code" ? 2_400 : 320);
 
   const heads = raw.map((source) => ({
     kind: truncate(source.kind, 40) || "note",
     title: truncate(source.title, 180),
-    content: truncate(source.content, 320),
+    content: truncate(source.content, headLen(source)),
   }));
   let used = heads.reduce((acc, head) => acc + head.content.length, 0);
 
   const scored: Array<{ sourceIndex: number; chunk: string; score: number }> = [];
   raw.forEach((source, sourceIndex) => {
     const text = String(source.content || "");
-    if (text.length <= 320) return; // head sudah cukup
+    if (text.length <= headLen(source)) return; // head sudah cukup
+    const isCode = String(source.kind) === "code";
     for (const chunk of chunkText(text)) {
       const haystack = chunk.toLowerCase();
-      const score = keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+      let score = keywords.reduce((acc, word) => acc + (haystack.includes(word) ? 1 : 0), 0);
+      // Kode inti (route, model, controller, skema DB) tetap relevan untuk bab metode/hasil.
+      if (isCode && /\[file: [^\]]*(route|controller|model|schema|service|api|page|migration)/i.test(chunk)) score += 1;
       if (score > 0) scored.push({ sourceIndex, chunk, score });
     }
   });
