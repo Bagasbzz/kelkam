@@ -18,6 +18,7 @@ import { enrichSourcesWithFullText } from "@/lib/references/fetch-fulltext";
 import { startReportJob, getReportJob, extractDiagramArtifacts, type ReportJob, type ReportDiagramArtifact } from "@/lib/report/report-jobs";
 import { generateChapter, summarizeChapter } from "@/lib/report/generate-report";
 import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
+import { resolveLaneWidth } from "@/lib/uml/theme";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
 import { exportSessionDocx } from "./export-docx";
 import { MATERIAL_TOOL_DEFS, MATERIAL_TOOL_IMPL, materialImageAsPng, type MaterialToolContext } from "./material-tools";
@@ -912,6 +913,8 @@ export interface ApproveDiagramInput {
   nodes: DiagramNode[];
   edges: DiagramEdge[];
   lanes: string[];
+  /** Lebar lane dari UML Builder (meta.laneWidth); kosong untuk diagram lama. */
+  laneWidth?: number;
 }
 
 /**
@@ -929,14 +932,16 @@ export async function approveDiagramToSession(sessionId: string, ownerId: string
   const planned = state.plan.diagrams[idx];
   const title = (input.title || planned.title).trim().slice(0, 160) || planned.title;
   const lanes = input.lanes.length ? input.lanes : Array.from(new Set(input.nodes.map((n) => n.lane).filter((l): l is string => Boolean(l))));
-  const svg = diagramToSvg({ nodes: input.nodes, edges: input.edges, lanes, title });
+  // Tanpa laneWidth (diagram lama): resolveLaneWidth menebak dari posisi node, lalu hasilnya disimpan.
+  const laneWidth = lanes.length ? resolveLaneWidth(input.nodes, lanes, input.laneWidth) : undefined;
+  const svg = diagramToSvg({ nodes: input.nodes, edges: input.edges, lanes, laneWidth, title });
   const flowSummary = summarizeDiagram({ nodes: input.nodes, edges: input.edges, lanes });
   state.plan.diagrams[idx] = {
     ...planned,
     title,
     type: input.diagramType || planned.type,
     status: "approved",
-    diagramData: { nodes: input.nodes, edges: input.edges, meta: { title, lanes, diagramType: input.diagramType || planned.type } },
+    diagramData: { nodes: input.nodes, edges: input.edges, meta: { title, lanes, ...(laneWidth ? { laneWidth } : {}), diagramType: input.diagramType || planned.type } },
     svg,
     flowSummary,
   };

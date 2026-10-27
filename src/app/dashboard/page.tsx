@@ -427,7 +427,7 @@ export default function LaporanPage() {
       title: d.title,
       reportDiagramId: d.id,
       reportSessionId: activeId,
-      diagramData: d.diagramData ? { nodes: d.diagramData.nodes, edges: d.diagramData.edges, meta: { title: d.diagramData.meta?.title || d.title, lanes: d.diagramData.meta?.lanes || [] } } : undefined,
+      diagramData: d.diagramData ? { nodes: d.diagramData.nodes, edges: d.diagramData.edges, meta: { title: d.diagramData.meta?.title || d.title, lanes: d.diagramData.meta?.lanes || [], laneWidth: d.diagramData.meta?.laneWidth } } : undefined,
     }));
     window.open("/uml-builder", "_blank", "noopener");
   };

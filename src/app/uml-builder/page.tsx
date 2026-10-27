@@ -7,7 +7,8 @@ import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import styles from './uml.module.css';
 import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload, Loader2 } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData, inferDiagramTypeFromPrompt } from '@/lib/uml/diagram-guard';
-import { fitTerminators, terminatorSize, wrapTerminatorText } from '@/lib/uml/node-size';
+import { fitTerminators, lifelineWidth, nodeSizeFor, wrapTerminatorText } from '@/lib/uml/node-size';
+import { LANE_WIDTH, resolveLaneWidth, sequenceGap } from '@/lib/uml/theme';
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { advanceArtifact } from '@/lib/studio/engine';
 import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-store';
@@ -15,6 +16,11 @@ import { loadStudioWorkspace, saveStudioWorkspace } from '@/lib/studio/project-s
 interface DiagramMeta {
   title?: string;
   lanes: string[];
+  /**
+   * Lebar lane posisi node. Diisi LANE_WIDTH saat layout dibuat ulang di sini;
+   * kosong untuk diagram lama → DiagramCanvas/render-svg mendeteksi dari posisi node.
+   */
+  laneWidth?: number;
   reportDiagramId?: string;
   /** Sesi penyusun laporan (server) asal diagram; jika ada, persetujuan dikirim ke server. */
   reportSessionId?: string;
@@ -183,43 +189,23 @@ function normalizeApiNodes(
 ): DiagramNode[] {
   if (!Array.isArray(value)) return [];
   const charsPerLine = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
-  const lineHeight = 24;
-  const maxWidth = 250;
+  const records = value.filter(isRecord);
+  // Kepala lifeline tidak boleh lebih lebar dari jarak antar lifeline.
+  const lifelineCount = records.filter((node) => node.type === 'lifeline').length;
+  const lifelineMax = sequenceGap(lifelineCount) - 12;
 
-  return value.filter(isRecord).map((node, index) => {
+  return records.map((node, index) => {
     const rawType = typeof node.type === 'string' ? node.type as NodeType : 'process';
     const type = supportedNodeTypes.has(rawType) ? rawType : 'process';
     const text = typeof node.text === 'string' ? node.text.trim().slice(0, 120) : '';
     const isTerminator = type === 'start' || type === 'end';
     const terminatorLabel = text || (type === 'start' ? 'Mulai' : 'Selesai');
     const lines = isTerminator ? wrapTerminatorText(terminatorLabel) : wrapText(text, charsPerLine);
-    let height = 60;
-    let width = 120;
-
-    if (type === 'actor') {
-      height = 80;
-      width = 60;
-    } else if (isTerminator) {
-      // Terminator: oval mengikuti panjang label supaya teks tidak keluar garis.
-      ({ width, height } = terminatorSize(lines));
-    } else if (type === 'fork' || type === 'join') {
-      height = 10;
-      width = 120;
-    } else if (type === 'lifeline') {
-      const longestLine = Math.max(...lines.map((line) => line.length), 1);
-      width = Math.max(130, Math.min(210, longestLine * 9 + 52));
-      height = Math.max(420, typeof node.height === 'number' && Number.isFinite(node.height) ? node.height : 420);
-    } else if (type === 'usecase') {
-      const longestLine = Math.max(...lines.map((line) => line.length), 1);
-      width = Math.max(140, Math.min(280, longestLine * 9 + 60));
-      height = Math.max(70, lines.length * lineHeight + 35);
-    } else if (type === 'decision') {
-      const longestLine = Math.max(...lines.map((line) => line.length), 1);
-      width = Math.min(maxWidth + 60, Math.max(160, longestLine * 11 + 70));
-      height = Math.max(100, lines.length * lineHeight + 60);
-    } else {
-      height = Math.max(60, lines.length * lineHeight + 40);
-      width = lines.length > 1 ? maxWidth : Math.min(maxWidth, Math.max(120, text.length * 10 + 40));
+    // Ukuran dari font target (theme) dengan aturan auto-fit yang sama dengan renderer.
+    let { width, height } = nodeSizeFor(type, isTerminator ? terminatorLabel : text || `Elemen ${index + 1}`);
+    if (type === 'lifeline') {
+      width = lifelineWidth(text, lifelineMax);
+      height = typeof node.height === 'number' && Number.isFinite(node.height) && node.height > 0 ? node.height : 420;
     }
 
     return {
@@ -420,7 +406,7 @@ export default function UMLBuilder() {
           setAiStatusText(`AI menulis elemen ke-${event.count}: "${partialNodes[partialNodes.length - 1]?.text ?? ''}"`);
           setNodes(autoLayoutDiagram(partialNodes, partialEdges, dt, stringList(event.data.lanes)));
           setEdges(partialEdges);
-          setDiagramMeta((prev) => ({ ...prev, title: event.data?.title || prev.title, lanes: stringList(event.data?.lanes) }));
+          setDiagramMeta((prev) => ({ ...prev, title: event.data?.title || prev.title, lanes: stringList(event.data?.lanes), laneWidth: LANE_WIDTH }));
         }
       });
       const resOk = resStatus >= 200 && resStatus < 300;
@@ -481,6 +467,7 @@ export default function UMLBuilder() {
           ...prev,
           title: generatedData.title || data.spec?.title || prev.title,
           lanes: returnedLanes,
+          laneWidth: LANE_WIDTH,
         }));
         setIsAiModalOpen(false);
         showToast('Diagram AI berhasil dibuat dan lolos pemeriksaan.');
@@ -556,7 +543,7 @@ export default function UMLBuilder() {
       const nextNodes = autoLayoutDiagram(parsedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
       setNodes(nextNodes);
       setEdges(nextEdges);
-      setDiagramMeta((prev) => ({ ...prev, title: analysisData.title || prev.title, lanes: returnedLanes }));
+      setDiagramMeta((prev) => ({ ...prev, title: analysisData.title || prev.title, lanes: returnedLanes, laneWidth: LANE_WIDTH }));
       setAiClarification(data.analysisSummary || 'Diagram referensi berhasil dibaca dan dirapikan ulang.');
       setAiWarnings(Array.from(new Set([
         ...stringList(data.validation?.warnings),
@@ -590,6 +577,8 @@ export default function UMLBuilder() {
       });
       if (changed) {
         setNodes(nextNodes);
+        // Posisi baru dihitung dengan lebar lane tema saat ini.
+        setDiagramMeta((prev) => (prev.laneWidth === LANE_WIDTH ? prev : { ...prev, laneWidth: LANE_WIDTH }));
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -607,6 +596,7 @@ export default function UMLBuilder() {
       diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence',
       diagramMeta.lanes,
     ));
+    setDiagramMeta((prev) => ({ ...prev, laneWidth: LANE_WIDTH }));
     showToast('Layout diagram berhasil dirapikan.');
   }, [diagramMeta.lanes, diagramType, edges, nodes, saveToHistory, showToast]);
 
@@ -639,9 +629,12 @@ export default function UMLBuilder() {
         const restoredLanes = Array.isArray(parsed.diagramData?.meta?.lanes)
           ? parsed.diagramData.meta.lanes
           : Array.from(new Set(restoredNodes.map((node: DiagramNode) => node.lane).filter(Boolean))) as string[];
+        const restoredLaneWidth = parsed.diagramData?.meta?.laneWidth;
         setDiagramMeta({
           title: parsed.diagramData?.meta?.title || parsed.title,
           lanes: restoredLanes,
+          // Diagram lama tanpa laneWidth → dideteksi dari posisi node di DiagramCanvas.
+          laneWidth: typeof restoredLaneWidth === 'number' && Number.isFinite(restoredLaneWidth) ? restoredLaneWidth : undefined,
           reportDiagramId: parsed.reportDiagramId,
           reportSessionId: typeof parsed.reportSessionId === 'string' ? parsed.reportSessionId : undefined,
           reportContext: parsed.reportContext,
@@ -834,7 +827,7 @@ export default function UMLBuilder() {
     setSelectedNodeId(null);
     setAiWarnings([]);
     setAiError('');
-    setDiagramMeta((prev) => ({ ...prev, title: undefined, lanes: Array.from(new Set(targetNodes.map((node) => node.lane).filter(Boolean))) as string[] }));
+    setDiagramMeta((prev) => ({ ...prev, title: undefined, lanes: Array.from(new Set(targetNodes.map((node) => node.lane).filter(Boolean))) as string[], laneWidth: undefined }));
   }, [diagramType, edges, nodes, projects]);
   switchDiagramRef.current = handleSwitchDiagram;
 
@@ -870,6 +863,8 @@ export default function UMLBuilder() {
         ? diagramMeta.lanes
         : (Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[]);
       setIsApprovingToReport(true);
+      // Simpan lebar lane eksplisit agar render laporan tidak perlu menebak lagi.
+      const laneWidth = lanes.length ? resolveLaneWidth(nodes, lanes, diagramMeta.laneWidth) : undefined;
       void (async () => {
         try {
           const res = await authenticatedFetch(`/api/laporan/sessions/${encodeURIComponent(sessionId)}/diagrams`, {
@@ -882,6 +877,7 @@ export default function UMLBuilder() {
               nodes,
               edges,
               lanes,
+              laneWidth,
             }),
           });
           const data = await res.json().catch(() => ({}));
@@ -1036,20 +1032,14 @@ export default function UMLBuilder() {
 
 
   const handleUpdateNode = useCallback((id: string, newText: string) => {
-    const MAX_WIDTH = 200;
-    const CHARS_PER_LINE = 20;
-    const LINE_HEIGHT = 24;
-    const PADDING_V = 40;
-    const lines = wrapText(newText, CHARS_PER_LINE);
-    const nodeHeight = Math.max(60, lines.length * LINE_HEIGHT + PADDING_V);
-    const finalWidth = lines.length > 1 ? MAX_WIDTH : Math.min(MAX_WIDTH, Math.max(120, newText.length * 10 + 40));
+    const lines = wrapText(newText, 20);
 
     setNodes(prev => prev.map(n => {
       if (n.id !== id) return n;
       // Terminator: wrap pendek + oval mengikuti label (pusat oval dipertahankan).
       if (n.type === 'start' || n.type === 'end') {
         const tLines = wrapTerminatorText(newText);
-        const size = terminatorSize(tLines.length ? tLines : [' ']);
+        const size = nodeSizeFor(n.type, newText);
         return {
           ...n,
           text: newText,
@@ -1059,7 +1049,12 @@ export default function UMLBuilder() {
           ...size,
         };
       }
-      return { ...n, text: newText, lines, width: finalWidth, height: nodeHeight };
+      // Lifeline: hanya lebar kepala yang berubah; tinggi (panjang garis hidup) dipertahankan.
+      if (n.type === 'lifeline') {
+        const width = lifelineWidth(newText, Math.max(n.width, sequenceGap(prev.filter((item) => item.type === 'lifeline').length) - 12));
+        return { ...n, text: newText, lines, x: n.x + (n.width - width) / 2, width };
+      }
+      return { ...n, text: newText, lines, ...nodeSizeFor(n.type, newText) };
     }));
   }, [wrapText]);
 
@@ -1230,39 +1225,16 @@ export default function UMLBuilder() {
     const actualParentId = parentId || (nodes.length > 0 ? nodes[nodes.length - 1].id : '');
     const parentNode = nodes.find(n => n.id === actualParentId);
 
-    const MAX_WIDTH = 250;
     const CHARS_PER_LINE = diagramType === 'usecase' || diagramType === 'sequence' ? 18 : 20;
-    const LINE_HEIGHT = 24;
-    const PADDING_V = 40;
 
     const lines = newNodeType === 'start' || newNodeType === 'end'
       ? wrapTerminatorText(newNodeText)
       : wrapText(newNodeText, CHARS_PER_LINE);
-    let nodeHeight = 60;
-    let finalWidth = 120;
-
-    if (newNodeType === 'actor') {
-      nodeHeight = 80; finalWidth = 60;
-    } else if (newNodeType === 'start' || newNodeType === 'end') {
-      ({ width: finalWidth, height: nodeHeight } = terminatorSize(lines));
-    } else if (newNodeType === 'fork' || newNodeType === 'join') {
-      nodeHeight = 10; finalWidth = 120;
-    } else if (newNodeType === 'lifeline') {
-      const longestLine = Math.max(...lines.map(l => l.length));
-      finalWidth = Math.max(130, Math.min(210, longestLine * 9 + 52));
+    // Ukuran dari font target (theme) → label tetap terbaca setelah diekspor ke Word.
+    let { width: finalWidth, height: nodeHeight } = nodeSizeFor(newNodeType, newNodeText);
+    if (newNodeType === 'lifeline') {
+      finalWidth = lifelineWidth(newNodeText, sequenceGap(nodes.filter((n) => n.type === 'lifeline').length + 1) - 12);
       nodeHeight = 520;
-    } else if (newNodeType === 'usecase') {
-      const longestLine = Math.max(...lines.map(l => l.length));
-      finalWidth = Math.max(140, longestLine * 9 + 60);
-      nodeHeight = Math.max(70, lines.length * LINE_HEIGHT + 35);
-    } else if (newNodeType === 'decision') {
-      const longestLine = Math.max(...lines.map(l => l.length));
-      finalWidth = Math.max(160, longestLine * 11 + 70);
-      nodeHeight = Math.max(100, lines.length * LINE_HEIGHT + 60);
-      if (lines.length > 2) finalWidth = Math.min(MAX_WIDTH + 60, finalWidth);
-    } else {
-      nodeHeight = Math.max(60, lines.length * LINE_HEIGHT + PADDING_V);
-      finalWidth = lines.length > 1 ? MAX_WIDTH : Math.min(MAX_WIDTH, Math.max(120, newNodeText.length * 10 + 40));
     }
 
 
@@ -1674,6 +1646,7 @@ export default function UMLBuilder() {
             nodes={nodes}
             edges={edges}
             lanes={diagramMeta.lanes}
+            laneWidth={diagramMeta.laneWidth}
             onNodeClick={handleNodeClick}
             onNodeDragStart={handleNodeDragStart}
             onNodeDrag={handleNodeDrag}

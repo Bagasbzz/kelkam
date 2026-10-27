@@ -1,5 +1,14 @@
 import React from 'react';
 import { DiagramEdge, DiagramNode } from '@/lib/types/diagram';
+import { routeEdge, type PlacedLabel } from '@/lib/uml/edge-route';
+import {
+  EDGE_DASH,
+  EDGE_DASHED_STROKE,
+  EDGE_STROKE,
+  EDGE_STROKE_WIDTH,
+  FONT_FAMILY,
+  LABEL_BORDER,
+} from '@/lib/uml/theme';
 
 interface EdgeProps {
   edge: DiagramEdge;
@@ -7,217 +16,78 @@ interface EdgeProps {
   toNode: DiagramNode;
 }
 
-const PRIMARY_STROKE = '#334155';
-const DASHED_STROKE = '#94a3b8';
-const GRID_STEP = 4;
-
-function snap(value: number) {
-  return Math.round(value / GRID_STEP) * GRID_STEP;
+interface EdgeLabelProps {
+  edge: DiagramEdge;
+  fromNode: DiagramNode;
+  toNode: DiagramNode;
 }
 
-function getExitPoint(node: DiagramNode, side: 'right' | 'left' | 'bottom' | 'top' | 'center') {
-  const x = node.x + (node.offsetX || 0);
-  const y = node.y + (node.offsetY || 0);
-  const cx = x + node.width / 2;
-  const cy = y + node.height / 2;
-
-  switch (side) {
-    case 'right':
-      return { x: x + node.width, y: cy };
-    case 'left':
-      return { x, y: cy };
-    case 'bottom':
-      return { x: cx, y: y + node.height };
-    case 'top':
-      return { x: cx, y };
-    default:
-      return { x: cx, y: cy };
-  }
-}
-
-function renderLabel(label: string, x: number, y: number, prominent = false) {
-  const width = prominent ? 168 : Math.max(54, Math.min(116, label.length * 7.2 + 18));
-  const height = 20;
+function LabelBox({ label }: { label: PlacedLabel }) {
+  const firstY = -((label.lines.length - 1) * label.lineHeight) / 2;
   return (
-    <g transform={`translate(${snap(x)}, ${snap(y)})`}>
+    <g transform={`translate(${label.x}, ${label.y})`} style={{ pointerEvents: 'none' }}>
       <rect
-        x={-width / 2}
-        y={-height / 2}
-        width={width}
-        height={height}
+        x={-label.width / 2}
+        y={-label.height / 2}
+        width={label.width}
+        height={label.height}
         fill="white"
         rx={3}
         opacity={0.98}
-        stroke="#cbd5e1"
+        stroke={LABEL_BORDER}
         strokeWidth="1"
       />
       <text
+        x={0}
+        y={0}
         textAnchor="middle"
         dominantBaseline="middle"
         style={{
-          fontSize: '11px',
-          fontWeight: prominent ? 700 : 600,
-          fill: '#334155',
-          fontFamily: 'Inter, sans-serif',
+          fontSize: `${label.fontSize}px`,
+          fontWeight: label.fontWeight,
+          fill: EDGE_STROKE,
+          fontFamily: FONT_FAMILY,
           letterSpacing: 0,
         }}
       >
-        {label}
+        {label.lines.map((line, index) => (
+          <tspan key={index} x={0} dy={index === 0 ? firstY : label.lineHeight}>
+            {line}
+          </tspan>
+        ))}
       </text>
     </g>
   );
 }
 
+/**
+ * Garis edge. Routing dihitung oleh edge-route.ts (sama dengan render-svg.ts)
+ * supaya tampilan editor = gambar di laporan. Marker panah didefinisikan sekali
+ * di DiagramCanvas.
+ */
 const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
-  const isUseCase =
-    fromNode.type === 'actor' ||
-    toNode.type === 'actor' ||
-    fromNode.type === 'usecase' ||
-    toNode.type === 'usecase';
-
-  let pathData = '';
-  let labelX = 0;
-  let labelY = 0;
-
-  if (fromNode.type === 'lifeline' && toNode.type === 'lifeline' && typeof edge.y === 'number') {
-    const fromCenterX = snap(fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2);
-    const toCenterX = snap(toNode.x + (toNode.offsetX || 0) + toNode.width / 2);
-    const y = snap(edge.y);
-    pathData = `M ${fromCenterX},${y} H ${toCenterX}`;
-    labelX = (fromCenterX + toCenterX) / 2;
-    labelY = y - 14;
-
-    const strokeColor = edge.dashed ? DASHED_STROKE : PRIMARY_STROKE;
-    const markerId = edge.dashed ? 'arrowhead-dashed' : 'arrowhead';
-
-    return (
-      <g className="edge-group">
-        <defs>
-          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill={PRIMARY_STROKE} />
-          </marker>
-          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill={DASHED_STROKE} />
-          </marker>
-        </defs>
-        <path d={pathData} fill="none" stroke="transparent" strokeWidth="14" />
-        <path
-          d={pathData}
-          fill="none"
-          stroke={strokeColor}
-          strokeWidth="2.4"
-          strokeDasharray={edge.dashed ? '6,5' : 'none'}
-          markerEnd={`url(#${markerId})`}
-        />
-        {edge.label ? renderLabel(edge.label, labelX, labelY, true) : null}
-      </g>
-    );
-  }
-
-  if (isUseCase) {
-    const fx = snap(fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2);
-    const fy = snap(fromNode.y + (fromNode.offsetY || 0) + fromNode.height / 2);
-    const tx = snap(toNode.x + (toNode.offsetX || 0) + toNode.width / 2);
-    const ty = snap(toNode.y + (toNode.offsetY || 0) + toNode.height / 2);
-    pathData = `M ${fx},${fy} L ${tx},${ty}`;
-    labelX = (fx + tx) / 2;
-    labelY = (fy + ty) / 2 - 12;
-  } else {
-    const fromBottom = getExitPoint(fromNode, 'bottom');
-    const toTop = getExitPoint(toNode, 'top');
-    const fromRight = getExitPoint(fromNode, 'right');
-    const fromLeft = getExitPoint(fromNode, 'left');
-    const toLeft = getExitPoint(toNode, 'left');
-    const toRight = getExitPoint(toNode, 'right');
-
-    const x1 = snap(fromBottom.x);
-    const y1 = snap(fromBottom.y);
-    const x2 = snap(toTop.x);
-    const y2 = snap(toTop.y);
-
-    const upwardOrLoop = y2 <= y1 + 24;
-    // Route samping (Ya/Tidak) hanya dipakai jika target benar-benar di samping; jika target
-    // berada di bawah (kolom hampir sama) gunakan jalur vertikal agar garis tidak berputar.
-    const toCenterX = toNode.x + (toNode.offsetX || 0) + toNode.width / 2;
-    const fromCenterX = fromNode.x + (fromNode.offsetX || 0) + fromNode.width / 2;
-    const horizontalDelta = toCenterX - fromCenterX;
-    let dir = edge.direction;
-    if (!upwardOrLoop && (dir === 'right' || dir === 'left')) {
-      if (Math.abs(horizontalDelta) < fromNode.width / 2 + 24) dir = undefined;
-      else dir = horizontalDelta > 0 ? 'right' : 'left';
-    }
-
-    if (dir === 'right' && !upwardOrLoop) {
-      const startX = snap(fromRight.x);
-      const startY = snap(fromRight.y);
-      const endX = snap((toNode.x + (toNode.offsetX || 0)) < startX ? toTop.x : toLeft.x);
-      const endY = snap((toNode.x + (toNode.offsetX || 0)) < startX ? toTop.y : toLeft.y);
-      const bendX = snap(startX + Math.max(48, Math.min(96, Math.abs(endX - startX) / 2)));
-
-      pathData = `M ${startX},${startY} H ${bendX} V ${endY} H ${endX}`;
-      labelX = (startX + bendX) / 2;
-      labelY = startY - 12;
-    } else if (dir === 'left' && !upwardOrLoop) {
-      const startX = snap(fromLeft.x);
-      const startY = snap(fromLeft.y);
-      const endX = snap((toNode.x + (toNode.offsetX || 0) + toNode.width) > startX ? toTop.x : toRight.x);
-      const endY = snap((toNode.x + (toNode.offsetX || 0) + toNode.width) > startX ? toTop.y : toRight.y);
-      const bendX = snap(startX - Math.max(48, Math.min(96, Math.abs(endX - startX) / 2)));
-
-      pathData = `M ${startX},${startY} H ${bendX} V ${endY} H ${endX}`;
-      labelX = (startX + bendX) / 2;
-      labelY = startY - 12;
-    } else if (upwardOrLoop) {
-      // Loop balik: lewat sisi kiri jika target di kiri, selain itu sisi kanan; masuk dari atas target.
-      const goLeft = horizontalDelta < 0;
-      const fromEdgeX = goLeft ? Math.min(fromNode.x + (fromNode.offsetX || 0), toNode.x + (toNode.offsetX || 0)) : Math.max(fromNode.x + (fromNode.offsetX || 0) + fromNode.width, toNode.x + (toNode.offsetX || 0) + toNode.width);
-      const routeX = snap(goLeft ? fromEdgeX - 56 : fromEdgeX + 56);
-      const departureY = snap(y1 + 28);
-      const approachY = snap(y2 - 24);
-
-      pathData = `M ${x1},${y1} V ${departureY} H ${routeX} V ${approachY} H ${x2} V ${y2}`;
-      labelX = goLeft ? routeX - 8 : routeX + 8;
-      labelY = (departureY + approachY) / 2;
-    } else if (Math.abs(x1 - x2) <= 8) {
-      pathData = `M ${x1},${y1} V ${y2}`;
-      labelX = x1 + 10;
-      labelY = y1 + (y2 - y1) / 2;
-    } else {
-      const midY = snap(y1 + (y2 - y1) / 2);
-      pathData = `M ${x1},${y1} V ${midY} H ${x2} V ${y2}`;
-      labelX = (x1 + x2) / 2;
-      labelY = midY - 12;
-    }
-  }
-
-  const strokeColor = edge.dashed ? DASHED_STROKE : PRIMARY_STROKE;
-  const markerId = edge.dashed ? 'arrowhead-dashed' : 'arrowhead';
-
+  const route = routeEdge(edge, fromNode, toNode);
+  const dashed = Boolean(edge.dashed);
   return (
     <g className="edge-group">
-      <defs>
-        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill={PRIMARY_STROKE} />
-        </marker>
-        <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-          <polygon points="0 0, 10 3.5, 0 7" fill={DASHED_STROKE} />
-        </marker>
-      </defs>
-
-      <path d={pathData} fill="none" stroke="transparent" strokeWidth="12" />
-
+      <path d={route.path} fill="none" stroke="transparent" strokeWidth="12" />
       <path
-        d={pathData}
+        d={route.path}
         fill="none"
-        stroke={strokeColor}
-        strokeWidth="2.4"
-        strokeDasharray={edge.dashed ? '5,5' : 'none'}
-        markerEnd={`url(#${markerId})`}
+        stroke={dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}
+        strokeWidth={EDGE_STROKE_WIDTH}
+        strokeDasharray={dashed ? EDGE_DASH : 'none'}
+        markerEnd={`url(#${dashed ? 'arrowhead-dashed' : 'arrowhead'})`}
       />
-
-      {edge.label ? renderLabel(edge.label, labelX, labelY) : null}
     </g>
   );
+};
+
+/** Label edge, dirender di atas node (urutan sama dengan render-svg.ts). */
+export const EdgeLabel: React.FC<EdgeLabelProps> = ({ edge, fromNode, toNode }) => {
+  if (!edge.label) return null;
+  const { label } = routeEdge(edge, fromNode, toNode);
+  return label ? <LabelBox label={label} /> : null;
 };
 
 export default Edge;

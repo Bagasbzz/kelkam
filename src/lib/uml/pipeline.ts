@@ -16,7 +16,17 @@ import {
   type DiagramValidationResult,
 } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
-import { terminatorSize, wrapTerminatorText } from "@/lib/uml/node-size";
+import { lifelineWidth, nodeSizeFor, wrapTerminatorText } from "@/lib/uml/node-size";
+import {
+  LANE_NODE_MAX_WIDTH,
+  LANE_START_X,
+  LANE_WIDTH,
+  NODE_MAX_WIDTH,
+  SEQ_GAP_MIN,
+  sequenceGap,
+  sequenceLifelineHeight,
+  sequenceMessageY,
+} from "@/lib/uml/theme";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 
 // LiteSpeed/Passenger di hosting memutus request di ~120 s → total budget route harus di bawah itu.
@@ -37,7 +47,7 @@ interface CompactStep {
   no?: string;
 }
 
-interface CompactSpec {
+export interface CompactSpec {
   needsClarification?: boolean;
   clarification?: string;
   clarificationQuestions?: string[];
@@ -66,6 +76,8 @@ export interface RenderedDiagram {
   nodes: DiagramNode[];
   edges: DiagramEdge[];
   lanes: string[];
+  /** Lebar lane saat diagram dibuat (theme.LANE_WIDTH); disimpan agar render ulang tidak salah tebak. */
+  laneWidth?: number;
   title: string;
 }
 
@@ -124,19 +136,13 @@ const wrapWidthFor = (type: string) => (type === "decision" ? 16 : 20);
 const linesFor = (type: string, text: string) =>
   type === "start" || type === "end" ? wrapTerminatorText(text) : wrapText(text, wrapWidthFor(type));
 
-const nodeSize = (type: string, text: string) => {
-  const lines = linesFor(type, text);
-  const longest = Math.max(...lines.map((l) => l.length), 1);
-  if (type === "start" || type === "end") {
-    // Elips: area teks efektif ≈ 70% → ukuran dihitung di terminatorSize.
-    return terminatorSize(lines);
-  }
-  if (type === "decision") {
-    // Belah ketupat: area teks efektif ≈ setengah bounding box → ukuran 2x teks.
-    return { width: Math.max(180, Math.min(300, longest * 8.5 * 1.6 + 40)), height: Math.max(118, lines.length * 20 * 1.8 + 40) };
-  }
-  return { width: Math.max(150, Math.min(260, longest * 9 + 48)), height: Math.max(64, lines.length * 22 + 38) };
-};
+/**
+ * Ukuran node dihitung dari font target (theme.NODE_TARGET_FONT) dengan aturan
+ * auto-fit yang sama dengan renderer → label tidak mengecil. Dengan lane,
+ * lebar dibatasi lebar lane − padding agar node tidak keluar kotak lane.
+ */
+const nodeSize = (type: string, text: string, hasLanes: boolean) =>
+  nodeSizeFor(type, text, hasLanes ? LANE_NODE_MAX_WIDTH : NODE_MAX_WIDTH);
 
 function inferDomainPrompt(prompt: string, reportContext: unknown) {
   const parts = [
@@ -423,7 +429,8 @@ function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: stri
   return normalized;
 }
 
-function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDiagram {
+/** Spec ringkas → node/edge mentah (tanpa AI). Diekspor untuk tes layout/render. */
+export function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDiagram {
   if (diagramType === "sequence") {
     const rawParticipants = spec.participants?.length ? spec.participants : [
       { id: "actor", name: "Aktor" },
@@ -444,17 +451,18 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
       .filter((message) => participantIds.has(message.from) && participantIds.has(message.to) && message.from !== message.to)
       .slice(0, 12);
     const safeMessages = messages.length ? messages : [{ from: participants[0].id, to: participants[1]?.id || participants[0].id, text: "Memulai proses", return: false }];
-    const width = Math.max(150, Math.min(210, 900 / Math.max(participants.length, 1)));
-    const gap = Math.max(190, Math.floor(980 / Math.max(participants.length, 1)));
-    const height = 140 + safeMessages.length * 72;
-    const nodes: DiagramNode[] = participants.map((participant, index) => ({
+    const gap = sequenceGap(participants.length);
+    // Kepala lifeline selebar nama (bold, font target) tapi tidak boleh menyentuh tetangga.
+    const maxHeadWidth = Math.max(SEQ_GAP_MIN, gap) - 12;
+    const height = sequenceLifelineHeight(safeMessages.length);
+    const nodes: DiagramNode[] = participants.map((participant) => ({
       id: participant.id,
       type: "lifeline" as const,
       text: participant.name,
       lines: wrapText(participant.name, 18),
-      x: 110 + index * gap,
-      y: 70,
-      width,
+      x: 0,
+      y: 0,
+      width: lifelineWidth(participant.name, maxHeadWidth),
       height,
       pinned: true,
     }));
@@ -464,8 +472,9 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
       toId: message.to,
       label: `${index + 1}. ${message.text}`,
       dashed: message.return,
-      y: 150 + index * 72,
+      y: sequenceMessageY(index),
     }));
+    // Posisi x/y lifeline diatur autoLayoutDiagram (layoutSequence) dari theme yang sama.
     return { nodes, edges, lanes: [], title: spec.title || "Sequence Diagram" };
   }
 
@@ -491,7 +500,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
     }
     const nodes: DiagramNode[] = [
       ...actors.map((a, i) => ({ id: a.id, type: "actor" as const, text: a.name, lines: wrapText(a.name, 14), x: a.side === "right" ? 850 : 150, y: 160 + i * 140, width: 60, height: 80, side: a.side || "left", pinned: true })),
-      ...usecases.map((u, i) => ({ id: u.id, type: "usecase" as const, text: u.text, lines: wrapText(u.text, 18), x: 430, y: 140 + i * 120, width: 190, height: 76, pinned: true })),
+      ...usecases.map((u, i) => ({ id: u.id, type: "usecase" as const, text: u.text, lines: wrapText(u.text, 18), x: 430, y: 140 + i * 120, ...nodeSizeFor("usecase", u.text), pinned: true })),
     ];
     const edges: DiagramEdge[] = usecases.flatMap((u) => u.actors.map((actorId) => ({ id: `edge-${actorId}-${u.id}`, fromId: actorId, toId: u.id, dashed: false })));
     return { nodes, edges, lanes: [], title: spec.title || "Use Case Diagram" };
@@ -532,7 +541,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
   const laneX = (lane?: string) => {
     if (!lanes.length) return 500;
     const idx = Math.max(0, lanes.indexOf(lane || lanes[0]));
-    return 230 + idx * 420;
+    return LANE_START_X + idx * LANE_WIDTH + LANE_WIDTH / 2;
   };
   const layerById = new Map<string, number>();
   normalizedSteps.forEach((step, index) => layerById.set(step.id, index));
@@ -550,7 +559,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
 
   const nodes: DiagramNode[] = normalizedSteps.map((step, index) => {
     const type = diagramType === "activity" && step.type === "process" ? "activity" : step.type;
-    const size = nodeSize(type, step.text);
+    const size = nodeSize(type, step.text, lanes.length > 0);
     const lane = step.lane || "main";
     const layer = Math.min(layerById.get(step.id) ?? index, normalizedSteps.length + 2);
     const sameLayerKey = `${lane}-${layer}`;
@@ -581,7 +590,7 @@ function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDia
     return out;
   });
 
-  return { nodes, edges, lanes, title: spec.title || "Diagram" };
+  return { nodes, edges, lanes, laneWidth: lanes.length ? LANE_WIDTH : undefined, title: spec.title || "Diagram" };
 }
 
 function hasEnoughPromptDetail(prompt: string, reportContext: unknown) {
@@ -1065,7 +1074,7 @@ export function errorToResult(error: unknown): PipelineResult {
 
 export interface ReportUmlResult {
   ok: boolean;
-  data?: RenderedDiagram & { meta: { title: string; lanes: string[]; diagramType: DiagramType } };
+  data?: RenderedDiagram & { meta: { title: string; lanes: string[]; laneWidth?: number; diagramType: DiagramType } };
   warnings: string[];
   error?: string;
 }
@@ -1095,7 +1104,7 @@ export async function generateUmlForReport(input: {
   if (payload.success && data) {
     return {
       ok: true,
-      data: { ...data, meta: { title: data.title || input.title, lanes: data.lanes, diagramType: input.diagramType } },
+      data: { ...data, meta: { title: data.title || input.title, lanes: data.lanes, ...(data.laneWidth ? { laneWidth: data.laneWidth } : {}), diagramType: input.diagramType } },
       warnings: validation?.warnings ?? [],
     };
   }

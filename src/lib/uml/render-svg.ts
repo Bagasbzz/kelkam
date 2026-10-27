@@ -2,57 +2,69 @@
  * src/lib/uml/render-svg.ts
  * -----------------------------------------------------------------------------
  * Renderer SVG murni (string, tanpa React/DOM) untuk data diagram UML Builder.
- * Bentuk & routing disalin dari components/diagram/{Node,Edge,DiagramCanvas}.tsx
- * agar gambar di laporan identik dengan yang dilihat pengguna di UML Builder.
+ * Geometri, tipografi (theme.ts), auto-fit label (text-fit.ts) dan routing edge
+ * (edge-route.ts) dipakai bersama dengan components/diagram/*, sehingga gambar
+ * di laporan identik dengan yang dilihat pengguna di UML Builder.
  * Dipakai server (job laporan → payload) dan klien (rasterisasi SVG → PNG saat
  * ekspor DOCX).
  * -----------------------------------------------------------------------------
  */
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { routeEdge, type PlacedLabel } from "@/lib/uml/edge-route";
 import { fitTerminators } from "@/lib/uml/node-size";
-import { diagramFontCap, layoutNodeText } from "@/lib/uml/text-fit";
+import { diagramFontCap, laneTitleFont, layoutNodeText } from "@/lib/uml/text-fit";
+import {
+  ARROW,
+  EDGE_DASH,
+  EDGE_DASHED_STROKE,
+  EDGE_STROKE,
+  EDGE_STROKE_WIDTH,
+  FONT_FAMILY,
+  INK,
+  LABEL_BORDER,
+  LANE_FILL_EVEN,
+  LANE_FILL_ODD,
+  LANE_HEADER_FILL,
+  LANE_HEADER_HEIGHT,
+  LANE_START_X,
+  LANE_STROKE,
+  LANE_STROKE_WIDTH,
+  LANE_TOP_Y,
+  LIFELINE_DASH,
+  LIFELINE_HEADER_HEIGHT,
+  LIFELINE_STROKE,
+  LIFELINE_STROKE_WIDTH,
+  NODE_STROKE_WIDTH,
+  OUTSIDE_LINE_HEIGHT,
+  OUTSIDE_LABEL_GAP,
+  SVG_MIN_HEIGHT,
+  SVG_MIN_WIDTH,
+  SVG_PADDING,
+  resolveLaneWidth,
+} from "@/lib/uml/theme";
 
 export interface SvgDiagramInput {
   nodes: DiagramNode[];
   edges: DiagramEdge[];
   lanes?: string[];
+  /** Lebar lane tersimpan (meta.laneWidth). Kosong → dideteksi dari posisi node (diagram lama = 420). */
+  laneWidth?: number;
   title?: string;
 }
-
-const PRIMARY_STROKE = "#334155";
-const DASHED_STROKE = "#94a3b8";
-const BORDER = "#1e293b";
-const FONT = "Inter, 'Segoe UI', Arial, sans-serif";
-const LINE_HEIGHT = 20;
-const LANE_WIDTH = 420;
-const LANE_START_X = 20;
-const LANE_HEADER_HEIGHT = 52;
-const PADDING = 40;
 
 const esc = (value: string) =>
   value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-const snap = (value: number) => Math.round(value / 4) * 4;
 const num = (value: number) => Number(value.toFixed(1)).toString();
 
-function exitPoint(node: DiagramNode, side: "right" | "left" | "bottom" | "top") {
-  const x = node.x + (node.offsetX || 0);
-  const y = node.y + (node.offsetY || 0);
-  const cx = x + node.width / 2;
-  const cy = y + node.height / 2;
-  switch (side) {
-    case "right": return { x: x + node.width, y: cy };
-    case "left": return { x, y: cy };
-    case "bottom": return { x: cx, y: y + node.height };
-    default: return { x: cx, y };
-  }
-}
+/** Jarak bawah lane setelah node terbawah. */
+const LANE_BOTTOM_PAD = 28;
 
 function renderNode(node: DiagramNode, fontCap?: number): string {
   const { type, width, height } = node;
   const x = node.x + (node.offsetX || 0);
   const y = node.y + (node.offsetY || 0);
-  const stroke = `stroke="${BORDER}" stroke-width="1.5"`;
+  const stroke = `stroke="${INK}" stroke-width="${NODE_STROKE_WIDTH}"`;
   let shape = "";
   switch (type) {
     case "start":
@@ -61,22 +73,18 @@ function renderNode(node: DiagramNode, fontCap?: number): string {
       // Terminator & use case: satu oval bergaris tunggal (konsisten dengan editor).
       shape = `<ellipse cx="${num(x + width / 2)}" cy="${num(y + height / 2)}" rx="${num(width / 2)}" ry="${num(height / 2)}" fill="white" ${stroke}/>`;
       break;
-    case "process":
-    case "system":
-      shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" rx="4" fill="white" ${stroke}/>`;
-      break;
     case "activity":
       shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" rx="20" fill="white" ${stroke}/>`;
       break;
     case "fork":
     case "join":
-      shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" fill="${BORDER}" ${stroke}/>`;
+      shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" fill="${INK}" ${stroke}/>`;
       break;
     case "lifeline": {
       const cx = x + width / 2;
       shape =
-        `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="46" rx="4" fill="white" ${stroke}/>` +
-        `<line x1="${num(cx)}" y1="${num(y + 46)}" x2="${num(cx)}" y2="${num(y + height)}" stroke="#475569" stroke-width="2" stroke-dasharray="8,6"/>`;
+        `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${LIFELINE_HEADER_HEIGHT}" rx="4" fill="white" ${stroke}/>` +
+        `<line x1="${num(cx)}" y1="${num(y + LIFELINE_HEADER_HEIGHT)}" x2="${num(cx)}" y2="${num(y + height)}" stroke="${LIFELINE_STROKE}" stroke-width="${LIFELINE_STROKE_WIDTH}" stroke-dasharray="${LIFELINE_DASH}"/>`;
       break;
     }
     case "actor": {
@@ -99,6 +107,7 @@ function renderNode(node: DiagramNode, fontCap?: number): string {
       break;
     }
     default:
+      // process, system, dll.
       shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" rx="4" fill="white" ${stroke}/>`;
   }
 
@@ -110,123 +119,38 @@ function renderNode(node: DiagramNode, fontCap?: number): string {
     .map((line, i) => `<tspan x="${num(cx)}" dy="${i === 0 ? 0 : num(layout.lineHeight)}">${esc(line)}</tspan>`)
     .join("");
   const text = showText
-    ? `<text x="${num(cx)}" y="${num(layout.firstLineY)}" text-anchor="middle" dominant-baseline="${layout.baseline}" font-size="${num(layout.fontSize)}" font-weight="${layout.fontWeight}" fill="${BORDER}" font-family="${FONT}">${tspans}</text>`
+    ? `<text x="${num(cx)}" y="${num(layout.firstLineY)}" text-anchor="middle" dominant-baseline="${layout.baseline}" font-size="${num(layout.fontSize)}" font-weight="${layout.fontWeight}" fill="${INK}" font-family="${FONT_FAMILY}">${tspans}</text>`
     : "";
   return `<g>${shape}${text}</g>`;
 }
 
-function renderLabel(label: string, x: number, y: number, prominent = false): string {
-  const width = prominent ? 168 : Math.max(54, Math.min(116, label.length * 7.2 + 18));
-  const height = 20;
+function renderLabel(label: PlacedLabel): string {
+  const firstY = -((label.lines.length - 1) * label.lineHeight) / 2;
+  const tspans = label.lines
+    .map((line, i) => `<tspan x="0" dy="${i === 0 ? num(firstY) : num(label.lineHeight)}">${esc(line)}</tspan>`)
+    .join("");
   return (
-    `<g transform="translate(${snap(x)}, ${snap(y)})">` +
-    `<rect x="${num(-width / 2)}" y="${-height / 2}" width="${num(width)}" height="${height}" fill="white" rx="3" opacity="0.98" stroke="#cbd5e1" stroke-width="1"/>` +
-    `<text text-anchor="middle" dominant-baseline="middle" font-size="11" font-weight="${prominent ? 700 : 600}" fill="${PRIMARY_STROKE}" font-family="${FONT}">${esc(label)}</text>` +
+    `<g transform="translate(${num(label.x)}, ${num(label.y)})">` +
+    `<rect x="${num(-label.width / 2)}" y="${num(-label.height / 2)}" width="${label.width}" height="${label.height}" fill="white" rx="3" opacity="0.98" stroke="${LABEL_BORDER}" stroke-width="1"/>` +
+    `<text x="0" y="0" text-anchor="middle" dominant-baseline="middle" font-size="${num(label.fontSize)}" font-weight="${label.fontWeight}" fill="${EDGE_STROKE}" font-family="${FONT_FAMILY}">${tspans}</text>` +
     `</g>`
   );
 }
 
-function renderEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): string {
-  const stroke = edge.dashed ? DASHED_STROKE : PRIMARY_STROKE;
-  const marker = edge.dashed ? "arrowhead-dashed" : "arrowhead";
-  let path = "";
-  let labelX = 0;
-  let labelY = 0;
-  let prominent = false;
-
-  if (from.type === "lifeline" && to.type === "lifeline" && typeof edge.y === "number") {
-    const fx = snap(from.x + (from.offsetX || 0) + from.width / 2);
-    const tx = snap(to.x + (to.offsetX || 0) + to.width / 2);
-    const y = snap(edge.y);
-    path = `M ${fx},${y} H ${tx}`;
-    labelX = (fx + tx) / 2;
-    labelY = y - 14;
-    prominent = true;
-  } else if (["actor", "usecase"].includes(from.type) || ["actor", "usecase"].includes(to.type)) {
-    const fx = snap(from.x + (from.offsetX || 0) + from.width / 2);
-    const fy = snap(from.y + (from.offsetY || 0) + from.height / 2);
-    const tx = snap(to.x + (to.offsetX || 0) + to.width / 2);
-    const ty = snap(to.y + (to.offsetY || 0) + to.height / 2);
-    path = `M ${fx},${fy} L ${tx},${ty}`;
-    labelX = (fx + tx) / 2;
-    labelY = (fy + ty) / 2 - 12;
-  } else {
-    const fromBottom = exitPoint(from, "bottom");
-    const toTop = exitPoint(to, "top");
-    const fromRight = exitPoint(from, "right");
-    const fromLeft = exitPoint(from, "left");
-    const toLeft = exitPoint(to, "left");
-    const toRight = exitPoint(to, "right");
-    const x1 = snap(fromBottom.x);
-    const y1 = snap(fromBottom.y);
-    const x2 = snap(toTop.x);
-    const y2 = snap(toTop.y);
-    const toX = to.x + (to.offsetX || 0);
-    const upwardOrLoop = y2 <= y1 + 24;
-    const horizontalDelta = (toX + to.width / 2) - (from.x + (from.offsetX || 0) + from.width / 2);
-    let dir = edge.direction;
-    if (!upwardOrLoop && (dir === "right" || dir === "left")) {
-      if (Math.abs(horizontalDelta) < from.width / 2 + 24) dir = undefined;
-      else dir = horizontalDelta > 0 ? "right" : "left";
-    }
-
-    if (dir === "right" && !upwardOrLoop) {
-      const sx = snap(fromRight.x);
-      const sy = snap(fromRight.y);
-      const useTop = toX < sx;
-      const ex = snap(useTop ? toTop.x : toLeft.x);
-      const ey = snap(useTop ? toTop.y : toLeft.y);
-      const bendX = snap(sx + Math.max(48, Math.min(96, Math.abs(ex - sx) / 2)));
-      path = `M ${sx},${sy} H ${bendX} V ${ey} H ${ex}`;
-      labelX = (sx + bendX) / 2;
-      labelY = sy - 12;
-    } else if (dir === "left" && !upwardOrLoop) {
-      const sx = snap(fromLeft.x);
-      const sy = snap(fromLeft.y);
-      const useTop = toX + to.width > sx;
-      const ex = snap(useTop ? toTop.x : toRight.x);
-      const ey = snap(useTop ? toTop.y : toRight.y);
-      const bendX = snap(sx - Math.max(48, Math.min(96, Math.abs(ex - sx) / 2)));
-      path = `M ${sx},${sy} H ${bendX} V ${ey} H ${ex}`;
-      labelX = (sx + bendX) / 2;
-      labelY = sy - 12;
-    } else if (upwardOrLoop) {
-      const goLeft = horizontalDelta < 0;
-      const edgeX = goLeft
-        ? Math.min(from.x + (from.offsetX || 0), toX)
-        : Math.max(from.x + (from.offsetX || 0) + from.width, toX + to.width);
-      const routeX = snap(goLeft ? edgeX - 56 : edgeX + 56);
-      const departureY = snap(y1 + 28);
-      const approachY = snap(y2 - 24);
-      path = `M ${x1},${y1} V ${departureY} H ${routeX} V ${approachY} H ${x2} V ${y2}`;
-      labelX = goLeft ? routeX - 8 : routeX + 8;
-      labelY = (departureY + approachY) / 2;
-    } else if (Math.abs(x1 - x2) <= 8) {
-      path = `M ${x1},${y1} V ${y2}`;
-      // Label (Ya/Tidak) ditaruh dekat node asal & di samping garis supaya tidak tertutup node lain / label edge sejajar.
-      labelX = x1 + 40;
-      labelY = y1 + 18;
-    } else {
-      const midY = snap(y1 + (y2 - y1) / 2);
-      path = `M ${x1},${y1} V ${midY} H ${x2} V ${y2}`;
-      labelX = x1 + (x2 > x1 ? 40 : -40);
-      labelY = y1 + 18;
-    }
-  }
-
-  return (
-    `<g><path d="${path}" fill="none" stroke="${stroke}" stroke-width="2.4" stroke-dasharray="${edge.dashed ? "5,5" : "none"}" marker-end="url(#${marker})"/>` +
-    (edge.label ? renderLabel(edge.label, labelX, labelY, prominent) : "") +
-    `</g>`
-  );
+/** Perkiraan tepi bawah label luar (actor / fork / join). */
+function outsideLabelBottom(node: DiagramNode, y: number): number {
+  if (node.type !== "actor" && node.type !== "fork" && node.type !== "join") return y + node.height;
+  const lines = Math.max(node.lines?.length || 1, 1);
+  return y + node.height + OUTSIDE_LABEL_GAP + lines * OUTSIDE_LINE_HEIGHT;
 }
 
 /**
- * Hasilkan SVG lengkap (dengan viewBox terpangkas ke bounding box + padding).
- * Lebar minimal 800 agar proporsi gambar di laporan konsisten.
+ * Hasilkan SVG lengkap. viewBox dipangkas ke bounding box node + garis + label
+ * (+ lane) dengan padding kecil; tidak ada lebar minimum besar, supaya diagram
+ * kecil tidak diperkecil saat ditempel ke laporan.
  */
 export function diagramToSvg(input: SvgDiagramInput): string {
-  // Diagram lama: oval terminator tetap 110×56 → perbesar agar label muat.
+  // Diagram lama: oval terminator terlalu kecil → perbesar agar label muat.
   const nodes = fitTerminators(input.nodes ?? []);
   const edges = input.edges ?? [];
   const lanes = input.lanes?.length
@@ -234,61 +158,76 @@ export function diagramToSvg(input: SvgDiagramInput): string {
     : (Array.from(new Set(nodes.map((n) => n.lane).filter(Boolean))) as string[]);
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
-  // Bounding box: node (teks di bawah actor/fork perlu ruang ekstra) + lane.
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const grow = (x1: number, y1: number, x2: number, y2: number) => {
+    minX = Math.min(minX, x1); minY = Math.min(minY, y1);
+    maxX = Math.max(maxX, x2); maxY = Math.max(maxY, y2);
+  };
+
   for (const n of nodes) {
     const x = n.x + (n.offsetX || 0);
     const y = n.y + (n.offsetY || 0);
-    const extra = n.type === "actor" || n.type === "fork" || n.type === "join" ? 20 + (n.lines?.length || 1) * LINE_HEIGHT : 0;
-    minX = Math.min(minX, x); minY = Math.min(minY, y);
-    maxX = Math.max(maxX, x + n.width); maxY = Math.max(maxY, y + n.height + extra);
+    // Label actor bisa lebih lebar dari figurnya.
+    const labelHalf = n.type === "actor" ? 50 : 0;
+    grow(x - labelHalf, y, x + n.width + labelHalf, outsideLabelBottom(n, y));
   }
-  if (!Number.isFinite(minX)) { minX = 0; minY = 0; maxX = 800; maxY = 400; }
-  // Edge balik bisa melewati sisi kanan node terjauh.
-  maxX += edges.some((e) => !e.direction) ? 160 : 100;
+
+  // Edge dirute dulu agar garis balik & label ikut masuk bounding box (tidak terpotong).
+  const routed = edges.map((e) => {
+    const from = nodeById.get(e.fromId);
+    const to = nodeById.get(e.toId);
+    return from && to ? { edge: e, route: routeEdge(e, from, to) } : null;
+  });
+  for (const item of routed) {
+    if (!item) continue;
+    for (const p of item.route.points) grow(p.x - 6, p.y - 6, p.x + 6, p.y + 6);
+    const l = item.route.label;
+    if (l) grow(l.x - l.width / 2, l.y - l.height / 2, l.x + l.width / 2, l.y + l.height / 2);
+  }
+  if (!Number.isFinite(minX)) { minX = 0; minY = 0; maxX = SVG_MIN_WIDTH; maxY = SVG_MIN_HEIGHT; }
 
   let laneSvg = "";
   if (lanes.length) {
-    const laneHeight = Math.max(maxY + 80 - 24, 300);
-    minX = Math.min(minX, LANE_START_X);
-    minY = Math.min(minY, 24);
-    maxX = Math.max(maxX, LANE_START_X + lanes.length * LANE_WIDTH);
-    maxY = Math.max(maxY, 24 + laneHeight);
+    const laneWidth = resolveLaneWidth(nodes, lanes, input.laneWidth);
+    const laneHeight = Math.max(maxY + LANE_BOTTOM_PAD - LANE_TOP_Y, 240);
+    grow(LANE_START_X, LANE_TOP_Y, LANE_START_X + lanes.length * laneWidth, LANE_TOP_Y + laneHeight);
     laneSvg = lanes
       .map((lane, i) => {
-        const x = LANE_START_X + i * LANE_WIDTH;
+        const x = LANE_START_X + i * laneWidth;
+        const titleFont = laneTitleFont(lane, laneWidth);
         return (
-          `<rect x="${x}" y="24" width="${LANE_WIDTH}" height="${num(laneHeight)}" fill="${i % 2 === 0 ? "#ffffff" : "#f8fafc"}" stroke="#94a3b8" stroke-width="1.5"/>` +
-          `<rect x="${x}" y="24" width="${LANE_WIDTH}" height="${LANE_HEADER_HEIGHT}" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>` +
-          `<text x="${x + LANE_WIDTH / 2}" y="56" text-anchor="middle" dominant-baseline="middle" fill="${BORDER}" font-size="18" font-weight="700" font-family="${FONT}">${esc(lane)}</text>`
+          `<rect x="${x}" y="${LANE_TOP_Y}" width="${laneWidth}" height="${num(laneHeight)}" fill="${i % 2 === 0 ? LANE_FILL_EVEN : LANE_FILL_ODD}" stroke="${LANE_STROKE}" stroke-width="${LANE_STROKE_WIDTH}"/>` +
+          `<rect x="${x}" y="${LANE_TOP_Y}" width="${laneWidth}" height="${LANE_HEADER_HEIGHT}" fill="${LANE_HEADER_FILL}" stroke="${LANE_STROKE}" stroke-width="${LANE_STROKE_WIDTH}"/>` +
+          `<text x="${num(x + laneWidth / 2)}" y="${num(LANE_TOP_Y + LANE_HEADER_HEIGHT / 2)}" text-anchor="middle" dominant-baseline="middle" fill="${INK}" font-size="${num(titleFont)}" font-weight="700" font-family="${FONT_FAMILY}">${esc(lane)}</text>`
         );
       })
       .join("");
   }
 
-  const vx = Math.floor(minX - PADDING);
-  const vy = Math.floor(minY - PADDING);
-  const vw = Math.max(800, Math.ceil(maxX - minX + PADDING * 2));
-  const vh = Math.max(240, Math.ceil(maxY - minY + PADDING * 2));
+  const vx = Math.floor(minX - SVG_PADDING);
+  const vy = Math.floor(minY - SVG_PADDING);
+  const vw = Math.max(SVG_MIN_WIDTH, Math.ceil(maxX - minX + SVG_PADDING * 2));
+  const vh = Math.max(SVG_MIN_HEIGHT, Math.ceil(maxY - minY + SVG_PADDING * 2));
 
-  const edgeSvg = edges
-    .map((e) => {
-      const from = nodeById.get(e.fromId);
-      const to = nodeById.get(e.toId);
-      return from && to ? renderEdge(e, from, to) : "";
+  const lineSvg = routed
+    .map((item) => {
+      if (!item) return "";
+      const dashed = Boolean(item.edge.dashed);
+      return `<path d="${item.route.path}" fill="none" stroke="${dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}" stroke-width="${EDGE_STROKE_WIDTH}" stroke-dasharray="${dashed ? EDGE_DASH : "none"}" marker-end="url(#${dashed ? "arrowhead-dashed" : "arrowhead"})"/>`;
     })
     .join("");
+  // Label digambar setelah semua garis & node agar tidak tertimpa garis lain.
+  const labelSvg = routed.map((item) => (item?.route.label ? renderLabel(item.route.label) : "")).join("");
   const fontCap = diagramFontCap(nodes);
   const nodeSvg = nodes.map((n) => renderNode(n, fontCap)).join("");
+  const marker = (id: string, fill: string) =>
+    `<marker id="${id}" markerWidth="${ARROW.width}" markerHeight="${ARROW.height}" refX="${ARROW.refX}" refY="${ARROW.refY}" orient="auto"><polygon points="${ARROW.points}" fill="${fill}"/></marker>`;
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vx} ${vy} ${vw} ${vh}" font-family="${FONT}">` +
-    `<defs>` +
-    `<marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="${PRIMARY_STROKE}"/></marker>` +
-    `<marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="${DASHED_STROKE}"/></marker>` +
-    `</defs>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vx} ${vy} ${vw} ${vh}" font-family="${FONT_FAMILY}">` +
+    `<defs>${marker("arrowhead", EDGE_STROKE)}${marker("arrowhead-dashed", EDGE_DASHED_STROKE)}</defs>` +
     `<rect x="${vx}" y="${vy}" width="${vw}" height="${vh}" fill="white"/>` +
-    laneSvg + edgeSvg + nodeSvg +
+    laneSvg + lineSvg + nodeSvg + labelSvg +
     `</svg>`
   );
 }

@@ -721,7 +721,7 @@ export interface ReportDiagramArtifact {
   status: "approved" | "planned" | "failed";
   caption: string;
   /** Data siap render DiagramCanvas / diagramToSvg. */
-  diagramData?: { nodes: unknown[]; edges: unknown[]; meta: { title: string; lanes: string[]; diagramType: string } };
+  diagramData?: { nodes: unknown[]; edges: unknown[]; meta: { title: string; lanes: string[]; laneWidth?: number; diagramType: string } };
   /** SVG string hasil render server (dipakai dashboard untuk preview + rasterisasi PNG saat ekspor). */
   svg?: string;
   flowSummary?: string;
@@ -842,7 +842,7 @@ async function runDiagramStep(
   if (!result.ok || !result.data) { await persistFailure(result.error || "gagal"); return; }
 
   const data = result.data;
-  const svg = diagramToSvg({ nodes: data.nodes, edges: data.edges, lanes: data.lanes, title: data.title });
+  const svg = diagramToSvg({ nodes: data.nodes, edges: data.edges, lanes: data.lanes, laneWidth: data.laneWidth, title: data.title });
   const flowSummary = summarizeDiagram({ nodes: data.nodes, edges: data.edges, lanes: data.lanes });
   const artifact: ReportDiagramArtifact = {
     id: diagramId,

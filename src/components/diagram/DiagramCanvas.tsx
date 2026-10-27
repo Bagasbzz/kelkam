@@ -1,8 +1,24 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
 import { DiagramNode, DiagramEdge } from '@/lib/types/diagram';
-import { diagramFontCap } from '@/lib/uml/text-fit';
+import { diagramFontCap, laneTitleFont } from '@/lib/uml/text-fit';
+import {
+  ARROW,
+  EDGE_DASHED_STROKE,
+  EDGE_STROKE,
+  FONT_FAMILY,
+  INK,
+  LANE_FILL_EVEN,
+  LANE_FILL_ODD,
+  LANE_HEADER_FILL,
+  LANE_HEADER_HEIGHT,
+  LANE_START_X,
+  LANE_STROKE,
+  LANE_STROKE_WIDTH,
+  LANE_TOP_Y,
+  resolveLaneWidth,
+} from '@/lib/uml/theme';
 import Node from './Node';
-import Edge from './Edge';
+import Edge, { EdgeLabel } from './Edge';
 
 interface DiagramCanvasProps {
   nodes: DiagramNode[];
@@ -21,6 +37,8 @@ interface DiagramCanvasProps {
   canvasWidth?: number;
   canvasHeight?: number;
   lanes?: string[];
+  /** Lebar lane tersimpan (meta.laneWidth). Kosong → dideteksi dari posisi node (diagram lama = 420). */
+  laneWidth?: number;
 }
 
 
@@ -43,6 +61,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   canvasWidth = 2500,
   canvasHeight = 2000,
   lanes = [],
+  laneWidth: savedLaneWidth,
 }) => {
 
   const scale = zoomLevel / 100;
@@ -74,10 +93,9 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
 
   const [rubberBand, setRubberBand] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const visibleLanes = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
-  const laneWidth = 420;
-  const laneStartX = 20;
-  const laneHeaderHeight = 52;
+  const laneWidth = resolveLaneWidth(nodes, visibleLanes, savedLaneWidth);
   const laneHeight = Math.max(canvasHeight - 80, 900, ...nodes.map((node) => node.y + node.height + 80));
+  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   // Plafon font seragam: dihitung dari teks & ukuran saja (bukan posisi) → tidak
   // dihitung ulang saat drag.
   const fontKey = nodes.map((n) => `${n.type}|${n.width}|${n.height}|${n.text}`).join('\n');
@@ -278,11 +296,14 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
             <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#f1f5f9" strokeWidth="1" />
           </pattern>
-          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#334155" />
+          <marker id="arrowhead" markerWidth={ARROW.width} markerHeight={ARROW.height} refX={ARROW.refX} refY={ARROW.refY} orient="auto">
+            <polygon points={ARROW.points} fill={EDGE_STROKE} />
           </marker>
-          <marker id="arrowhead-connect" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-            <polygon points="0 0, 10 3.5, 0 7" fill="#f59e0b" />
+          <marker id="arrowhead-dashed" markerWidth={ARROW.width} markerHeight={ARROW.height} refX={ARROW.refX} refY={ARROW.refY} orient="auto">
+            <polygon points={ARROW.points} fill={EDGE_DASHED_STROKE} />
+          </marker>
+          <marker id="arrowhead-connect" markerWidth={ARROW.width} markerHeight={ARROW.height} refX={ARROW.refX} refY={ARROW.refY} orient="auto">
+            <polygon points={ARROW.points} fill="#f59e0b" />
           </marker>
         </defs>
 
@@ -292,35 +313,36 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           {visibleLanes.length > 0 && (
             <g className="swimlanes" style={{ pointerEvents: 'none' }}>
               {visibleLanes.map((lane, index) => {
-                const x = laneStartX + index * laneWidth;
+                const x = LANE_START_X + index * laneWidth;
                 return (
                   <g key={lane}>
                     <rect
                       x={x}
-                      y={24}
+                      y={LANE_TOP_Y}
                       width={laneWidth}
                       height={laneHeight}
-                      fill={index % 2 === 0 ? '#ffffff' : '#f8fafc'}
-                      stroke="#94a3b8"
-                      strokeWidth="1.5"
+                      fill={index % 2 === 0 ? LANE_FILL_EVEN : LANE_FILL_ODD}
+                      stroke={LANE_STROKE}
+                      strokeWidth={LANE_STROKE_WIDTH}
                     />
                     <rect
                       x={x}
-                      y={24}
+                      y={LANE_TOP_Y}
                       width={laneWidth}
-                      height={laneHeaderHeight}
-                      fill="#f8fafc"
-                      stroke="#94a3b8"
-                      strokeWidth="1.5"
+                      height={LANE_HEADER_HEIGHT}
+                      fill={LANE_HEADER_FILL}
+                      stroke={LANE_STROKE}
+                      strokeWidth={LANE_STROKE_WIDTH}
                     />
                     <text
                       x={x + laneWidth / 2}
-                      y={56}
+                      y={LANE_TOP_Y + LANE_HEADER_HEIGHT / 2}
                       textAnchor="middle"
                       dominantBaseline="middle"
-                      fill="#1e293b"
-                      fontSize="18"
+                      fill={INK}
+                      fontSize={laneTitleFont(lane, laneWidth)}
                       fontWeight="700"
+                      fontFamily={FONT_FAMILY}
                     >
                       {lane}
                     </text>
@@ -331,8 +353,8 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           )}
 
           {edges.map((edge) => {
-            const fromNode = nodes.find((n) => n.id === edge.fromId);
-            const toNode = nodes.find((n) => n.id === edge.toId);
+            const fromNode = nodeById.get(edge.fromId);
+            const toNode = nodeById.get(edge.toId);
             if (fromNode && toNode) {
               return <Edge key={edge.id} edge={edge} fromNode={fromNode} toNode={toNode} />;
             }
@@ -364,6 +386,15 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
               fontCap={fontCap}
             />
           ))}
+
+          {/* Label edge di atas node (sama dengan render-svg) agar tidak tertutup bentuk. */}
+          {edges.map((edge) => {
+            const fromNode = nodeById.get(edge.fromId);
+            const toNode = nodeById.get(edge.toId);
+            return fromNode && toNode && edge.label
+              ? <EdgeLabel key={`label-${edge.id}`} edge={edge} fromNode={fromNode} toNode={toNode} />
+              : null;
+          })}
         </g>
       </svg>
     </div>

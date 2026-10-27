@@ -1,4 +1,27 @@
 import type { DiagramEdge, DiagramNode } from "../types/diagram";
+import {
+  ACTOR_GAP,
+  ACTOR_LEFT_X,
+  ACTOR_RIGHT_X,
+  ACTOR_TOP_Y,
+  BRANCH_COLUMN,
+  COLLISION_PUSH,
+  FLOW_CENTER_X,
+  FLOW_TOP_Y,
+  LANE_PAD,
+  LANE_START_X,
+  LANE_WIDTH,
+  NODE_MIN,
+  ROW_GAP,
+  SEQ_START_X,
+  SEQ_TOP_Y,
+  SIBLING_GAP,
+  STACK_GAP,
+  USECASE_CENTER_X,
+  USECASE_GAP,
+  USECASE_TOP_Y,
+  sequenceGap,
+} from "./theme";
 
 export type SupportedDiagramType = "flowchart" | "usecase" | "activity" | "sequence";
 
@@ -402,13 +425,7 @@ export function validateDiagramData(
   return { ok: errors.length === 0, errors, warnings };
 }
 
-// Geometri lane harus sama dengan DiagramCanvas (laneStartX=20, laneWidth=420).
-const LANE_START_X = 20;
-const LANE_WIDTH = 420;
-const LANE_PAD = 18;
-const FLOW_TOP_Y = 110;
-const ROW_GAP = 70;
-const SIBLING_GAP = 36;
+// Geometri lane & jarak dari theme.ts (sama dengan DiagramCanvas & render-svg).
 
 type FlowNode = DiagramNode & { pinned: boolean; offsetX: number; offsetY: number };
 
@@ -477,20 +494,10 @@ function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: strin
     if (!changed) break;
   }
 
-  // 3) Tinggi tiap baris = node tertinggi di layer tersebut.
+  // 3) Kelompokkan per (lane/kolom, layer). Grup yang tidak muat berjajar di lane ditumpuk
+  //    vertikal → tinggi tumpukan ikut menentukan tinggi baris (baris berikutnya tidak naik
+  //    menimpa tumpukan).
   const maxLayer = Math.max(...Array.from(layer.values()));
-  const rowHeight = new Array<number>(maxLayer + 1).fill(60);
-  nodes.forEach((node) => {
-    const l = layer.get(node.id) || 0;
-    rowHeight[l] = Math.max(rowHeight[l], node.height);
-  });
-  const rowY: number[] = [];
-  let cursorY = FLOW_TOP_Y;
-  for (let l = 0; l <= maxLayer; l += 1) {
-    rowY[l] = cursorY;
-    cursorY += rowHeight[l] + ROW_GAP;
-  }
-
   const hasLanes = laneNames.length > 0;
   const laneIndex = (lane?: string) => {
     const index = laneNames.indexOf(lane || laneNames[0]);
@@ -498,10 +505,8 @@ function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: strin
   };
   const groupCenterX = (node: FlowNode) => {
     if (hasLanes) return LANE_START_X + laneIndex(node.lane) * LANE_WIDTH + LANE_WIDTH / 2;
-    return 520 + (bias.get(node.id) || 0) * 280;
+    return FLOW_CENTER_X + (bias.get(node.id) || 0) * BRANCH_COLUMN;
   };
-
-  // 4) Kelompokkan per (lane/kolom, layer) lalu jajarkan horizontal; jika tidak muat, tumpuk vertikal.
   const groups = new Map<string, FlowNode[]>();
   for (const node of nodeMap.values()) {
     const key = `${hasLanes ? laneIndex(node.lane) : bias.get(node.id) || 0}:${layer.get(node.id) || 0}`;
@@ -510,14 +515,34 @@ function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: strin
     groups.set(key, list);
   }
   const laneSlotWidth = LANE_WIDTH - LANE_PAD * 2;
+  const stacked = new Set<FlowNode[]>();
+  const rowHeight = new Array<number>(maxLayer + 1).fill(NODE_MIN.rect.height);
   for (const list of groups.values()) {
+    // Cabang "Tidak" (biasanya kembali/berhenti) di atas, lanjutan "Ya" di bawahnya.
     list.sort((a, b) => (bias.get(a.id) || 0) - (bias.get(b.id) || 0));
+    const l = layer.get(list[0].id) || 0;
+    const totalWidth = list.reduce((sum, node) => sum + node.width, 0) + SIBLING_GAP * (list.length - 1);
+    const fits = !hasLanes || totalWidth <= laneSlotWidth;
+    if (!fits) stacked.add(list);
+    const groupHeight = fits
+      ? Math.max(...list.map((node) => node.height))
+      : list.reduce((sum, node) => sum + node.height, 0) + STACK_GAP * (list.length - 1);
+    rowHeight[l] = Math.max(rowHeight[l], groupHeight);
+  }
+  const rowY: number[] = [];
+  let cursorY = FLOW_TOP_Y;
+  for (let l = 0; l <= maxLayer; l += 1) {
+    rowY[l] = cursorY;
+    cursorY += rowHeight[l] + ROW_GAP;
+  }
+
+  // 4) Tempatkan: berjajar horizontal (dipusatkan di baris) atau tumpuk vertikal.
+  for (const list of groups.values()) {
     const first = list[0];
     const l = layer.get(first.id) || 0;
     const centerX = groupCenterX(first);
-    const totalWidth = list.reduce((sum, node) => sum + node.width, 0) + SIBLING_GAP * (list.length - 1);
-    const fitsHorizontally = !hasLanes || totalWidth <= laneSlotWidth;
-    if (fitsHorizontally) {
+    if (!stacked.has(list)) {
+      const totalWidth = list.reduce((sum, node) => sum + node.width, 0) + SIBLING_GAP * (list.length - 1);
       let x = centerX - totalWidth / 2;
       for (const node of list) {
         node.x = x;
@@ -529,7 +554,7 @@ function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: strin
       for (const node of list) {
         node.x = centerX - node.width / 2;
         node.y = y;
-        y += node.height + 24;
+        y += node.height + STACK_GAP;
       }
     }
     if (hasLanes) {
@@ -550,7 +575,7 @@ function layoutFlow(nodes: DiagramNode[], edges: DiagramEdge[], laneNames: strin
       const b = ordered[i];
       const overlapX = a.x < b.x + b.width + 16 && b.x < a.x + a.width + 16;
       const overlapY = a.y < b.y + b.height + 16 && b.y < a.y + a.height + 16;
-      if (overlapX && overlapY) b.y = a.y + a.height + 40;
+      if (overlapX && overlapY) b.y = a.y + a.height + COLLISION_PUSH;
     }
   }
 
@@ -573,11 +598,11 @@ function layoutUseCase(nodes: DiagramNode[], edges: DiagramEdge[]) {
   const actors = mapped.filter((node) => node.type === "actor");
   const nodeById = new Map(mapped.map((node) => [node.id, node]));
 
-  let nextUsecaseY = 130;
+  let nextUsecaseY = USECASE_TOP_Y;
   usecases.forEach((node) => {
-    node.x = 500 - node.width / 2;
+    node.x = USECASE_CENTER_X - node.width / 2;
     node.y = nextUsecaseY;
-    nextUsecaseY += node.height + 44;
+    nextUsecaseY += node.height + USECASE_GAP;
   });
 
   const desiredActorPositions = actors.map((node, index) => {
@@ -586,19 +611,20 @@ function layoutUseCase(nodes: DiagramNode[], edges: DiagramEdge[]) {
     const connectedUseCases = usecases.filter((item) => connected.some((edge) => edge.fromId === item.id || edge.toId === item.id));
     const avgY = connectedUseCases.length
       ? connectedUseCases.reduce((sum, item) => sum + ((nodeById.get(item.id)?.y || item.y) + item.height / 2), 0) / connectedUseCases.length
-      : 180 + index * 120;
-    return { node, side, desiredY: Math.max(100, avgY - node.height / 2) };
+      : ACTOR_TOP_Y + 80 + index * 120;
+    return { node, side, desiredY: Math.max(ACTOR_TOP_Y, avgY - node.height / 2) };
   });
 
   (["left", "right"] as const).forEach((side) => {
-    let cursorY = 100;
+    let cursorY = ACTOR_TOP_Y;
     desiredActorPositions
       .filter((item) => item.side === side)
       .sort((left, right) => left.desiredY - right.desiredY)
       .forEach(({ node, desiredY }) => {
-        node.x = side === "right" ? 870 : 90;
+        node.x = side === "right" ? ACTOR_RIGHT_X : ACTOR_LEFT_X;
         node.y = Math.max(desiredY, cursorY);
-        cursorY = node.y + node.height + 32;
+        // Label aktor ada di bawah figur → beri ruang sebelum aktor berikutnya.
+        cursorY = node.y + node.height + ACTOR_GAP + 24;
       });
   });
 
@@ -607,14 +633,17 @@ function layoutUseCase(nodes: DiagramNode[], edges: DiagramEdge[]) {
 
 function layoutSequence(nodes: DiagramNode[]) {
   const participants = nodes.filter((node) => node.type === "lifeline");
-  const gap = Math.max(190, Math.floor(980 / Math.max(participants.length, 1)));
+  // Kepala lifeline lama bisa selebar 210 px → jangan sampai saling tumpuk saat dirapikan.
+  const widest = Math.max(0, ...participants.map((node) => node.width));
+  const gap = Math.max(sequenceGap(participants.length), widest + 12);
   return nodes.map((node) => {
     if (node.type !== "lifeline") return { ...node, pinned: true, offsetX: 0, offsetY: 0 };
     const index = participants.findIndex((item) => item.id === node.id);
     return {
       ...node,
-      x: 110 + index * gap,
-      y: 70,
+      // x = pusat kolom − setengah lebar kepala (lebar per participant bisa berbeda).
+      x: Math.round(SEQ_START_X + gap / 2 + index * gap - node.width / 2),
+      y: SEQ_TOP_Y,
       pinned: true,
       offsetX: 0,
       offsetY: 0,

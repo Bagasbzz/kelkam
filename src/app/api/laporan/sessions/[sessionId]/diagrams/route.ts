@@ -1,6 +1,6 @@
 /**
  * POST /api/laporan/sessions/[sessionId]/diagrams
- *   { diagramId, diagramType, title?, nodes, edges, lanes? }
+ *   { diagramId, diagramType, title?, nodes, edges, lanes?, laneWidth? }
  * → "Setujui ke Laporan" dari UML Builder: simpan diagram hasil edit ke rencana
  *   sesi, render SVG, dan tempatkan placeholder di bab tujuan draft.
  */
@@ -44,6 +44,7 @@ const BodySchema = z.object({
   nodes: z.array(NodeSchema).min(1).max(120),
   edges: z.array(EdgeSchema).max(300),
   lanes: z.array(z.string().max(80)).max(12).default([]),
+  laneWidth: z.number().finite().min(80).max(2000).optional(),
 });
 
 export async function POST(req: Request, context: { params: Promise<{ sessionId: string }> }) {
@@ -70,6 +71,7 @@ export async function POST(req: Request, context: { params: Promise<{ sessionId:
       nodes,
       edges,
       lanes: parsed.data.lanes,
+      laneWidth: parsed.data.laneWidth,
     });
     return NextResponse.json({ success: true, ...result }, NO_STORE);
   } catch (error) {

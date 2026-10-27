@@ -1,6 +1,15 @@
 import React, { useMemo } from 'react';
 import { DiagramNode } from '@/lib/types/diagram';
 import { layoutNodeText } from '@/lib/uml/text-fit';
+import {
+  FONT_FAMILY,
+  INK,
+  LIFELINE_DASH,
+  LIFELINE_HEADER_HEIGHT,
+  LIFELINE_STROKE,
+  LIFELINE_STROKE_WIDTH,
+  NODE_STROKE_WIDTH,
+} from '@/lib/uml/theme';
 
 interface NodeProps {
   node: DiagramNode;
@@ -25,9 +34,9 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
     ? '#f59e0b'
     : isSelected
     ? '#4f46e5'
-    : '#1e293b';
+    : INK;
 
-  const borderWidth = isSelected || isConnectSource ? 2.5 : 1.5;
+  const borderWidth = isSelected || isConnectSource ? 2.5 : NODE_STROKE_WIDTH;
 
   const renderShape = () => {
     switch (type) {
@@ -47,6 +56,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
           />
         );
       case 'process':
+      case 'system':
         return (
           <rect
             x={curX}
@@ -80,7 +90,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             y={curY}
             width={width}
             height={height}
-            fill="#1e293b"
+            fill={INK}
             stroke={borderColor}
             strokeWidth={borderWidth}
           />
@@ -93,7 +103,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
               x={curX}
               y={curY}
               width={width}
-              height={46}
+              height={LIFELINE_HEADER_HEIGHT}
               rx={4}
               fill="white"
               stroke={borderColor}
@@ -101,12 +111,12 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             />
             <line
               x1={centerX}
-              y1={curY + 46}
+              y1={curY + LIFELINE_HEADER_HEIGHT}
               x2={centerX}
               y2={curY + height}
-              stroke="#475569"
-              strokeWidth={2}
-              strokeDasharray="8,6"
+              stroke={LIFELINE_STROKE}
+              strokeWidth={LIFELINE_STROKE_WIDTH}
+              strokeDasharray={LIFELINE_DASH}
             />
             <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />
           </g>
@@ -197,8 +207,8 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
           pointerEvents: 'none',
           fontSize: `${textLayout.fontSize}px`,
           fontWeight: textLayout.fontWeight,
-          fill: '#1e293b',
-          fontFamily: 'Inter, sans-serif',
+          fill: INK,
+          fontFamily: FONT_FAMILY,
         }}
       >
         {textLayout.lines.map((line, index) => (
