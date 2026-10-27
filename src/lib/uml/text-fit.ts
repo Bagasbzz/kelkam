@@ -223,6 +223,12 @@ export function fitBoxFor(type: string, width: number, height: number): FitBox |
       return { shape: "rect", width, height, padX: 12, padY: 5 };
     case "lifeline":
       return { shape: "rect", width, height: LIFELINE_HEADER_HEIGHT, padX: 8, padY: 4, bold: true };
+    case "activation":
+      return { shape: "rect", width, height, padX: 3, padY: 3 };
+    case "fragment":
+    case "note":
+    case "ref":
+      return { shape: "rect", width, height, padX: 10, padY: 7 };
     case "actor":
     case "fork":
     case "join":

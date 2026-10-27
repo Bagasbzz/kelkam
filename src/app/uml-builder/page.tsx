@@ -4,6 +4,8 @@ import { getErrorMessage } from "@/lib/errors";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
+import SequenceControls from '@/components/diagram/SequenceControls';
+import { isSequenceNode } from '@/lib/uml/sequence';
 import styles from './uml.module.css';
 import { Zap, CheckCircle2, Square, HelpCircle, BrainCircuit, X, Upload, Loader2 } from 'lucide-react';
 import { autoLayoutDiagram, validateDiagramData, inferDiagramTypeFromPrompt } from '@/lib/uml/diagram-guard';
@@ -79,6 +81,10 @@ const supportedNodeTypes = new Set<NodeType>([
   'fork',
   'join',
   'lifeline',
+  'activation',
+  'fragment',
+  'note',
+  'ref',
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
@@ -172,6 +178,7 @@ function normalizeApiEdges(value: unknown): DiagramEdge[] {
       dashed: edge.dashed === true,
       direction,
       y: typeof edge.y === 'number' && Number.isFinite(edge.y) ? edge.y : undefined,
+      kind: edge.kind === 'sync' || edge.kind === 'async' || edge.kind === 'return' || edge.kind === 'create' || edge.kind === 'destroy' ? edge.kind : undefined,
     }];
   });
 }
@@ -197,7 +204,7 @@ function normalizeApiNodes(
   return records.map((node, index) => {
     const rawType = typeof node.type === 'string' ? node.type as NodeType : 'process';
     const type = supportedNodeTypes.has(rawType) ? rawType : 'process';
-    const text = typeof node.text === 'string' ? node.text.trim().slice(0, 120) : '';
+    const text = typeof node.text === 'string' ? node.text.trim().slice(0, 400) : '';
     const isTerminator = type === 'start' || type === 'end';
     const terminatorLabel = text || (type === 'start' ? 'Mulai' : 'Selesai');
     const lines = isTerminator ? wrapTerminatorText(terminatorLabel) : wrapText(text, charsPerLine);
@@ -207,11 +214,15 @@ function normalizeApiNodes(
       width = lifelineWidth(text, lifelineMax);
       height = typeof node.height === 'number' && Number.isFinite(node.height) && node.height > 0 ? node.height : 420;
     }
+    if (isSequenceNode({ type }) && type !== 'lifeline') {
+      width = typeof node.width === 'number' && Number.isFinite(node.width) && node.width > 0 ? node.width : width;
+      height = typeof node.height === 'number' && Number.isFinite(node.height) && node.height > 0 ? node.height : height;
+    }
 
     return {
       id: typeof node.id === 'string' && node.id ? node.id : `node-api-${index + 1}`,
       type,
-      text: text || `Elemen ${index + 1}`,
+      text: type === 'activation' ? '' : text || `Elemen ${index + 1}`,
       lines: lines.length ? lines : [`Elemen ${index + 1}`],
       width,
       height,
@@ -222,6 +233,13 @@ function normalizeApiNodes(
       yes: typeof node.yes === 'string' ? node.yes : undefined,
       no: typeof node.no === 'string' ? node.no : undefined,
       pinned: node.pinned === true,
+      participantKind: node.participantKind === 'actor' || node.participantKind === 'boundary' || node.participantKind === 'control' || node.participantKind === 'entity' || node.participantKind === 'database' ? node.participantKind : 'participant',
+      created: node.created === true,
+      destroyed: node.destroyed === true,
+      attachTo: Array.isArray(node.attachTo) ? node.attachTo.filter((value): value is string => typeof value === 'string') : undefined,
+      depth: typeof node.depth === 'number' ? node.depth : undefined,
+      fragmentKind: node.fragmentKind === 'alt' || node.fragmentKind === 'opt' || node.fragmentKind === 'loop' || node.fragmentKind === 'par' || node.fragmentKind === 'break' || node.fragmentKind === 'critical' ? node.fragmentKind : undefined,
+      operands: Array.isArray(node.operands) ? node.operands.filter(isRecord).map((operand) => ({ guard: typeof operand.guard === 'string' ? operand.guard : '', y: typeof operand.y === 'number' ? operand.y : 0 })) : undefined,
     };
   });
 }
@@ -559,12 +577,16 @@ export default function UMLBuilder() {
   }, [aiPrompt, diagramType, saveToHistory, showToast, umlReferenceImage, wrapText]);
 
   const handleNudge = useCallback((id: string, dx: number, dy: number) => {
+    if (diagramType === 'sequence' && nodes.find((n) => n.id === id)?.type === 'lifeline') {
+      setNodes((prev) => prev.map((n) => n.id === id || n.attachTo?.includes(id) ? { ...n, x: n.x + dx } : n));
+      return;
+    }
     setNodes(prev => prev.map(n => n.id === id ? {
       ...n,
       offsetX: (n.offsetX || 0) + dx,
       offsetY: (n.offsetY || 0) + dy
     } : n));
-  }, []);
+  }, [diagramType, nodes]);
 
   // --- Layout Engine ---
   useEffect(() => {
@@ -661,10 +683,20 @@ export default function UMLBuilder() {
   }, [saveToHistory]);
 
   const handleNodeDrag = useCallback((id: string, newX: number, newY: number) => {
-    setNodes(prev => prev.map(n =>
-      n.id === id ? { ...n, x: Math.max(0, newX), y: Math.max(0, newY), pinned: true } : n
-    ));
-  }, []);
+    setNodes(prev => {
+      const source = prev.find((n) => n.id === id);
+      const dx = Math.max(0, newX) - (source?.x ?? 0);
+      return prev.map(n => {
+        if (diagramType === 'sequence' && source?.type === 'lifeline') {
+          if (n.id === id || n.attachTo?.includes(id)) return { ...n, x: n.x + dx, pinned: true };
+          return n;
+        }
+        if (n.id !== id) return n;
+        const y = Math.max(0, newY);
+        return { ...n, x: Math.max(0, newX), y, operands: n.operands?.map((o) => ({ ...o, y: o.y + y - n.y })), pinned: true };
+      });
+    });
+  }, [diagramType]);
 
   const handleNodeResizeStart = useCallback(() => {
     saveToHistory();
@@ -694,6 +726,7 @@ export default function UMLBuilder() {
 
   const handleNodeClick = useCallback((id: string) => {
     if (connectMode) {
+      if (diagramType === 'sequence') { showToast('Gunakan panel Simbol Sequence untuk menambahkan pesan berurutan.'); setConnectMode(false); return; }
       if (!connectFromId) {
         setConnectFromId(id);
         showToast('Sekarang pilih elemen tujuan.');
@@ -715,7 +748,7 @@ export default function UMLBuilder() {
     } else {
       setSelectedNodeId(prev => prev === id ? null : id);
     }
-  }, [connectMode, connectFromId, isDashed, showToast, saveToHistory]);
+  }, [connectMode, connectFromId, diagramType, isDashed, showToast, saveToHistory]);
 
   const resize = useCallback((e: MouseEvent) => {
     if (isResizing) {
@@ -1054,6 +1087,7 @@ export default function UMLBuilder() {
         const width = lifelineWidth(newText, Math.max(n.width, sequenceGap(prev.filter((item) => item.type === 'lifeline').length) - 12));
         return { ...n, text: newText, lines, x: n.x + (n.width - width) / 2, width };
       }
+      if (isSequenceNode(n)) return { ...n, text: newText, lines };
       return { ...n, text: newText, lines, ...nodeSizeFor(n.type, newText) };
     }));
   }, [wrapText]);
@@ -1063,7 +1097,7 @@ export default function UMLBuilder() {
     const incomingEdges = edges.filter(e => e.toId === id);
     const outgoingEdges = edges.filter(e => e.fromId === id);
     const newEdges: DiagramEdge[] = [];
-    incomingEdges.forEach(incoming => {
+    if (diagramType !== 'sequence') incomingEdges.forEach(incoming => {
       outgoingEdges.forEach(outgoing => {
         const alreadyExists = edges.some(e => e.fromId === incoming.fromId && e.toId === outgoing.toId);
         if (!alreadyExists) {
@@ -1076,10 +1110,10 @@ export default function UMLBuilder() {
         }
       });
     });
-    setNodes(prev => prev.filter(n => n.id !== id));
+    setNodes(prev => prev.filter(n => n.id !== id && !n.attachTo?.includes(id)));
     setEdges(prev => [...prev.filter(e => e.fromId !== id && e.toId !== id), ...newEdges]);
     setSelectedNodeId(null);
-  }, [saveToHistory, edges]);
+  }, [saveToHistory, edges, diagramType]);
 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
@@ -1260,7 +1294,7 @@ export default function UMLBuilder() {
         if (!actorIds.length) showToast('Tambahkan aktor dulu, lalu hubungkan ke use case ini.');
         setSelectedActorIds([]);
       }
-    } else if (parentNode) {
+    } else if (parentNode && diagramType !== 'sequence') {
       let edgeDirection: 'right' | 'left' | 'bottom' | 'straight' | undefined;
       if (parentNode.type === 'decision') {
         if (branchType === 'yes') edgeDirection = 'right';
@@ -1591,7 +1625,8 @@ export default function UMLBuilder() {
               </div>
             )}
 
-            <div className={styles.inputGroup} style={{ flex: 2, minWidth: '300px', maxWidth: '600px' }}>
+            {diagramType === 'sequence' && <SequenceControls nodes={nodes} edges={edges} onError={showToast} onChange={(nextNodes, nextEdges) => { saveToHistory(); setNodes(nextNodes); setEdges(nextEdges); }} />}
+            <div className={styles.inputGroup} style={{ flex: 2, minWidth: '300px', maxWidth: '600px', display: diagramType === 'sequence' ? 'none' : undefined }}>
               <label htmlFor="new-node-label">Label Elemen</label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
 

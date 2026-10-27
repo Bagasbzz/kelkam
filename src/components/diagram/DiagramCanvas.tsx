@@ -3,6 +3,7 @@ import { DiagramNode, DiagramEdge } from '@/lib/types/diagram';
 import { diagramFontCap, laneTitleFont } from '@/lib/uml/text-fit';
 import {
   ARROW,
+  ARROW_OPEN,
   EDGE_DASHED_STROKE,
   EDGE_STROKE,
   FONT_FAMILY,
@@ -19,6 +20,7 @@ import {
 } from '@/lib/uml/theme';
 import Node from './Node';
 import Edge, { EdgeLabel } from './Edge';
+import { sequenceNodeOrder } from '@/lib/uml/sequence-shapes';
 
 interface DiagramCanvasProps {
   nodes: DiagramNode[];
@@ -305,6 +307,9 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           <marker id="arrowhead-connect" markerWidth={ARROW.width} markerHeight={ARROW.height} refX={ARROW.refX} refY={ARROW.refY} orient="auto">
             <polygon points={ARROW.points} fill="#f59e0b" />
           </marker>
+          <marker id="arrowhead-open" markerWidth={ARROW_OPEN.width} markerHeight={ARROW_OPEN.height} refX={ARROW_OPEN.refX} refY={ARROW_OPEN.refY} orient="auto">
+            <path d={ARROW_OPEN.path} fill="none" stroke={EDGE_STROKE} strokeWidth="1.5" />
+          </marker>
         </defs>
 
         <rect width="5000" height="5000" fill="url(#grid)" />
@@ -352,11 +357,14 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             </g>
           )}
 
+          {sequenceNodeOrder(nodes).filter((n) => n.type === 'fragment' || n.type === 'lifeline' || n.type === 'activation').map((node) => (
+            <Node key={node.id} node={node} isSelected={node.id === selectedNodeId} isConnectSource={node.id === connectFromId} onClick={() => onNodeClick?.(node.id)} onDragStart={handleNodeDragStart} fontCap={fontCap} />
+          ))}
           {edges.map((edge) => {
             const fromNode = nodeById.get(edge.fromId);
             const toNode = nodeById.get(edge.toId);
             if (fromNode && toNode) {
-              return <Edge key={edge.id} edge={edge} fromNode={fromNode} toNode={toNode} />;
+              return <Edge key={edge.id} edge={edge} fromNode={fromNode} toNode={toNode} nodes={nodes} />;
             }
             return null;
           })}
@@ -375,7 +383,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             />
           )}
 
-          {nodes.map((node) => (
+          {nodes.filter((n) => n.type !== 'fragment' && n.type !== 'lifeline' && n.type !== 'activation').map((node) => (
             <Node
               key={node.id}
               node={node}
@@ -392,7 +400,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             const fromNode = nodeById.get(edge.fromId);
             const toNode = nodeById.get(edge.toId);
             return fromNode && toNode && edge.label
-              ? <EdgeLabel key={`label-${edge.id}`} edge={edge} fromNode={fromNode} toNode={toNode} />
+              ? <EdgeLabel key={`label-${edge.id}`} edge={edge} fromNode={fromNode} toNode={toNode} nodes={nodes} />
               : null;
           })}
         </g>

@@ -16,16 +16,13 @@ import {
   type DiagramValidationResult,
 } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
-import { lifelineWidth, nodeSizeFor, wrapTerminatorText } from "@/lib/uml/node-size";
+import { nodeSizeFor, wrapTerminatorText } from "@/lib/uml/node-size";
+import { FRAGMENT_KINDS, MESSAGE_KINDS, PARTICIPANT_KINDS, sequenceToDiagram, type SequenceSpec } from "./sequence";
 import {
   LANE_NODE_MAX_WIDTH,
   LANE_START_X,
   LANE_WIDTH,
   NODE_MAX_WIDTH,
-  SEQ_GAP_MIN,
-  sequenceGap,
-  sequenceLifelineHeight,
-  sequenceMessageY,
 } from "@/lib/uml/theme";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 
@@ -47,7 +44,7 @@ interface CompactStep {
   no?: string;
 }
 
-export interface CompactSpec {
+export interface CompactSpec extends SequenceSpec {
   needsClarification?: boolean;
   clarification?: string;
   clarificationQuestions?: string[];
@@ -56,8 +53,6 @@ export interface CompactSpec {
   steps?: CompactStep[];
   actors?: { id: string; name: string; side?: "left" | "right" }[];
   usecases?: { id: string; text: string; actors: string[] }[];
-  participants?: { id: string; name: string }[];
-  messages?: { from: string; to: string; text: string; return?: boolean }[];
   qualityNotes?: string[];
 }
 
@@ -192,13 +187,13 @@ function buildGenericSpec(prompt: string, diagramType: DiagramType, reportContex
         { id: "db", name: "Database" },
       ],
       messages: [
-        { from: "user", to: "ui", text: "Membuka fitur" },
-        { from: "user", to: "ui", text: "Mengisi dan mengirim data" },
-        { from: "ui", to: "service", text: "Meneruskan permintaan" },
-        { from: "service", to: "db", text: "Validasi dan simpan/ambil data" },
-        { from: "db", to: "service", text: "Kirim hasil query", return: true },
-        { from: "service", to: "ui", text: "Kirim status proses", return: true },
-        { from: "ui", to: "user", text: "Tampilkan hasil", return: true },
+        { from: "user", to: "ui", text: "Membuka fitur", kind: "sync" },
+        { from: "user", to: "ui", text: "Mengisi dan mengirim data", kind: "sync" },
+        { from: "ui", to: "service", text: "Meneruskan permintaan", kind: "sync" },
+        { from: "service", to: "db", text: "Validasi dan simpan/ambil data", kind: "sync" },
+        { from: "db", to: "service", text: "Kirim hasil query", return: true, kind: "return" },
+        { from: "service", to: "ui", text: "Kirim status proses", return: true, kind: "return" },
+        { from: "ui", to: "user", text: "Tampilkan hasil", return: true, kind: "return" },
       ],
       qualityNotes: ["Spec dibuat dari template generik karena prompt tidak cocok dengan template khusus."],
     };
@@ -345,7 +340,11 @@ function buildStrictSystemPrompt(
       "- Flowchart/activity wajib punya tepat satu start dan minimal satu end. Decision wajib punya cabang yes dan no yang berbeda.",
       "- Activity pakai lane konsisten dan alur login/CRUD/transaksi harus terlihat natural: input -> validasi -> keputusan -> hasil.",
       "- Use case harus memakai aktor nyata dan use case berbentuk kata kerja.",
-      "- Sequence gunakan 2-6 participant dan 4-12 message berurutan; return hanya untuk respons.",
+      "- Sequence gunakan 2-6 participant dan 4-12 message berurutan; kind message boleh sync, async, return, create, destroy. Self-message diperbolehkan untuk sync/async.",
+      "- Participant punya kind opsional: participant/actor/boundary/control/entity/database. Pesan tanpa kind dianggap sync; return:true dari schema lama tetap diterima.",
+      'Schema sequence tambahan opsional: "activations":[{"participant":"system","from":1,"to":4,"depth":0}], "fragments":[{"kind":"alt","from":1,"to":4,"participants":["user","system"],"operands":[{"from":1,"guard":"valid"},{"from":3,"guard":"tidak valid"}]}], "notes":[{"kind":"note","text":"Validasi sesi","after":0,"participants":["system"]},{"kind":"ref","text":"Autentikasi","after":4,"participants":["user","system"]}].',
+      "- Semua from/to activation/fragment dan from operand adalah nomor pesan inklusif mulai 1; after note/ref 0 sebelum pesan pertama. Operand pertama dimulai di from fragment. Fragment harus terpisah atau bersarang, tidak saling memotong. Jangan hasilkan koordinat render.",
+      "- Create harus menjadi interaksi pertama participant tujuan; destroy harus interaksi terakhirnya. Activation participant baru mulai setelah pesan create. Gunakan simbol tambahan hanya bila diperlukan konteks, bukan memaksa semuanya.",
     );
   }
 
@@ -410,16 +409,22 @@ function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: stri
     const participants = (normalized.participants || []).slice(0, 6).map((participant, index) => ({
       id: cleanId(participant.id || participant.name, `p${index + 1}`),
       name: cleanText(participant.name, `Partisipan ${index + 1}`, 36),
+      kind: participant.kind,
     }));
-    const participantIds = new Set(participants.map((participant) => participant.id));
     const messages = (normalized.messages || []).slice(0, 12).map((message) => ({
       from: cleanId(message.from, participants[0]?.id || ""),
       to: cleanId(message.to, participants[Math.min(1, participants.length - 1)]?.id || ""),
       text: cleanText(message.text, "Kirim pesan", 52),
       return: Boolean(message.return),
-    })).filter((message) => participantIds.has(message.from) && participantIds.has(message.to) && message.from !== message.to);
+      kind: message.kind,
+    }));
 
-    return { ...normalized, participants, messages };
+    return {
+      ...normalized, participants, messages,
+      activations: spec.activations?.slice(0, 24).map((a) => ({ ...a, participant: cleanId(a.participant, "") })),
+      fragments: spec.fragments?.slice(0, 6).map((f) => ({ ...f, participants: f.participants?.map((id) => cleanId(id, "")), operands: f.operands.map((o) => ({ ...o, guard: cleanText(o.guard, "kondisi", 100) })) })),
+      notes: spec.notes?.slice(0, 8).map((n) => ({ ...n, text: cleanText(n.text, "Catatan", 180), participants: n.participants.map((id) => cleanId(id, "")) })),
+    };
   }
 
   const fallbackLanes = diagramType === "activity" ? fallback.lanes : undefined;
@@ -432,50 +437,7 @@ function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: stri
 /** Spec ringkas → node/edge mentah (tanpa AI). Diekspor untuk tes layout/render. */
 export function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDiagram {
   if (diagramType === "sequence") {
-    const rawParticipants = spec.participants?.length ? spec.participants : [
-      { id: "actor", name: "Aktor" },
-      { id: "system", name: "Sistem" },
-    ];
-    const participants = rawParticipants.slice(0, 6).map((participant, index) => ({
-      id: cleanId(participant.id, `p${index + 1}`),
-      name: cleanText(participant.name, `Partisipan ${index + 1}`, 36),
-    }));
-    const participantIds = new Set(participants.map((p) => p.id));
-    const messages = (spec.messages || [])
-      .map((message) => ({
-        from: cleanId(message.from, participants[0].id),
-        to: cleanId(message.to, participants[Math.min(1, participants.length - 1)].id),
-        text: cleanText(message.text, "Kirim pesan", 52),
-        return: Boolean(message.return),
-      }))
-      .filter((message) => participantIds.has(message.from) && participantIds.has(message.to) && message.from !== message.to)
-      .slice(0, 12);
-    const safeMessages = messages.length ? messages : [{ from: participants[0].id, to: participants[1]?.id || participants[0].id, text: "Memulai proses", return: false }];
-    const gap = sequenceGap(participants.length);
-    // Kepala lifeline selebar nama (bold, font target) tapi tidak boleh menyentuh tetangga.
-    const maxHeadWidth = Math.max(SEQ_GAP_MIN, gap) - 12;
-    const height = sequenceLifelineHeight(safeMessages.length);
-    const nodes: DiagramNode[] = participants.map((participant) => ({
-      id: participant.id,
-      type: "lifeline" as const,
-      text: participant.name,
-      lines: wrapText(participant.name, 18),
-      x: 0,
-      y: 0,
-      width: lifelineWidth(participant.name, maxHeadWidth),
-      height,
-      pinned: true,
-    }));
-    const edges: DiagramEdge[] = safeMessages.map((message, index) => ({
-      id: `msg-${index + 1}-${message.from}-${message.to}`,
-      fromId: message.from,
-      toId: message.to,
-      label: `${index + 1}. ${message.text}`,
-      dashed: message.return,
-      y: sequenceMessageY(index),
-    }));
-    // Posisi x/y lifeline diatur autoLayoutDiagram (layoutSequence) dari theme yang sama.
-    return { nodes, edges, lanes: [], title: spec.title || "Sequence Diagram" };
+    return { ...sequenceToDiagram(spec), lanes: [], title: spec.title || "Sequence Diagram" };
   }
 
   if (diagramType === "usecase") {
@@ -628,6 +590,7 @@ function parseCompactSpec(value: unknown): CompactSpec {
     ? source.participants.filter(isRecord).map((participant) => ({
         id: optionalString(participant.id, 60),
         name: optionalString(participant.name, 90),
+        kind: PARTICIPANT_KINDS.find((kind) => kind === participant.kind),
       }))
     : undefined;
 
@@ -637,6 +600,7 @@ function parseCompactSpec(value: unknown): CompactSpec {
         to: optionalString(message.to, 60),
         text: optionalString(message.text, 120),
         return: message.return === true,
+        kind: MESSAGE_KINDS.find((kind) => kind === message.kind),
       }))
     : undefined;
 
@@ -668,6 +632,9 @@ function parseCompactSpec(value: unknown): CompactSpec {
     usecases,
     participants,
     messages,
+    activations: Array.isArray(source.activations) ? source.activations.filter(isRecord).map((a) => ({ participant: optionalString(a.participant, 60), from: typeof a.from === "number" ? a.from : -1, to: typeof a.to === "number" ? a.to : -1, depth: typeof a.depth === "number" ? a.depth : 0 })) : undefined,
+    fragments: Array.isArray(source.fragments) ? source.fragments.filter(isRecord).map((f) => ({ kind: FRAGMENT_KINDS.find((kind) => kind === f.kind) ?? "alt", from: typeof f.from === "number" ? f.from : -1, to: typeof f.to === "number" ? f.to : -1, participants: Array.isArray(f.participants) ? f.participants.map((id) => optionalString(id, 60)) : undefined, operands: Array.isArray(f.operands) ? f.operands.filter(isRecord).map((o) => ({ from: typeof o.from === "number" ? o.from : -1, guard: optionalString(o.guard, 100) })) : [] })) : undefined,
+    notes: Array.isArray(source.notes) ? source.notes.filter(isRecord).map((n) => ({ kind: n.kind === "ref" ? "ref" as const : "note" as const, text: optionalString(n.text, 180), after: typeof n.after === "number" ? n.after : -1, participants: Array.isArray(n.participants) ? n.participants.map((id) => optionalString(id, 60)) : [] })) : undefined,
     qualityNotes: Array.isArray(source.qualityNotes)
       ? source.qualityNotes.map((note) => optionalString(note, 180)).filter((note) => note && !TECHNICAL_NOTE.test(note)).slice(0, 5)
       : undefined,
@@ -721,7 +688,7 @@ export type UmlStreamEvent =
 
 export type Emit = (event: UmlStreamEvent) => void;
 
-const PARTIAL_ARRAY_KEYS = ["steps", "actors", "usecases", "participants", "messages"] as const;
+const PARTIAL_ARRAY_KEYS = ["steps", "actors", "usecases", "participants", "messages", "activations", "fragments", "notes"] as const;
 
 /** Ambil objek-objek yang sudah lengkap `{...}` di dalam array `"key": [` dari teks JSON yang belum selesai. */
 function extractCompletedObjects(text: string, key: string): unknown[] {

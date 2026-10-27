@@ -1,4 +1,5 @@
 import type { DiagramEdge, DiagramNode } from "../types/diagram";
+import { layoutSequence, messageKind, sequenceHeaderHeight, sequenceSpecErrors, type SequenceSpec } from "./sequence";
 import {
   ACTOR_GAP,
   ACTOR_LEFT_X,
@@ -13,14 +14,11 @@ import {
   LANE_WIDTH,
   NODE_MIN,
   ROW_GAP,
-  SEQ_START_X,
-  SEQ_TOP_Y,
   SIBLING_GAP,
   STACK_GAP,
   USECASE_CENTER_X,
   USECASE_GAP,
   USECASE_TOP_Y,
-  sequenceGap,
 } from "./theme";
 
 export type SupportedDiagramType = "flowchart" | "usecase" | "activity" | "sequence";
@@ -45,14 +43,12 @@ export interface CompactStepLike {
   no?: string;
 }
 
-export interface CompactSpecLike {
+export interface CompactSpecLike extends SequenceSpec {
   title?: string;
   lanes?: string[];
   steps?: CompactStepLike[];
   actors?: { id: string; name: string; side?: "left" | "right" }[];
   usecases?: { id: string; text: string; actors: string[] }[];
-  participants?: { id: string; name: string }[];
-  messages?: { from: string; to: string; text: string; return?: boolean }[];
 }
 
 export interface DiagramValidationResult {
@@ -202,16 +198,14 @@ export function validateSpec(spec: CompactSpecLike, diagramType: SupportedDiagra
         errors.push(`Message ke-${index + 1} menuju participant yang tidak ada: ${message.to}.`);
       }
       if (!message.text.trim()) errors.push(`Message ke-${index + 1} belum punya label.`);
-      if (message.from === message.to) {
-        errors.push(`Message ke-${index + 1} tidak boleh mengarah ke participant yang sama.`);
-      }
     });
 
     const involvedParticipants = new Set(messages.flatMap((message) => [message.from, message.to]));
     participants.filter((participant) => !involvedParticipants.has(participant.id)).forEach((participant) => {
       warnings.push(`Participant ${participant.name} belum terlibat dalam message mana pun.`);
     });
-    if (messages.length >= 4 && !messages.some((message) => message.return)) {
+    errors.push(...sequenceSpecErrors(spec));
+    if (messages.length >= 4 && !messages.some((message) => messageKind(message) === "return")) {
       warnings.push("Sequence diagram belum menunjukkan respons atau return dari proses.");
     }
     appendPromptCoverageWarning(
@@ -384,11 +378,34 @@ export function validateDiagramData(
   edges.forEach((edge) => {
     if (!nodeIds.has(edge.fromId)) errors.push(`Edge ${edge.id} berasal dari node yang tidak ada: ${edge.fromId}.`);
     if (!nodeIds.has(edge.toId)) errors.push(`Edge ${edge.id} menuju node yang tidak ada: ${edge.toId}.`);
-    if (edge.fromId === edge.toId) errors.push(`Edge ${edge.id} tidak boleh menghubungkan node ke dirinya sendiri.`);
+    if (edge.y !== undefined && !Number.isFinite(edge.y)) errors.push(`Edge ${edge.id} memiliki posisi pesan tidak valid.`);
+    if (edge.fromId === edge.toId && diagramType !== "sequence") errors.push(`Edge ${edge.id} tidak boleh menghubungkan node ke dirinya sendiri.`);
     const pair = `${edge.fromId}->${edge.toId}:${(edge.label || "").trim().toLowerCase()}`;
     if (edgePairs.has(pair)) warnings.push(`Relasi render duplikat ditemukan: ${edge.fromId} ke ${edge.toId}.`);
     edgePairs.add(pair);
   });
+
+  if (diagramType === "sequence") {
+    const lifelines = new Map(nodes.filter((n) => n.type === "lifeline").map((n) => [n.id, n]));
+    nodes.forEach((n) => {
+      if (n.attachTo?.some((id) => !lifelines.has(id))) errors.push(`Elemen ${n.id} mengacu ke lifeline yang tidak ada.`);
+      if (n.type === "activation" && n.attachTo?.length !== 1) errors.push(`Activation ${n.id} wajib menempel pada satu lifeline.`);
+      if (["note", "ref", "fragment"].includes(n.type) && !n.attachTo?.length) errors.push(`Elemen ${n.id} wajib memiliki participant terkait.`);
+      if (n.depth !== undefined && (!Number.isInteger(n.depth) || n.depth < 0 || n.depth > 5)) errors.push(`Depth ${n.id} tidak valid.`);
+      if (n.operands?.some((o) => !Number.isFinite(o.y) || o.y < n.y || o.y > n.y + n.height)) errors.push(`Operand ${n.id} berada di luar fragment.`);
+      if (n.type === "fragment" && (!n.operands?.length || (n.fragmentKind === "alt" && n.operands.length < 2))) errors.push(`Fragment ${n.id} belum memiliki operand yang lengkap.`);
+    });
+    edges.forEach((e) => {
+      const from = lifelines.get(e.fromId), to = lifelines.get(e.toId);
+      if (!from || !to || !Number.isFinite(e.y)) { errors.push(`Pesan ${e.id} memerlukan dua lifeline dan posisi y valid.`); return; }
+      if (from.id === to.id && !["sync", "async"].includes(messageKind(e))) errors.push(`Self-message ${e.id} hanya boleh sync/async.`);
+      const y = e.y!;
+      if (y < from.y + sequenceHeaderHeight(from.participantKind) || y > from.y + from.height || y < to.y + (messageKind(e) === "create" ? 0 : sequenceHeaderHeight(to.participantKind)) || y > to.y + to.height) errors.push(`Pesan ${e.id} berada di luar masa hidup participant.`);
+      if (messageKind(e) === "create" && (!to.created || Math.abs(y - to.y - sequenceHeaderHeight(to.participantKind) / 2) > 1)) errors.push(`Pesan create ${e.id} harus menuju kepala participant baru.`);
+      if (messageKind(e) === "destroy" && (!to.destroyed || Math.abs(y - to.y - to.height) > 1)) errors.push(`Pesan destroy ${e.id} harus berakhir pada tanda X participant.`);
+    });
+    errors.push(...sequenceSpecErrors({ participants: [...lifelines.values()].map((n) => ({ id: n.id, name: n.text })), messages: [...edges].sort((a, b) => (a.y ?? 0) - (b.y ?? 0)).map((e) => ({ from: e.fromId, to: e.toId, text: e.label || "Pesan", kind: messageKind(e) })) }));
+  }
 
   if (diagramType === "usecase") {
     const connected = new Set<string>();
@@ -629,26 +646,6 @@ function layoutUseCase(nodes: DiagramNode[], edges: DiagramEdge[]) {
   });
 
   return mapped;
-}
-
-function layoutSequence(nodes: DiagramNode[]) {
-  const participants = nodes.filter((node) => node.type === "lifeline");
-  // Kepala lifeline lama bisa selebar 210 px → jangan sampai saling tumpuk saat dirapikan.
-  const widest = Math.max(0, ...participants.map((node) => node.width));
-  const gap = Math.max(sequenceGap(participants.length), widest + 12);
-  return nodes.map((node) => {
-    if (node.type !== "lifeline") return { ...node, pinned: true, offsetX: 0, offsetY: 0 };
-    const index = participants.findIndex((item) => item.id === node.id);
-    return {
-      ...node,
-      // x = pusat kolom − setengah lebar kepala (lebar per participant bisa berbeda).
-      x: Math.round(SEQ_START_X + gap / 2 + index * gap - node.width / 2),
-      y: SEQ_TOP_Y,
-      pinned: true,
-      offsetX: 0,
-      offsetY: 0,
-    };
-  });
 }
 
 export function autoLayoutDiagram(

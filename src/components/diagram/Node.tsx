@@ -1,13 +1,11 @@
 import React, { useMemo } from 'react';
 import { DiagramNode } from '@/lib/types/diagram';
 import { layoutNodeText } from '@/lib/uml/text-fit';
+import { isSequenceNode } from '@/lib/uml/sequence';
+import { sequenceShapes } from '@/lib/uml/sequence-shapes';
 import {
   FONT_FAMILY,
   INK,
-  LIFELINE_DASH,
-  LIFELINE_HEADER_HEIGHT,
-  LIFELINE_STROKE,
-  LIFELINE_STROKE_WIDTH,
   NODE_STROKE_WIDTH,
 } from '@/lib/uml/theme';
 
@@ -39,6 +37,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
   const borderWidth = isSelected || isConnectSource ? 2.5 : NODE_STROKE_WIDTH;
 
   const renderShape = () => {
+    if (isSequenceNode(node)) return sequenceShapes(node, borderColor, borderWidth).map((shape, i) => React.createElement(shape.tag, { ...shape.attrs, key: i }, shape.text));
     switch (type) {
       case 'start':
       case 'end':
@@ -95,33 +94,6 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             strokeWidth={borderWidth}
           />
         );
-      case 'lifeline': {
-        const centerX = curX + width / 2;
-        return (
-          <g>
-            <rect
-              x={curX}
-              y={curY}
-              width={width}
-              height={LIFELINE_HEADER_HEIGHT}
-              rx={4}
-              fill="white"
-              stroke={borderColor}
-              strokeWidth={borderWidth}
-            />
-            <line
-              x1={centerX}
-              y1={curY + LIFELINE_HEADER_HEIGHT}
-              x2={centerX}
-              y2={curY + height}
-              stroke={LIFELINE_STROKE}
-              strokeWidth={LIFELINE_STROKE_WIDTH}
-              strokeDasharray={LIFELINE_DASH}
-            />
-            <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />
-          </g>
-        );
-      }
       case 'actor': {
         const centerX = curX + width / 2;
         const headR = 12;
@@ -197,8 +169,9 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
       }}
     >
       {renderShape()}
+      {type === 'lifeline' && <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />}
 
-      <text
+      {!isSequenceNode(node) && <text
         x={curX + width / 2}
         y={textLayout.firstLineY}
         textAnchor="middle"
@@ -216,7 +189,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
             {line}
           </tspan>
         ))}
-      </text>
+      </text>}
 
       {resizeHandles.map((h, i) => (
         <circle

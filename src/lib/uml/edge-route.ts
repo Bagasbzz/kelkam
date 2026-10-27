@@ -23,8 +23,11 @@ import {
   ROW_GAP,
   SEQ_LABEL_MIN_WIDTH,
   SEQ_MESSAGE_FONT,
+  SEQ_SELF_LOOP_H,
+  SEQ_SELF_LOOP_W,
 } from "./theme";
 import { measureText, wrapLabel } from "./text-fit";
+import { messageKind } from "./sequence";
 
 export interface Point {
   x: number;
@@ -51,6 +54,8 @@ export interface EdgeRoute {
   points: Point[];
   path: string;
   label: PlacedLabel | null;
+  /** Panah terbuka dipakai untuk async/return/create/destroy. */
+  marker: "solid" | "open";
 }
 
 export const snap = (value: number) => Math.round(value / GRID_STEP) * GRID_STEP;
@@ -119,17 +124,39 @@ const centerX = (node: DiagramNode) => node.x + (node.offsetX || 0) + node.width
 const centerY = (node: DiagramNode) => node.y + (node.offsetY || 0) + node.height / 2;
 
 /** Hitung jalur garis + posisi label untuk satu edge. */
-export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode): EdgeRoute {
+export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode, nodes: DiagramNode[] = []): EdgeRoute {
+  const kind = messageKind(edge);
+  const marker = kind === "async" || kind === "return" || kind === "create"
+    ? "open" as const
+    : "solid" as const;
   // Pesan sequence: garis horizontal antar lifeline, label di atas garis.
   if (from.type === "lifeline" && to.type === "lifeline" && typeof edge.y === "number") {
-    const fx = snap(centerX(from));
-    const tx = snap(centerX(to));
-    const y = snap(edge.y);
+    const y = edge.y;
+    const dir = centerX(to) >= centerX(from) ? 1 : -1;
+    const anchor = (node: DiagramNode, side: number, at: number) => {
+      const bars = nodes.filter((n) => n.type === "activation" && n.attachTo?.[0] === node.id && at >= n.y + (n.offsetY ?? 0) && at <= n.y + (n.offsetY ?? 0) + n.height).sort((a, b) => (b.depth ?? 0) - (a.depth ?? 0));
+      const bar = bars[0];
+      return bar ? bar.x + (bar.offsetX ?? 0) + (side > 0 ? bar.width : 0) : centerX(node);
+    };
+    const fx = anchor(from, dir, y);
+    const tx = kind === "create" ? to.x + (to.offsetX ?? 0) + (dir > 0 ? 0 : to.width) : anchor(to, -dir, y);
+    if (from.id === to.id) {
+      const sideX = fx + SEQ_SELF_LOOP_W;
+      const points = [{ x: fx, y }, { x: sideX, y }, { x: sideX, y: y + SEQ_SELF_LOOP_H }, { x: anchor(to, 1, y + SEQ_SELF_LOOP_H), y: y + SEQ_SELF_LOOP_H }];
+      const layout = edge.label ? layoutSequenceLabel(edge.label, SEQ_SELF_LOOP_W) : null;
+      return {
+        points,
+        path: toPath(points),
+        marker,
+        label: layout ? { ...layout, x: fx + layout.width / 2 + 5, y: y - 3 - layout.height / 2 } : null,
+      };
+    }
     const points = [{ x: fx, y }, { x: tx, y }];
     const layout = edge.label ? layoutSequenceLabel(edge.label, tx - fx) : null;
     return {
       points,
       path: toPath(points),
+      marker,
       // Tidak di-snap vertikal: kotak harus tepat 3 px di atas garis agar tidak menyentuh pesan sebelumnya.
       label: layout ? { ...layout, x: snap((fx + tx) / 2), y: y - 3 - layout.height / 2 } : null,
     };
@@ -143,6 +170,7 @@ export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode)
     return {
       points,
       path: toPath(points),
+      marker: "solid",
       label: place(plain, (points[0].x + points[1].x) / 2, (points[0].y + points[1].y) / 2),
     };
   }
@@ -234,5 +262,5 @@ export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode)
     label = place(plain, x1 + side * (6 + w / 2), y1 + 4 + h / 2);
   }
 
-  return { points, path: toPath(points), label };
+  return { points, path: toPath(points), label, marker: "solid" };
 }

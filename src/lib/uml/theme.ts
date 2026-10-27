@@ -151,6 +151,47 @@ export function sequenceLifelineHeight(messageCount: number): number {
   return LIFELINE_HEADER_HEIGHT + SEQ_FIRST_MESSAGE_OFFSET + Math.max(messageCount - 1, 0) * SEQ_ROW_GAP + SEQ_TAIL;
 }
 
+// --- Simbol sequence lanjutan (lihat sequence-layout.ts & sequence-shapes.ts) ---
+
+/** Self-message: lebar & tinggi loop di kanan lifeline. */
+export const SEQ_SELF_LOOP_W = 34;
+export const SEQ_SELF_LOOP_H = 24;
+/** Jarak garis pesan sebelumnya → garis self-message (label di samping loop, bukan di atas). */
+export const SEQ_SELF_OFFSET = 36;
+/** Activation bar (execution specification). */
+export const ACTIVATION_WIDTH = 12;
+/** Geser horizontal tiap tingkat activation bersarang. */
+export const ACTIVATION_NEST = 6;
+export const ACTIVATION_MIN_HEIGHT = 16;
+export const ACTIVATION_FILL = "#e2e8f0";
+/** Combined fragment (alt/opt/loop/…). */
+export const FRAGMENT_FONT = 14;
+export const FRAGMENT_TAG_HEIGHT = 22;
+/** Ruang vertikal untuk tag + guard di atas pesan pertama fragment. */
+export const FRAGMENT_HEADER = 30;
+/** Ruang vertikal pemisah operand (else) + guard-nya. */
+export const FRAGMENT_GUARD_ROW = 24;
+export const FRAGMENT_BOTTOM = 12;
+/** Jarak tepi fragment dari pusat lifeline terluar; berkurang per tingkat bersarang. */
+export const FRAGMENT_PAD = 46;
+export const FRAGMENT_NEST_STEP = 10;
+export const FRAGMENT_DASH = "6,4";
+/** Note & ref (interaction use). */
+export const NOTE_FONT = 15;
+export const NOTE_MAX_TEXT_WIDTH = 210;
+export const NOTE_PAD_X = 10;
+export const NOTE_PAD_Y = 7;
+export const NOTE_FOLD = 10;
+export const NOTE_FILL = "#fefce8";
+/** Lebar ekstra di kiri/kanan pusat lifeline saat note/ref membentang beberapa lifeline. */
+export const NOTE_SPAN_PAD = 26;
+/** Jarak vertikal sebelum & sesudah note/ref. */
+export const NOTE_GAP = 10;
+/** Ikon participant (actor/boundary/control/entity/database) di atas nama. */
+export const PARTICIPANT_ICON_HEIGHT = 32;
+/** Setengah ukuran tanda X destroy. */
+export const DESTROY_SIZE = 9;
+
 // ---------------------------------------------------------------------------
 // Garis, warna, panah
 // ---------------------------------------------------------------------------
@@ -171,6 +212,8 @@ export const EDGE_DASH = "6,5";
 export const LIFELINE_DASH = "8,6";
 export const LIFELINE_STROKE_WIDTH = 2;
 export const ARROW = { width: 10, height: 7, refX: 9, refY: 3.5, points: "0 0, 10 3.5, 0 7" } as const;
+/** Panah terbuka (pesan async / return / create) – digambar sebagai garis, bukan segitiga. */
+export const ARROW_OPEN = { width: 11, height: 9, refX: 10, refY: 4.5, path: "M 1 1 L 10 4.5 L 1 8" } as const;
 export const GRID_STEP = 4;
 
 /** Jarak rute edge balik (loop) dari sisi node terluar. */

@@ -13,8 +13,11 @@ import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
 import { routeEdge, type PlacedLabel } from "@/lib/uml/edge-route";
 import { fitTerminators } from "@/lib/uml/node-size";
 import { diagramFontCap, laneTitleFont, layoutNodeText } from "@/lib/uml/text-fit";
+import { isSequenceNode, messageKind } from "./sequence";
+import { sequenceNodeOrder, sequenceShapes } from "./sequence-shapes";
 import {
   ARROW,
+  ARROW_OPEN,
   EDGE_DASH,
   EDGE_DASHED_STROKE,
   EDGE_STROKE,
@@ -30,10 +33,6 @@ import {
   LANE_STROKE,
   LANE_STROKE_WIDTH,
   LANE_TOP_Y,
-  LIFELINE_DASH,
-  LIFELINE_HEADER_HEIGHT,
-  LIFELINE_STROKE,
-  LIFELINE_STROKE_WIDTH,
   NODE_STROKE_WIDTH,
   OUTSIDE_LINE_HEIGHT,
   OUTSIDE_LABEL_GAP,
@@ -61,6 +60,12 @@ const num = (value: number) => Number(value.toFixed(1)).toString();
 const LANE_BOTTOM_PAD = 28;
 
 function renderNode(node: DiagramNode, fontCap?: number): string {
+  if (isSequenceNode(node)) {
+    return `<g>${sequenceShapes(node).map((shape) => {
+      const attrs = Object.entries(shape.attrs).map(([key, value]) => `${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}="${esc(String(value))}"`).join(" ");
+      return `<${shape.tag} ${attrs}>${shape.text === undefined ? "" : esc(shape.text)}</${shape.tag}>`;
+    }).join("")}</g>`;
+  }
   const { type, width, height } = node;
   const x = node.x + (node.offsetX || 0);
   const y = node.y + (node.offsetY || 0);
@@ -80,13 +85,6 @@ function renderNode(node: DiagramNode, fontCap?: number): string {
     case "join":
       shape = `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${num(height)}" fill="${INK}" ${stroke}/>`;
       break;
-    case "lifeline": {
-      const cx = x + width / 2;
-      shape =
-        `<rect x="${num(x)}" y="${num(y)}" width="${num(width)}" height="${LIFELINE_HEADER_HEIGHT}" rx="4" fill="white" ${stroke}/>` +
-        `<line x1="${num(cx)}" y1="${num(y + LIFELINE_HEADER_HEIGHT)}" x2="${num(cx)}" y2="${num(y + height)}" stroke="${LIFELINE_STROKE}" stroke-width="${LIFELINE_STROKE_WIDTH}" stroke-dasharray="${LIFELINE_DASH}"/>`;
-      break;
-    }
     case "actor": {
       const cx = x + width / 2;
       const r = 12;
@@ -169,14 +167,14 @@ export function diagramToSvg(input: SvgDiagramInput): string {
     const y = n.y + (n.offsetY || 0);
     // Label actor bisa lebih lebar dari figurnya.
     const labelHalf = n.type === "actor" ? 50 : 0;
-    grow(x - labelHalf, y, x + n.width + labelHalf, outsideLabelBottom(n, y));
+    grow(x - labelHalf, y, x + n.width + labelHalf, outsideLabelBottom(n, y) + (n.destroyed ? 10 : 0));
   }
 
   // Edge dirute dulu agar garis balik & label ikut masuk bounding box (tidak terpotong).
   const routed = edges.map((e) => {
     const from = nodeById.get(e.fromId);
     const to = nodeById.get(e.toId);
-    return from && to ? { edge: e, route: routeEdge(e, from, to) } : null;
+    return from && to ? { edge: e, route: routeEdge(e, from, to, nodes) } : null;
   });
   for (const item of routed) {
     if (!item) continue;
@@ -212,22 +210,25 @@ export function diagramToSvg(input: SvgDiagramInput): string {
   const lineSvg = routed
     .map((item) => {
       if (!item) return "";
-      const dashed = Boolean(item.edge.dashed);
-      return `<path d="${item.route.path}" fill="none" stroke="${dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}" stroke-width="${EDGE_STROKE_WIDTH}" stroke-dasharray="${dashed ? EDGE_DASH : "none"}" marker-end="url(#${dashed ? "arrowhead-dashed" : "arrowhead"})"/>`;
+      const dashed = Boolean(item.edge.dashed) || ["return", "create"].includes(messageKind(item.edge));
+      return `<path d="${item.route.path}" fill="none" stroke="${dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}" stroke-width="${EDGE_STROKE_WIDTH}" stroke-dasharray="${dashed ? EDGE_DASH : "none"}" marker-end="url(#${item.route.marker === "open" ? "arrowhead-open" : dashed ? "arrowhead-dashed" : "arrowhead"})"/>`;
     })
     .join("");
   // Label digambar setelah semua garis & node agar tidak tertimpa garis lain.
   const labelSvg = routed.map((item) => (item?.route.label ? renderLabel(item.route.label) : "")).join("");
   const fontCap = diagramFontCap(nodes);
-  const nodeSvg = nodes.map((n) => renderNode(n, fontCap)).join("");
+  const ordered = sequenceNodeOrder(nodes);
+  const backgroundSvg = ordered.filter((n) => n.type === "fragment" || n.type === "lifeline" || n.type === "activation").map((n) => renderNode(n, fontCap)).join("");
+  const nodeSvg = ordered.filter((n) => n.type !== "fragment" && n.type !== "lifeline" && n.type !== "activation").map((n) => renderNode(n, fontCap)).join("");
   const marker = (id: string, fill: string) =>
     `<marker id="${id}" markerWidth="${ARROW.width}" markerHeight="${ARROW.height}" refX="${ARROW.refX}" refY="${ARROW.refY}" orient="auto"><polygon points="${ARROW.points}" fill="${fill}"/></marker>`;
+  const openMarker = `<marker id="arrowhead-open" markerWidth="${ARROW_OPEN.width}" markerHeight="${ARROW_OPEN.height}" refX="${ARROW_OPEN.refX}" refY="${ARROW_OPEN.refY}" orient="auto"><path d="${ARROW_OPEN.path}" fill="none" stroke="${EDGE_STROKE}" stroke-width="1.5"/></marker>`;
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vx} ${vy} ${vw} ${vh}" font-family="${FONT_FAMILY}">` +
-    `<defs>${marker("arrowhead", EDGE_STROKE)}${marker("arrowhead-dashed", EDGE_DASHED_STROKE)}</defs>` +
+    `<defs>${marker("arrowhead", EDGE_STROKE)}${marker("arrowhead-dashed", EDGE_DASHED_STROKE)}${openMarker}</defs>` +
     `<rect x="${vx}" y="${vy}" width="${vw}" height="${vh}" fill="white"/>` +
-    laneSvg + lineSvg + nodeSvg + labelSvg +
+    laneSvg + backgroundSvg + lineSvg + nodeSvg + labelSvg +
     `</svg>`
   );
 }

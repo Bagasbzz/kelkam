@@ -1,6 +1,7 @@
 import React from 'react';
 import { DiagramEdge, DiagramNode } from '@/lib/types/diagram';
 import { routeEdge, type PlacedLabel } from '@/lib/uml/edge-route';
+import { messageKind } from '@/lib/uml/sequence';
 import {
   EDGE_DASH,
   EDGE_DASHED_STROKE,
@@ -14,12 +15,14 @@ interface EdgeProps {
   edge: DiagramEdge;
   fromNode: DiagramNode;
   toNode: DiagramNode;
+  nodes?: DiagramNode[];
 }
 
 interface EdgeLabelProps {
   edge: DiagramEdge;
   fromNode: DiagramNode;
   toNode: DiagramNode;
+  nodes?: DiagramNode[];
 }
 
 function LabelBox({ label }: { label: PlacedLabel }) {
@@ -65,9 +68,9 @@ function LabelBox({ label }: { label: PlacedLabel }) {
  * supaya tampilan editor = gambar di laporan. Marker panah didefinisikan sekali
  * di DiagramCanvas.
  */
-const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
-  const route = routeEdge(edge, fromNode, toNode);
-  const dashed = Boolean(edge.dashed);
+const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode, nodes }) => {
+  const route = routeEdge(edge, fromNode, toNode, nodes);
+  const dashed = Boolean(edge.dashed) || ['return', 'create'].includes(messageKind(edge));
   return (
     <g className="edge-group">
       <path d={route.path} fill="none" stroke="transparent" strokeWidth="12" />
@@ -77,16 +80,16 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode }) => {
         stroke={dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}
         strokeWidth={EDGE_STROKE_WIDTH}
         strokeDasharray={dashed ? EDGE_DASH : 'none'}
-        markerEnd={`url(#${dashed ? 'arrowhead-dashed' : 'arrowhead'})`}
+        markerEnd={`url(#${route.marker === 'open' ? 'arrowhead-open' : dashed ? 'arrowhead-dashed' : 'arrowhead'})`}
       />
     </g>
   );
 };
 
 /** Label edge, dirender di atas node (urutan sama dengan render-svg.ts). */
-export const EdgeLabel: React.FC<EdgeLabelProps> = ({ edge, fromNode, toNode }) => {
+export const EdgeLabel: React.FC<EdgeLabelProps> = ({ edge, fromNode, toNode, nodes }) => {
   if (!edge.label) return null;
-  const { label } = routeEdge(edge, fromNode, toNode);
+  const { label } = routeEdge(edge, fromNode, toNode, nodes);
   return label ? <LabelBox label={label} /> : null;
 };
 
