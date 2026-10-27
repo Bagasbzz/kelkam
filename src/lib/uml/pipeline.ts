@@ -16,6 +16,8 @@ import {
   type DiagramValidationResult,
 } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { isDiagramType, type DiagramType } from "@/lib/types/diagram";
+import { isStructuralType, structureToDiagram, type StructureSpec } from "./structure";
 import { nodeSizeFor, wrapTerminatorText } from "@/lib/uml/node-size";
 import { FRAGMENT_KINDS, MESSAGE_KINDS, PARTICIPANT_KINDS, sequenceToDiagram, type SequenceSpec } from "./sequence";
 import {
@@ -30,7 +32,7 @@ import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 export const ROUTE_BUDGET_MS = 95_000;
 const MIN_STEP_MS = 15_000;
 
-export type DiagramType = "flowchart" | "usecase" | "activity" | "sequence";
+export type { DiagramType } from "@/lib/types/diagram";
 type GenerationMode = "direct" | "clarify";
 type StepType = "start" | "end" | "process" | "activity" | "decision";
 
@@ -44,7 +46,7 @@ interface CompactStep {
   no?: string;
 }
 
-export interface CompactSpec extends SequenceSpec {
+export interface CompactSpec extends SequenceSpec, StructureSpec {
   needsClarification?: boolean;
   clarification?: string;
   clarificationQuestions?: string[];
@@ -76,9 +78,7 @@ export interface RenderedDiagram {
   title: string;
 }
 
-const allowedTypes = new Set(["flowchart", "usecase", "activity", "sequence"]);
-
-export const isUmlDiagramType = (value: unknown): value is DiagramType => typeof value === "string" && allowedTypes.has(value);
+export const isUmlDiagramType = isDiagramType;
 
 export const isRecord = (value: unknown): value is Record<string, unknown> => (
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -262,6 +262,7 @@ function inferScenarioHints(prompt: string, reportContext: unknown, diagramType:
 
 function validationErrorsToQuestions(errors: string[], diagramType: DiagramType) {
   if (!errors.length) return [
+    isStructuralType(diagramType) ? "Elemen utama, atribut, dan hubungan yang wajib ditampilkan apa saja?" :
     diagramType === "sequence"
       ? "Siapa participant yang paling penting dan apa urutan pesannya?"
       : diagramType === "usecase"
@@ -311,6 +312,11 @@ function buildStrictSystemPrompt(
 
   if (askFirst) {
     base.push(
+      'Schema class/state/erd/component/deployment: {"title":"...","elements":[{"id":"e1","name":"Nama","kind":"class|state|initial|final|entity|component|interface|device|execution|artifact","attributes":["- id: int"],"operations":["+ simpan(): void"],"stereotype":"opsional","parent":"id-container-opsional"}],"relations":[{"from":"e1","to":"e2","label":"...","kind":"association|inheritance|realization|aggregation|composition|dependency|transition|communication","fromCardinality":"1","toCardinality":"0..*"}]}.',
+      "- Class: class dengan kompartemen atribut/operasi; inheritance/realization panah menuju induk/interface, composition/aggregation diamond di from (pemilik). ERD: entity dengan PK/FK di attributes dan cardinality pada relasi association.",
+      "- State: kind initial/state/final; tepat satu initial dan minimal satu final, initial punya koneksi keluar, final tidak punya koneksi keluar. Relasi transition boleh self-loop; label event [guard] / action.",
+      "- Component: kind component/interface dan relasi dependency/realization/association. Deployment: kind device/execution/artifact; parent mengacu container device/execution, relasi communication/dependency. Jangan buat siklus containment.",
+      "- Diagram struktural maksimal 18 elemen dan 36 relasi. Gunakan hanya schema untuk tipe yang diminta, bukan steps flowchart atau participants sequence.",
       "Mode tanya dulu: jangan buat diagram final sekarang.",
       "Balas JSON valid dengan schema: {\"needsClarification\":true,\"clarification\":\"pertanyaan singkat\",\"clarificationQuestions\":[\"...\",\"...\"]}.",
       "Ajukan 2 atau 3 pertanyaan paling penting yang benar-benar menentukan struktur diagram.",
@@ -387,6 +393,12 @@ function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: stri
 
   normalized.title = cleanText(normalized.title || fallback.title || prompt, fallback.title || "Diagram", 80);
 
+  if (isStructuralType(diagramType)) return {
+    ...normalized,
+    elements: spec.elements?.map((e, i) => ({ ...e, id: cleanId(e.id, `element-${i + 1}`), name: cleanText(e.name, "Elemen", 100), parent: e.parent ? cleanId(e.parent, "") : undefined, attributes: e.attributes?.map((s) => optionalString(s, 160)), operations: e.operations?.map((s) => optionalString(s, 160)) })),
+    relations: spec.relations?.map((r) => ({ ...r, from: cleanId(r.from, ""), to: cleanId(r.to, ""), label: optionalString(r.label, 120) || undefined })),
+  };
+
   if (diagramType === "usecase") {
     const actors = (normalized.actors || []).slice(0, 6).map((actor, index) => ({
       id: cleanId(actor.id || actor.name, `actor-${index + 1}`),
@@ -436,6 +448,7 @@ function normalizeSpec(spec: CompactSpec, diagramType: DiagramType, prompt: stri
 
 /** Spec ringkas → node/edge mentah (tanpa AI). Diekspor untuk tes layout/render. */
 export function specToDiagram(spec: CompactSpec, diagramType: DiagramType): RenderedDiagram {
+  if (isStructuralType(diagramType)) return { ...structureToDiagram(spec, diagramType), lanes: [], title: spec.title || `${diagramType} Diagram` };
   if (diagramType === "sequence") {
     return { ...sequenceToDiagram(spec), lanes: [], title: spec.title || "Sequence Diagram" };
   }
@@ -564,7 +577,7 @@ function hasEnoughPromptDetail(prompt: string, reportContext: unknown) {
   return words.length >= 10 || [hasActor, hasAction, hasOutcome].filter(Boolean).length >= 2;
 }
 
-function parseCompactSpec(value: unknown): CompactSpec {
+export function parseCompactSpec(value: unknown): CompactSpec {
   const source = isRecord(value) ? value : {};
   const stepTypes = new Set<StepType>(["start", "end", "process", "activity", "decision"]);
 
@@ -632,6 +645,8 @@ function parseCompactSpec(value: unknown): CompactSpec {
     usecases,
     participants,
     messages,
+    elements: Array.isArray(source.elements) ? source.elements.filter(isRecord).map((e) => ({ id: optionalString(e.id, 60), name: optionalString(e.name, 120), kind: e.kind === undefined ? undefined : optionalString(e.kind, 30) as NonNullable<StructureSpec["elements"]>[number]["kind"], parent: optionalString(e.parent, 60) || undefined, stereotype: optionalString(e.stereotype, 80) || undefined, attributes: Array.isArray(e.attributes) ? e.attributes.map((s) => optionalString(s, 160)) : undefined, operations: Array.isArray(e.operations) ? e.operations.map((s) => optionalString(s, 160)) : undefined })) : undefined,
+    relations: Array.isArray(source.relations) ? source.relations.filter(isRecord).map((r) => ({ from: optionalString(r.from, 60), to: optionalString(r.to, 60), label: optionalString(r.label, 120) || undefined, kind: r.kind === undefined ? undefined : optionalString(r.kind, 30) as NonNullable<StructureSpec["relations"]>[number]["kind"], fromCardinality: optionalString(r.fromCardinality, 20) || undefined, toCardinality: optionalString(r.toCardinality, 20) || undefined })) : undefined,
     activations: Array.isArray(source.activations) ? source.activations.filter(isRecord).map((a) => ({ participant: optionalString(a.participant, 60), from: typeof a.from === "number" ? a.from : -1, to: typeof a.to === "number" ? a.to : -1, depth: typeof a.depth === "number" ? a.depth : 0 })) : undefined,
     fragments: Array.isArray(source.fragments) ? source.fragments.filter(isRecord).map((f) => ({ kind: FRAGMENT_KINDS.find((kind) => kind === f.kind) ?? "alt", from: typeof f.from === "number" ? f.from : -1, to: typeof f.to === "number" ? f.to : -1, participants: Array.isArray(f.participants) ? f.participants.map((id) => optionalString(id, 60)) : undefined, operands: Array.isArray(f.operands) ? f.operands.filter(isRecord).map((o) => ({ from: typeof o.from === "number" ? o.from : -1, guard: optionalString(o.guard, 100) })) : [] })) : undefined,
     notes: Array.isArray(source.notes) ? source.notes.filter(isRecord).map((n) => ({ kind: n.kind === "ref" ? "ref" as const : "note" as const, text: optionalString(n.text, 180), after: typeof n.after === "number" ? n.after : -1, participants: Array.isArray(n.participants) ? n.participants.map((id) => optionalString(id, 60)) : [] })) : undefined,
@@ -688,7 +703,7 @@ export type UmlStreamEvent =
 
 export type Emit = (event: UmlStreamEvent) => void;
 
-const PARTIAL_ARRAY_KEYS = ["steps", "actors", "usecases", "participants", "messages", "activations", "fragments", "notes"] as const;
+const PARTIAL_ARRAY_KEYS = ["steps", "actors", "usecases", "participants", "messages", "activations", "fragments", "notes", "elements", "relations"] as const;
 
 /** Ambil objek-objek yang sudah lengkap `{...}` di dalam array `"key": [` dari teks JSON yang belum selesai. */
 function extractCompletedObjects(text: string, key: string): unknown[] {
@@ -733,7 +748,7 @@ function parsePartialSpec(text: string, diagramType: DiagramType): { spec: Compa
   }
   if (!count) return null;
   const spec = parseCompactSpec(raw);
-  const ready = diagramType === "usecase" ? spec.actors?.length : diagramType === "sequence" ? spec.participants?.length : spec.steps?.length;
+  const ready = isStructuralType(diagramType) ? spec.elements?.length : diagramType === "usecase" ? spec.actors?.length : diagramType === "sequence" ? spec.participants?.length : spec.steps?.length;
   return ready ? { spec, count } : null;
 }
 
@@ -784,7 +799,7 @@ export async function runUmlPipeline(body: GenerateUmlRequest, emit: Emit, budge
 
   const requestedType = optionalString(body.diagramType, 20);
   const normalizedType: DiagramType = inferDiagramTypeFromPrompt(prompt)
-    ?? (allowedTypes.has(requestedType) ? requestedType as DiagramType : "flowchart");
+    ?? (isDiagramType(requestedType) ? requestedType : "flowchart");
   const done = (payload: Record<string, unknown>, status = 200): PipelineResult => ({
     status,
     payload: { diagramType: normalizedType, ...payload },
@@ -1071,7 +1086,7 @@ export async function generateUmlForReport(input: {
   if (payload.success && data) {
     return {
       ok: true,
-      data: { ...data, meta: { title: data.title || input.title, lanes: data.lanes, ...(data.laneWidth ? { laneWidth: data.laneWidth } : {}), diagramType: input.diagramType } },
+      data: { ...data, meta: { title: data.title || input.title, lanes: data.lanes, ...(data.laneWidth ? { laneWidth: data.laneWidth } : {}), diagramType: isDiagramType(payload.diagramType) ? payload.diagramType : input.diagramType } },
       warnings: validation?.warnings ?? [],
     };
   }

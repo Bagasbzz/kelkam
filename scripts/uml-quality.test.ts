@@ -13,6 +13,7 @@ import { diagramToSequenceSpec, messageKind, sequenceToDiagram, sequenceSpecErro
 import { sequenceShapes } from "../src/lib/uml/sequence-shapes.ts";
 import { routeEdge } from "../src/lib/uml/edge-route.ts";
 import { diagramToSvg } from "../src/lib/uml/render-svg.ts";
+import { parseCompactSpec, specToDiagram } from "../src/lib/uml/pipeline.ts";
 
 const goldenSpecs: Array<{
   name: string;
@@ -299,5 +300,45 @@ test("sequence SVG uses shared primitives, escaped text, and can rasterize", asy
   if (process.env.UML_TEST_PNG) {
     const { writeFile } = await import("node:fs/promises");
     await writeFile(process.env.UML_TEST_PNG, png);
+  }
+});
+
+test("all structural types survive pipeline parsing, validation, rendering and persistence", async () => {
+  const fixtures: Array<{ type: SupportedDiagramType; spec: CompactSpecLike }> = [
+    { type: "class", spec: { elements: [{ id: "user", name: "Pengguna", attributes: ["- id: int"], operations: ["+ login(): bool"] }, { id: "admin", name: "Admin" }], relations: [{ from: "admin", to: "user", kind: "inheritance" }] } },
+    { type: "erd", spec: { elements: [{ id: "user", name: "Pengguna", attributes: ["PK id"] }, { id: "post", name: "Keluhan", attributes: ["PK id", "FK user_id"] }], relations: [{ from: "user", to: "post", fromCardinality: "1", toCardinality: "0..*" }] } },
+    { type: "state", spec: { elements: [{ id: "initial", name: "Mulai", kind: "initial" }, { id: "review", name: "Ditinjau", kind: "state" }, { id: "final", name: "Selesai", kind: "final" }], relations: [{ from: "initial", to: "review" }, { from: "review", to: "review", label: "revisi" }, { from: "review", to: "final" }] } },
+    { type: "component", spec: { elements: [{ id: "service", name: "Layanan Keluhan" }, { id: "api", name: "API Keluhan", kind: "interface" }], relations: [{ from: "service", to: "api", kind: "realization" }] } },
+    { type: "deployment", spec: { elements: [{ id: "server", name: "Server", kind: "device" }, { id: "runtime", name: "Node.js", kind: "execution", parent: "server" }, { id: "web", name: "aplikasi.js", kind: "artifact", parent: "runtime" }, { id: "db", name: "Database", kind: "device" }], relations: [{ from: "server", to: "db", kind: "communication", label: "TCP" }] } },
+  ];
+  const { svgToPngServer } = await import("../src/lib/server/laporan/svg-raster.ts");
+  for (const fixture of fixtures) {
+    const parsed = parseCompactSpec(JSON.parse(JSON.stringify(fixture.spec)));
+    const valid = validateSpec(parsed, fixture.type);
+    assert.equal(valid.ok, true, `${fixture.type}: ${valid.errors.join(" | ")}`);
+    const data = specToDiagram(parsed, fixture.type);
+    if (fixture.type === "state") {
+      const state = data.nodes.find((node) => node.id === "review")!;
+      const loop = routeEdge(data.edges.find((edge) => edge.fromId === edge.toId)!, state, state, data.nodes);
+      assert.ok(loop.points[3].y < state.y + state.height);
+      assert.ok(loop.label!.x - loop.label!.width / 2 > state.x + state.width);
+    }
+    if (fixture.type === "erd") {
+      const cardinalities = routeEdge(data.edges[0], data.nodes[0], data.nodes[1], data.nodes).cardinalities!;
+      assert.ok(Math.abs(cardinalities[0].x - cardinalities[1].x) >= 40);
+    }
+    const result = validateDiagramData(data.nodes, data.edges, fixture.type);
+    assert.equal(result.ok, true, `${fixture.type}: ${result.errors.join(" | ")}`);
+    assert.equal(result.warnings.length, 0, result.warnings.join(" | "));
+    assert.deepEqual(autoLayoutDiagram(data.nodes, data.edges, fixture.type), data.nodes);
+    const svg = diagramToSvg(JSON.parse(JSON.stringify(data)));
+    assert.ok(!svg.includes("NaN") && !svg.includes("undefined"));
+    if (fixture.type === "erd") assert.ok(svg.includes("0..*"));
+    const png = await svgToPngServer(svg, 1);
+    assert.equal(png[0], 137);
+    if (process.env.UML_TEST_PNG) {
+      const { writeFile } = await import("node:fs/promises");
+      await writeFile(process.env.UML_TEST_PNG.replace(/\.png$/, `-${fixture.type}.png`), png);
+    }
   }
 });

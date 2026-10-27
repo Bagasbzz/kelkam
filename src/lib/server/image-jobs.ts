@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import { prisma } from "@/lib/db/prisma";
 import { generateImage } from "@/lib/ai/client";
 import { saveUpload } from "@/lib/storage/upload";
+import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 
 export type ImageJobStatus = "queued" | "running" | "done" | "failed";
 
@@ -65,7 +66,7 @@ function toView(row: Row): ImageJobView {
     sessionId: row.sessionId,
     fileId: row.fileUploadId,
     url: row.status === "done" && row.fileUploadId ? `/api/files/${row.fileUploadId}` : null,
-    error: row.error,
+    error: row.error === null ? null : toPublicErrorMessage(row.error),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -111,7 +112,7 @@ export async function startImageJob(input: { ownerId: string; prompt: string; ti
 /** Jalankan job yang antre di proses ini tanpa menunggu (fire-and-forget). */
 export function kickImageJobs() {
   setImmediate(() => {
-    void tickImageJobs(1).catch((err) => console.error("[image-jobs] kick failed:", err));
+    void tickImageJobs(1).catch((err) => console.error("[image-jobs] kick failed:", sanitizePublicErrorText(err instanceof Error ? err.message : String(err))));
   });
 }
 
@@ -174,12 +175,12 @@ async function runImageJob(id: string) {
       data: { status: "done", fileUploadId: upload.id, finishedAt: new Date(), error: null },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message.slice(0, 400) : "Generate gambar gagal.";
+    const message = toPublicErrorMessage(err, "Generate gambar gagal.");
     const exhausted = job.attempts >= MAX_ATTEMPTS;
     await prisma.imageJob.update({
       where: { id },
       data: { status: exhausted ? "failed" : "queued", error: message, finishedAt: exhausted ? new Date() : null },
     });
-    console.error(`[image-jobs] ${id} attempt ${job.attempts} failed:`, message);
+    console.error(`[image-jobs] ${id} attempt ${job.attempts} failed:`, sanitizePublicErrorText(err instanceof Error ? err.message : "Generate gambar gagal.").slice(0, 400));
   }
 }

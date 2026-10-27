@@ -1,7 +1,10 @@
 export type NodeType =
   | 'start' | 'end' | 'process' | 'decision' | 'actor' | 'usecase' | 'system' | 'activity' | 'fork' | 'join' | 'lifeline'
   // Elemen pendukung sequence diagram (posisinya mengikuti lifeline di attachTo).
-  | 'activation' | 'fragment' | 'note' | 'ref';
+  | 'activation' | 'fragment' | 'note' | 'ref'
+  | 'class' | 'state' | 'initial' | 'final' | 'entity' | 'component' | 'interface' | 'device' | 'execution' | 'artifact';
+
+export type RelationKind = 'association' | 'inheritance' | 'realization' | 'aggregation' | 'composition' | 'dependency' | 'transition' | 'communication';
 
 /** Jenis participant sequence (notasi UML / Robustness). */
 export type ParticipantKind = 'participant' | 'actor' | 'boundary' | 'control' | 'entity' | 'database';
@@ -52,6 +55,10 @@ export interface DiagramNode {
   fragmentKind?: FragmentKind;
   /** fragment: operand + guard; operand ke-2 dst. digambar dengan garis putus-putus. */
   operands?: FragmentOperand[];
+  attributes?: string[];
+  operations?: string[];
+  stereotype?: string;
+  parentId?: string;
 }
 
 export interface DiagramEdge {
@@ -66,6 +73,11 @@ export interface DiagramEdge {
   y?: number;
   /** Jenis pesan sequence; kosong = sync (atau return bila dashed). */
   kind?: MessageKind;
+  relation?: RelationKind;
+  fromCardinality?: string;
+  toCardinality?: string;
 }
 
-export type DiagramType = 'flowchart' | 'usecase' | 'class' | 'sequence' | 'activity' | 'state';
+export const DIAGRAM_TYPES = ['flowchart', 'usecase', 'sequence', 'activity', 'class', 'state', 'erd', 'component', 'deployment'] as const;
+export type DiagramType = typeof DIAGRAM_TYPES[number];
+export const isDiagramType = (value: unknown): value is DiagramType => typeof value === 'string' && (DIAGRAM_TYPES as readonly string[]).includes(value);

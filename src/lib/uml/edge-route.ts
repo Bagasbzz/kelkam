@@ -56,6 +56,9 @@ export interface EdgeRoute {
   label: PlacedLabel | null;
   /** Panah terbuka dipakai untuk async/return/create/destroy. */
   marker: "solid" | "open";
+  startMarker?: "aggregation" | "composition";
+  endMarker?: "inheritance" | "none";
+  cardinalities?: { text: string; x: number; y: number }[];
 }
 
 export const snap = (value: number) => Math.round(value / GRID_STEP) * GRID_STEP;
@@ -111,6 +114,10 @@ function exitPoint(node: DiagramNode, side: "right" | "left" | "bottom" | "top")
   const x = node.x + (node.offsetX || 0);
   const y = node.y + (node.offsetY || 0);
   const cx = x + node.width / 2;
+  if (["initial", "final", "interface"].includes(node.type)) {
+    const cy = y + (node.type === "interface" ? 10 : 12), r = node.type === "final" ? 12 : 10;
+    return { x: cx + (side === "right" ? r : side === "left" ? -r : 0), y: cy + (side === "bottom" ? r : side === "top" ? -r : 0) };
+  }
   const cy = y + node.height / 2;
   switch (side) {
     case "right": return { x: x + node.width, y: cy };
@@ -121,7 +128,7 @@ function exitPoint(node: DiagramNode, side: "right" | "left" | "bottom" | "top")
 }
 
 const centerX = (node: DiagramNode) => node.x + (node.offsetX || 0) + node.width / 2;
-const centerY = (node: DiagramNode) => node.y + (node.offsetY || 0) + node.height / 2;
+const centerY = (node: DiagramNode) => node.y + (node.offsetY || 0) + (node.type === "interface" ? 10 : node.type === "initial" || node.type === "final" ? 12 : node.height / 2);
 
 /** Hitung jalur garis + posisi label untuk satu edge. */
 export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode, nodes: DiagramNode[] = []): EdgeRoute {
@@ -163,6 +170,43 @@ export function routeEdge(edge: DiagramEdge, from: DiagramNode, to: DiagramNode,
   }
 
   const plain = edge.label ? layoutPlainLabel(edge.label) : null;
+
+  if (edge.relation) {
+    const dx = centerX(to) - centerX(from), dy = centerY(to) - centerY(from);
+    let points: Point[];
+    if (from.id === to.id) {
+      const x = from.x + from.width + (from.offsetX ?? 0), y = centerY(from);
+      const bottom = y + Math.min(32, from.height / 2 - 4);
+      points = [{ x, y: y - 12 }, { x: x + 44, y: y - 12 }, { x: x + 44, y: bottom }, { x, y: bottom }];
+    } else if (Math.abs(dx) >= Math.abs(dy)) {
+      const a = exitPoint(from, dx > 0 ? "right" : "left"), b = exitPoint(to, dx > 0 ? "left" : "right");
+      points = [a, { x: (a.x + b.x) / 2, y: a.y }, { x: (a.x + b.x) / 2, y: b.y }, b];
+    } else {
+      const a = exitPoint(from, dy > 0 ? "bottom" : "top"), b = exitPoint(to, dy > 0 ? "top" : "bottom");
+      points = [a, { x: a.x, y: (a.y + b.y) / 2 }, { x: b.x, y: (a.y + b.y) / 2 }, b];
+    }
+    const a = points[0], b = points[points.length - 1];
+    let labelStart = points[0], labelEnd = points[1];
+    for (let i = 1; i < points.length; i += 1) {
+      if (Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y) > Math.hypot(labelEnd.x - labelStart.x, labelEnd.y - labelStart.y)) { labelStart = points[i - 1]; labelEnd = points[i]; }
+    }
+    if (from.id === to.id) { labelStart = points[1]; labelEnd = points[2]; }
+    const verticalLabel = labelStart.x === labelEnd.x;
+    const cardinality = (value: string | undefined, start: boolean) => {
+      if (!value) return [];
+      const p = start ? a : b, next = start ? points[1] : points[points.length - 2];
+      const length = Math.hypot(next.x - p.x, next.y - p.y) || 1;
+      return [{ text: value, x: p.x + (next.x - p.x) / length * 26 + (Math.abs(next.x - p.x) < 1 ? 20 : 0), y: p.y + (next.y - p.y) / length * 26 - 12 }];
+    };
+    return {
+      points, path: toPath(points),
+      label: place(plain, (labelStart.x + labelEnd.x) / 2 + (verticalLabel ? (plain?.width ?? 0) / 2 + 6 : 0), (labelStart.y + labelEnd.y) / 2 - (!verticalLabel ? (plain?.height ?? 0) / 2 + 4 : 0)),
+      marker: ["dependency", "realization"].includes(edge.relation) ? "open" : "solid",
+      endMarker: ["inheritance", "realization"].includes(edge.relation) ? "inheritance" : ["association", "aggregation", "composition", "communication"].includes(edge.relation) ? "none" : undefined,
+      startMarker: edge.relation === "aggregation" || edge.relation === "composition" ? edge.relation : undefined,
+      cardinalities: [...cardinality(edge.fromCardinality, true), ...cardinality(edge.toCardinality, false)],
+    };
+  }
 
   // Use case: garis lurus antar pusat.
   if (["actor", "usecase"].includes(from.type) || ["actor", "usecase"].includes(to.type)) {

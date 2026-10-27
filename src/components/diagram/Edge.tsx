@@ -70,7 +70,7 @@ function LabelBox({ label }: { label: PlacedLabel }) {
  */
 const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode, nodes }) => {
   const route = routeEdge(edge, fromNode, toNode, nodes);
-  const dashed = Boolean(edge.dashed) || ['return', 'create'].includes(messageKind(edge));
+  const dashed = Boolean(edge.dashed) || ['return', 'create'].includes(messageKind(edge)) || ['dependency', 'realization'].includes(edge.relation ?? '');
   return (
     <g className="edge-group">
       <path d={route.path} fill="none" stroke="transparent" strokeWidth="12" />
@@ -80,7 +80,8 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode, nodes }) => {
         stroke={dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}
         strokeWidth={EDGE_STROKE_WIDTH}
         strokeDasharray={dashed ? EDGE_DASH : 'none'}
-        markerEnd={`url(#${route.marker === 'open' ? 'arrowhead-open' : dashed ? 'arrowhead-dashed' : 'arrowhead'})`}
+        markerStart={route.startMarker ? `url(#${route.startMarker})` : undefined}
+        markerEnd={route.endMarker === 'none' ? undefined : `url(#${route.endMarker === 'inheritance' ? 'inheritance' : route.marker === 'open' ? 'arrowhead-open' : dashed ? 'arrowhead-dashed' : 'arrowhead'})`}
       />
     </g>
   );
@@ -88,9 +89,8 @@ const Edge: React.FC<EdgeProps> = ({ edge, fromNode, toNode, nodes }) => {
 
 /** Label edge, dirender di atas node (urutan sama dengan render-svg.ts). */
 export const EdgeLabel: React.FC<EdgeLabelProps> = ({ edge, fromNode, toNode, nodes }) => {
-  if (!edge.label) return null;
-  const { label } = routeEdge(edge, fromNode, toNode, nodes);
-  return label ? <LabelBox label={label} /> : null;
+  const { label, cardinalities } = routeEdge(edge, fromNode, toNode, nodes);
+  return <g>{label && <LabelBox label={label} />}{cardinalities?.map((c, i) => <text key={i} x={c.x} y={c.y} textAnchor="middle" fill={EDGE_STROKE} fontSize={15} fontFamily={FONT_FAMILY} stroke="white" strokeWidth={4} paintOrder="stroke">{c.text}</text>)}</g>;
 };
 
 export default Edge;

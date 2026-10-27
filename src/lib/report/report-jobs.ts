@@ -44,6 +44,7 @@ import { diagramToSvg, summarizeDiagram } from "@/lib/uml/render-svg";
 import { generateConceptForReport, isConceptDiagramType } from "@/lib/uml/render-concept";
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
+import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 
 // ---------------------------------------------------------------------------
 // Jenis step. Disimpan lewat prefix `sectionId` supaya tidak perlu kolom baru:
@@ -190,7 +191,7 @@ function parseLog(raw: unknown): ReportJobEvent[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter((item): item is ReportJobEvent => (
     typeof item === "object" && item !== null && typeof (item as ReportJobEvent).msg === "string"
-  ));
+  )).map((event) => ({ ...event, msg: sanitizePublicErrorText(event.msg) }));
 }
 
 function countWords(text: string | null) {
@@ -233,14 +234,14 @@ function toPublic(row: JobRow): ReportJob {
     tokensUsed: row.steps.reduce((acc, step) => acc + step.tokensUsed, 0),
     result: row.result || undefined,
     source: row.source || undefined,
-    error: row.error || undefined,
+    error: row.error ? toPublicErrorMessage(row.error) : undefined,
     steps: row.steps.map((step) => ({
       index: step.index,
       title: step.title,
       kind: stepKind(step.sectionId),
       status: step.status as ReportStepStatus,
       attempts: step.attempts,
-      error: step.error || undefined,
+      error: step.error ? toPublicErrorMessage(step.error) : undefined,
       startedAt: step.startedAt?.toISOString(),
       finishedAt: step.finishedAt?.toISOString(),
       tokensUsed: step.tokensUsed,
@@ -270,7 +271,7 @@ function progressFor(done: number, total: number) {
  * di memori lalu ditulis ulang (ukuran kecil, < 20 KB).
  */
 async function appendLog(jobId: string, current: ReportJobEvent[], level: ReportJobEvent["level"], msg: string, extra?: Prisma.ReportJobUpdateInput) {
-  const event: ReportJobEvent = { t: new Date().toISOString(), level, msg: msg.slice(0, 400) };
+  const event: ReportJobEvent = { t: new Date().toISOString(), level, msg: sanitizePublicErrorText(msg).slice(0, 400) };
   current.push(event);
   if (current.length > LOG_LIMIT) current.splice(0, current.length - LOG_LIMIT);
   await prisma.reportJob.update({
@@ -376,7 +377,7 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
         await startImageJob({ ownerId, prompt: `${figure.prompt}\n\nStyle: clean technical illustration for an academic report, white background, flat vector look, high contrast, minimal text, no watermark.`, title: figure.title, sessionId });
         started += 1;
       } catch (error) {
-        log.push({ t: new Date().toISOString(), level: "warn", msg: `Ilustrasi "${figure.title}" tidak dimulai: ${error instanceof Error ? error.message.slice(0, 120) : "gagal"}` });
+        log.push({ t: new Date().toISOString(), level: "warn", msg: sanitizePublicErrorText(`Ilustrasi "${figure.title}" tidak dimulai: ${toPublicErrorMessage(error, "gagal")}`) });
       }
     }
     if (started) log.push({ t: new Date().toISOString(), level: "info", msg: `${started} ilustrasi dibuat di background (±2 menit/gambar)` });
@@ -481,7 +482,7 @@ export async function advanceReportJob(id: string, ownerId: string): Promise<Rep
 
   // Jalankan di background: request poll tidak menunggu, jadi tidak kena batas proxy.
   void withHardTimeout(runNextStep(row, ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
-    .catch((error) => console.error(`advance job ${id}:`, error instanceof Error ? error.message : error))
+    .catch((error) => console.error(`advance job ${id}:`, sanitizePublicErrorText(error instanceof Error ? error.message : String(error))))
     .finally(() => releaseLock(id, token));
 
   // Beri waktu singkat agar transisi "running" tercatat sebelum state dibaca.
@@ -515,7 +516,7 @@ export async function tickReportJobs(limit = 2) {
     if (!acquireLock(row.id, token)) continue;
     // Tick juga tidak menunggu: hanya memicu step di background.
     void withHardTimeout(runNextStep(row, row.ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
-      .catch((error) => console.error(`tick job ${row.id}:`, error instanceof Error ? error.message : error))
+      .catch((error) => console.error(`tick job ${row.id}:`, sanitizePublicErrorText(error instanceof Error ? error.message : String(error))))
       .finally(() => releaseLock(row.id, token));
     processed.push({ id: row.id, status: row.status, stage: row.stage });
   }
@@ -655,8 +656,8 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
     await pendingWrite;
   } catch (error) {
     await pendingWrite;
-    const message = error instanceof Error ? error.message.slice(0, 300) : "unknown";
-    console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptNo}):`, message);
+    const message = toPublicErrorMessage(error, "Langkah laporan gagal. Coba lagi.");
+    console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptNo}):`, sanitizePublicErrorText(error instanceof Error ? error.message : "unknown").slice(0, 300));
     // Teks parsial terbaik yang kita punya untuk dilanjutkan percobaan berikutnya.
     const partial = error instanceof ChapterTimeoutError && error.partial.length > (latestPartial?.length ?? 0)
       ? error.partial
@@ -776,16 +777,17 @@ async function runDiagramStep(
   const stepStarted = step.startedAt?.getTime() ?? Date.now();
 
   const persistFailure = async (error: string) => {
-    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error } : diagram));
+    const message = toPublicErrorMessage(error, "Diagram gagal dibuat.");
+    const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error: message } : diagram));
     await prisma.reportJob.update({
       where: { id: row.id },
       data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
     });
     await prisma.reportJobStep.update({
       where: { id: step.id },
-      data: { status: "fallback", error: error.slice(0, 300), finishedAt: new Date() },
+      data: { status: "fallback", error: message, finishedAt: new Date() },
     });
-    emit(`Diagram "${target.title}" tidak jadi dibuat: ${error} → bab menjelaskan secara naratif tanpa gambar`);
+    emit(`Diagram "${target.title}" tidak jadi dibuat: ${message} → bab menjelaskan secara naratif tanpa gambar`);
   };
   const persistArtifact = async (artifact: ReportDiagramArtifact, summary: string, output: Record<string, unknown>, doneMsg: string) => {
     const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, ...artifact } : diagram));

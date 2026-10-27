@@ -3,6 +3,10 @@
 import { getErrorMessage } from "@/lib/errors";
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DiagramNode, DiagramEdge, NodeType, DiagramType } from '@/lib/types/diagram';
+import { DIAGRAM_TYPES, isDiagramType } from '@/lib/types/diagram';
+import { isStructuralType } from '@/lib/uml/structure';
+import { isStructuralNode } from '@/lib/uml/structure-shapes';
+import StructureControls from '@/components/diagram/StructureControls';
 import DiagramCanvas from '@/components/diagram/DiagramCanvas';
 import SequenceControls from '@/components/diagram/SequenceControls';
 import { isSequenceNode } from '@/lib/uml/sequence';
@@ -85,6 +89,7 @@ const supportedNodeTypes = new Set<NodeType>([
   'fragment',
   'note',
   'ref',
+  'class', 'state', 'initial', 'final', 'entity', 'component', 'interface', 'device', 'execution', 'artifact',
 ]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => (
@@ -179,6 +184,9 @@ function normalizeApiEdges(value: unknown): DiagramEdge[] {
       direction,
       y: typeof edge.y === 'number' && Number.isFinite(edge.y) ? edge.y : undefined,
       kind: edge.kind === 'sync' || edge.kind === 'async' || edge.kind === 'return' || edge.kind === 'create' || edge.kind === 'destroy' ? edge.kind : undefined,
+      relation: typeof edge.relation === 'string' ? edge.relation as DiagramEdge['relation'] : undefined,
+      fromCardinality: typeof edge.fromCardinality === 'string' ? edge.fromCardinality : undefined,
+      toCardinality: typeof edge.toCardinality === 'string' ? edge.toCardinality : undefined,
     }];
   });
 }
@@ -214,7 +222,7 @@ function normalizeApiNodes(
       width = lifelineWidth(text, lifelineMax);
       height = typeof node.height === 'number' && Number.isFinite(node.height) && node.height > 0 ? node.height : 420;
     }
-    if (isSequenceNode({ type }) && type !== 'lifeline') {
+    if ((isSequenceNode({ type }) && type !== 'lifeline') || isStructuralNode({ type } as DiagramNode)) {
       width = typeof node.width === 'number' && Number.isFinite(node.width) && node.width > 0 ? node.width : width;
       height = typeof node.height === 'number' && Number.isFinite(node.height) && node.height > 0 ? node.height : height;
     }
@@ -240,6 +248,10 @@ function normalizeApiNodes(
       depth: typeof node.depth === 'number' ? node.depth : undefined,
       fragmentKind: node.fragmentKind === 'alt' || node.fragmentKind === 'opt' || node.fragmentKind === 'loop' || node.fragmentKind === 'par' || node.fragmentKind === 'break' || node.fragmentKind === 'critical' ? node.fragmentKind : undefined,
       operands: Array.isArray(node.operands) ? node.operands.filter(isRecord).map((operand) => ({ guard: typeof operand.guard === 'string' ? operand.guard : '', y: typeof operand.y === 'number' ? operand.y : 0 })) : undefined,
+      attributes: stringList(node.attributes),
+      operations: stringList(node.operations),
+      stereotype: typeof node.stereotype === 'string' ? node.stereotype : undefined,
+      parentId: typeof node.parentId === 'string' ? node.parentId : undefined,
     };
   });
 }
@@ -380,7 +392,7 @@ export default function UMLBuilder() {
       diagramTypeRef.current = inferredType;
       showToast(`Tipe diagram diganti ke ${inferredType} sesuai permintaan.`);
     }
-    const dt = (inferredType || diagramType) as 'flowchart' | 'usecase' | 'activity' | 'sequence';
+    const dt = inferredType || diagramType;
     const snapshotBeforeAi = inferredType && inferredType !== diagramType
       ? { nodes: [] as DiagramNode[], edges: [] as DiagramEdge[], meta: { ...diagramMeta, title: undefined, lanes: [] } }
       : { nodes, edges, meta: diagramMeta };
@@ -549,7 +561,7 @@ export default function UMLBuilder() {
       const returnedLanes = stringList(analysisData.lanes);
       const parsedNodes = normalizeApiNodes(analysisData.nodes, diagramType, wrapText);
       const nextEdges = normalizeApiEdges(analysisData.edges);
-      const referenceValidation = validateDiagramData(parsedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence');
+      const referenceValidation = validateDiagramData(parsedNodes, nextEdges, diagramType);
       if (!referenceValidation.ok) {
         setAiWarnings(referenceValidation.errors);
         setAiClarification('Struktur hasil pembacaan gambar belum valid. Gunakan gambar yang lebih jelas atau tambahkan deskripsi.');
@@ -558,7 +570,7 @@ export default function UMLBuilder() {
       }
 
       saveToHistory();
-      const nextNodes = autoLayoutDiagram(parsedNodes, nextEdges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', returnedLanes);
+      const nextNodes = autoLayoutDiagram(parsedNodes, nextEdges, diagramType, returnedLanes);
       setNodes(nextNodes);
       setEdges(nextEdges);
       setDiagramMeta((prev) => ({ ...prev, title: analysisData.title || prev.title, lanes: returnedLanes, laneWidth: LANE_WIDTH }));
@@ -592,7 +604,7 @@ export default function UMLBuilder() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (!nodes.length || nodes.every((node) => node.pinned)) return;
-      const nextNodes = autoLayoutDiagram(nodes, edges, diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence', diagramMeta.lanes);
+      const nextNodes = autoLayoutDiagram(nodes, edges, diagramType, diagramMeta.lanes);
       const changed = nextNodes.some((node, index) => {
         const prev = nodes[index];
         return !prev || prev.x !== node.x || prev.y !== node.y || prev.offsetX !== node.offsetX || prev.offsetY !== node.offsetY;
@@ -615,7 +627,7 @@ export default function UMLBuilder() {
     setNodes(autoLayoutDiagram(
       nodes,
       edges,
-      diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence',
+      diagramType,
       diagramMeta.lanes,
     ));
     setDiagramMeta((prev) => ({ ...prev, laneWidth: LANE_WIDTH }));
@@ -639,7 +651,7 @@ export default function UMLBuilder() {
       try {
         const parsed = JSON.parse(prefill);
         if (parsed.prompt) setAiPrompt(parsed.prompt);
-        if (parsed.diagramType && ['flowchart', 'usecase', 'activity', 'sequence'].includes(parsed.diagramType)) {
+        if (isDiagramType(parsed.diagramType)) {
           setDiagramType(parsed.diagramType);
         }
         loadedPrefillRef.current = true;
@@ -686,11 +698,21 @@ export default function UMLBuilder() {
     setNodes(prev => {
       const source = prev.find((n) => n.id === id);
       const dx = Math.max(0, newX) - (source?.x ?? 0);
+      const dy = Math.max(0, newY) - (source?.y ?? 0);
+      const descendants = new Set([id]);
+      if (diagramType === 'deployment') {
+        for (let i = 0; i < prev.length; i += 1) {
+          prev.forEach((node) => {
+            if (node.parentId && descendants.has(node.parentId)) descendants.add(node.id);
+          });
+        }
+      }
       return prev.map(n => {
         if (diagramType === 'sequence' && source?.type === 'lifeline') {
           if (n.id === id || n.attachTo?.includes(id)) return { ...n, x: n.x + dx, pinned: true };
           return n;
         }
+        if (diagramType === 'deployment' && descendants.has(n.id)) return { ...n, x: n.x + dx, y: n.y + dy, pinned: true };
         if (n.id !== id) return n;
         const y = Math.max(0, newY);
         return { ...n, x: Math.max(0, newX), y, operands: n.operands?.map((o) => ({ ...o, y: o.y + y - n.y })), pinned: true };
@@ -726,6 +748,7 @@ export default function UMLBuilder() {
 
   const handleNodeClick = useCallback((id: string) => {
     if (connectMode) {
+      if (isStructuralType(diagramType)) { showToast('Gunakan panel relasi untuk memilih notasi hubungan.'); setConnectMode(false); return; }
       if (diagramType === 'sequence') { showToast('Gunakan panel Simbol Sequence untuk menambahkan pesan berurutan.'); setConnectMode(false); return; }
       if (!connectFromId) {
         setConnectFromId(id);
@@ -788,6 +811,9 @@ export default function UMLBuilder() {
       } else if (diagramType === 'sequence') {
         setNewNodeType('lifeline');
         setParentId('');
+      } else if (isStructuralType(diagramType)) {
+        setNewNodeType(diagramType === 'erd' ? 'entity' : diagramType === 'deployment' ? 'device' : diagramType);
+        setParentId('');
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -800,6 +826,9 @@ export default function UMLBuilder() {
     sequence: { nodes: [], edges: [] },
     activity: { nodes: [], edges: [] },
     state: { nodes: [], edges: [] },
+    erd: { nodes: [], edges: [] },
+    component: { nodes: [], edges: [] },
+    deployment: { nodes: [], edges: [] },
   });
 
   const STORAGE_KEY = 'uml-diagram-projects-v2';
@@ -869,7 +898,7 @@ export default function UMLBuilder() {
       showToast('Diagram ini belum tersambung ke penyusun laporan.');
       return;
     }
-    if (!nodes.length || !edges.length) {
+    if (!nodes.length || (!edges.length && !isStructuralType(diagramType))) {
       showToast('Buat diagram terlebih dahulu sebelum disetujui.');
       return;
     }
@@ -877,7 +906,7 @@ export default function UMLBuilder() {
     const approvalValidation = validateDiagramData(
       nodes,
       edges,
-      diagramType as 'flowchart' | 'usecase' | 'activity' | 'sequence',
+      diagramType,
     );
     if (!approvalValidation.ok) {
       showToast(approvalValidation.errors[0] || 'Diagram belum lolos pemeriksaan kualitas.');
@@ -1087,7 +1116,7 @@ export default function UMLBuilder() {
         const width = lifelineWidth(newText, Math.max(n.width, sequenceGap(prev.filter((item) => item.type === 'lifeline').length) - 12));
         return { ...n, text: newText, lines, x: n.x + (n.width - width) / 2, width };
       }
-      if (isSequenceNode(n)) return { ...n, text: newText, lines };
+      if (isSequenceNode(n) || isStructuralNode(n)) return { ...n, text: newText, lines };
       return { ...n, text: newText, lines, ...nodeSizeFor(n.type, newText) };
     }));
   }, [wrapText]);
@@ -1097,7 +1126,7 @@ export default function UMLBuilder() {
     const incomingEdges = edges.filter(e => e.toId === id);
     const outgoingEdges = edges.filter(e => e.fromId === id);
     const newEdges: DiagramEdge[] = [];
-    if (diagramType !== 'sequence') incomingEdges.forEach(incoming => {
+    if (diagramType === 'flowchart' || diagramType === 'activity') incomingEdges.forEach(incoming => {
       outgoingEdges.forEach(outgoing => {
         const alreadyExists = edges.some(e => e.fromId === incoming.fromId && e.toId === outgoing.toId);
         if (!alreadyExists) {
@@ -1110,10 +1139,16 @@ export default function UMLBuilder() {
         }
       });
     });
-    setNodes(prev => prev.filter(n => n.id !== id && !n.attachTo?.includes(id)));
-    setEdges(prev => [...prev.filter(e => e.fromId !== id && e.toId !== id), ...newEdges]);
+    const removed = new Set([id]);
+    for (let i = 0; i < nodes.length; i += 1) {
+      nodes.forEach((node) => {
+        if (node.parentId && removed.has(node.parentId)) removed.add(node.id);
+      });
+    }
+    setNodes(prev => prev.filter(n => !removed.has(n.id) && !n.attachTo?.some((key) => removed.has(key))));
+    setEdges(prev => [...prev.filter(e => !removed.has(e.fromId) && !removed.has(e.toId)), ...newEdges]);
     setSelectedNodeId(null);
-  }, [saveToHistory, edges, diagramType]);
+  }, [saveToHistory, edges, diagramType, nodes]);
 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
@@ -1294,7 +1329,7 @@ export default function UMLBuilder() {
         if (!actorIds.length) showToast('Tambahkan aktor dulu, lalu hubungkan ke use case ini.');
         setSelectedActorIds([]);
       }
-    } else if (parentNode && diagramType !== 'sequence') {
+    } else if (parentNode && (diagramType === 'flowchart' || diagramType === 'activity')) {
       let edgeDirection: 'right' | 'left' | 'bottom' | 'straight' | undefined;
       if (parentNode.type === 'decision') {
         if (branchType === 'yes') edgeDirection = 'right';
@@ -1535,25 +1570,18 @@ export default function UMLBuilder() {
             <div className={styles.inputGroup}>
               <label htmlFor="diagram-type">Jenis Diagram</label>
               <select id="diagram-type" value={diagramType} onChange={(e) => handleSwitchDiagram(e.target.value as DiagramType)}>
-                <option value="flowchart">Flowchart</option>
-                <option value="usecase">Use Case Diagram</option>
-                <option value="activity">Activity Diagram</option>
-                <option value="sequence">Sequence Diagram</option>
-                <optgroup label="Coming Soon">
-                  <option value="class" disabled>Class Diagram (soon)</option>
-                  <option value="state" disabled>State Diagram (soon)</option>
-                </optgroup>
+                {DIAGRAM_TYPES.map((type) => <option key={type} value={type}>{type === 'erd' ? 'ERD' : `${type.charAt(0).toUpperCase()}${type.slice(1)} Diagram`}</option>)}
               </select>
             </div>
 
             <div className={styles.inputGroup}>
-              <label htmlFor={(diagramType === 'flowchart' || diagramType === 'activity') ? 'diagram-parent' : undefined}>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Lanjutkan Dari' : diagramType === 'sequence' ? 'Partisipan' : 'Aktor Tujuan'}</label>
+              <label htmlFor={(diagramType === 'flowchart' || diagramType === 'activity') ? 'diagram-parent' : undefined}>{(diagramType === 'flowchart' || diagramType === 'activity') ? 'Lanjutkan Dari' : diagramType === 'sequence' ? 'Partisipan' : isStructuralType(diagramType) ? 'Elemen Diagram' : 'Aktor Tujuan'}</label>
               {(diagramType === 'flowchart' || diagramType === 'activity') ? (
                 <select id="diagram-parent" value={parentId} onChange={(e) => setParentId(e.target.value)}>
                   <option value="">(Last Symbol)</option>
                   {nodes.map((n, i) => <option key={n.id} value={n.id}>[{i + 1}] {n.text.substring(0, 30)}</option>)}
                 </select>
-              ) : diagramType === 'sequence' ? (
+              ) : isStructuralType(diagramType) ? <small>{nodes.length} elemen, {edges.length} relasi. Tambahkan simbol dan relasi lewat panel di bawah.</small> : diagramType === 'sequence' ? (
                 <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', padding: '5px', border: '1px solid #e2e8f0', borderRadius: '4px', background: 'white', minHeight: '36px' }}>
                   {nodes.filter(n => n.type === 'lifeline').map((participant, i) => (
                     <span key={participant.id} style={{ padding: '4px 8px', borderRadius: '999px', background: '#f1f5f9', color: '#475569', fontSize: '0.7rem', fontWeight: 800 }}>[{i + 1}] {participant.text}</span>
@@ -1577,7 +1605,7 @@ export default function UMLBuilder() {
               )}
             </div>
 
-            <div className={styles.inputGroup}>
+            <div className={styles.inputGroup} style={{ display: isStructuralType(diagramType) ? 'none' : undefined }}>
               <label htmlFor="node-type">Jenis Simbol</label>
               <select id="node-type" value={newNodeType} onChange={(e) => setNewNodeType(e.target.value as NodeType)}>
                 {diagramType === 'flowchart' ? (
@@ -1626,7 +1654,8 @@ export default function UMLBuilder() {
             )}
 
             {diagramType === 'sequence' && <SequenceControls nodes={nodes} edges={edges} onError={showToast} onChange={(nextNodes, nextEdges) => { saveToHistory(); setNodes(nextNodes); setEdges(nextEdges); }} />}
-            <div className={styles.inputGroup} style={{ flex: 2, minWidth: '300px', maxWidth: '600px', display: diagramType === 'sequence' ? 'none' : undefined }}>
+            {isStructuralType(diagramType) && <StructureControls diagramType={diagramType} nodes={nodes} edges={edges} onError={showToast} onChange={(nextNodes, nextEdges) => { saveToHistory(); setNodes(nextNodes); setEdges(nextEdges); }} />}
+            <div className={styles.inputGroup} style={{ flex: 2, minWidth: '300px', maxWidth: '600px', display: diagramType === 'sequence' || isStructuralType(diagramType) ? 'none' : undefined }}>
               <label htmlFor="new-node-label">Label Elemen</label>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
 

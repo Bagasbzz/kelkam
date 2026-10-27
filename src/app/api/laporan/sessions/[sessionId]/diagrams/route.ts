@@ -11,13 +11,14 @@ import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } 
 import { approveDiagramToSession } from "@/lib/server/laporan/assistant";
 import { validateDiagramData, type SupportedDiagramType } from "@/lib/uml/diagram-guard";
 import type { DiagramEdge, DiagramNode } from "@/lib/types/diagram";
+import { DIAGRAM_TYPES } from "@/lib/types/diagram";
 
 export const runtime = "nodejs";
 const NO_STORE = { headers: { "Cache-Control": "private, no-store" } };
 
 const NodeSchema = z.object({
   id: z.string().min(1).max(80),
-  type: z.enum(["start", "end", "process", "decision", "actor", "usecase", "system", "activity", "fork", "join", "lifeline", "activation", "fragment", "note", "ref"]),
+  type: z.enum(["start", "end", "process", "decision", "actor", "usecase", "system", "activity", "fork", "join", "lifeline", "activation", "fragment", "note", "ref", "class", "state", "initial", "final", "entity", "component", "interface", "device", "execution", "artifact"]),
   text: z.string().max(400),
   lines: z.array(z.string().max(200)).max(20).default([]),
   lane: z.string().max(80).optional(),
@@ -34,6 +35,10 @@ const NodeSchema = z.object({
   depth: z.number().int().min(0).max(20).optional(),
   fragmentKind: z.enum(["alt", "opt", "loop", "par", "break", "critical"]).optional(),
   operands: z.array(z.object({ guard: z.string().max(160), y: z.number().finite() })).max(12).optional(),
+  attributes: z.array(z.string().max(160)).max(20).optional(),
+  operations: z.array(z.string().max(160)).max(20).optional(),
+  stereotype: z.string().max(80).optional(),
+  parentId: z.string().max(80).optional(),
 });
 const EdgeSchema = z.object({
   id: z.string().min(1).max(80),
@@ -44,10 +49,13 @@ const EdgeSchema = z.object({
   direction: z.enum(["right", "left", "bottom", "straight"]).optional(),
   y: z.number().finite().optional(),
   kind: z.enum(["sync", "async", "return", "create", "destroy"]).optional(),
+  relation: z.enum(["association", "inheritance", "realization", "aggregation", "composition", "dependency", "transition", "communication"]).optional(),
+  fromCardinality: z.string().max(20).optional(),
+  toCardinality: z.string().max(20).optional(),
 });
 const BodySchema = z.object({
   diagramId: z.string().min(1).max(80),
-  diagramType: z.enum(["flowchart", "usecase", "activity", "sequence"]),
+  diagramType: z.enum(DIAGRAM_TYPES),
   title: z.string().max(160).optional(),
   nodes: z.array(NodeSchema).min(1).max(120),
   edges: z.array(EdgeSchema).max(300),

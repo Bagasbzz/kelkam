@@ -15,9 +15,12 @@
  */
 
 const MODEL_NAME_RE = /\b(gpt|o[1-4]|claude|gemini|llama|mistral|mixtral|qwen|deepseek|grok|sonnet|opus|haiku)[\w.:-]*/gi;
+const PROVIDER_FAILURE_RE = /payment[_ -]?required|no active plan|(?:insufficient|exhausted|not enough|no available) (?:credits?|balance)|credit balance|credits? (?:unavailable|exhausted)|(?:invalid|incorrect|missing)[_ -]?(?:api[_ -]?key)|authentication_error|\b(?:z0ne|openrouter|openai|anthropic)\b.*(?:error|failed|unauthorized|forbidden)|https?:\/\/[^\s]*\/(?:billing|v1\/chat\/completions)|\bsk-[\w-]+|bearer\s+\S+/i;
 
 /** Pola error teknis → pesan user. Urutan penting (lebih spesifik dulu). */
 const TECHNICAL_PATTERNS: Array<[RegExp, string]> = [
+  [/\b402\b|payment[_ -]?required|no active plan|(?:insufficient|exhausted|not enough|no available) (?:credits?|balance)|credit balance|credits? (?:unavailable|exhausted)|billing|top[ -]?up|purchase (?:a )?plan/i, "Layanan AI sedang tidak tersedia. Coba lagi beberapa saat."],
+  [/api[_ -]?key|invalid_api_key|incorrect api key|authentication_error|invalid.*(?:token|credential)|(?:openai|anthropic|provider).*\b(?:401|403|unauthorized|forbidden)\b/i, "Layanan AI sedang bermasalah. Coba lagi beberapa saat."],
   [/failed to fetch|networkerror|network request failed|load failed|fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|connection error/i, "Koneksi ke server terputus. Periksa internet Anda lalu coba lagi."],
   [/\b(502|503|504)\b|bad gateway|service unavailable|gateway time-?out|upstream/i, "Server sedang sibuk atau dimuat ulang. Coba lagi beberapa saat."],
   [/\b429\b|rate ?limit|too many requests|quota|insufficient_quota|kuota/i, "Layanan AI sedang penuh. Tunggu sebentar lalu coba lagi."],
@@ -26,7 +29,7 @@ const TECHNICAL_PATTERNS: Array<[RegExp, string]> = [
   [/\b413\b|payload too large|request entity too large|terlalu besar/i, "Data yang dikirim terlalu besar."],
   [/\b(500|HTTP 5\d\d)\b|internal server error/i, "Terjadi gangguan di server. Coba lagi beberapa saat."],
   [/prisma|P2\d{3}|unique constraint|foreign key|relation .* does not exist|column .* does not exist|database|postgres|connection pool/i, "Terjadi gangguan penyimpanan data. Coba lagi beberapa saat."],
-  [/openai|anthropic|api[_ -]?key|invalid_api_key|incorrect api key|model .* (not found|does not exist)|context_length|maximum context|content_policy|content management policy/i, "Layanan AI sedang bermasalah. Coba lagi beberapa saat."],
+  [/openai|anthropic|z0ne|openrouter|api[_ -]?key|invalid_api_key|incorrect api key|model .* (not found|does not exist)|context_length|maximum context|content_policy|content management policy/i, "Layanan AI sedang bermasalah. Coba lagi beberapa saat."],
   [/ENOENT|EACCES|EPERM|ENOSPC|no such file|permission denied/i, "Terjadi gangguan penyimpanan berkas. Coba lagi beberapa saat."],
   [/unexpected token|json\.parse|is not valid json|syntaxerror/i, "Respons server tidak valid. Coba lagi."],
   [/undefined is not|cannot read propert|is not a function|null is not an object|typeerror|referenceerror|rangeerror/i, "Terjadi kesalahan tak terduga. Coba muat ulang halaman."],
@@ -45,6 +48,7 @@ function looksTechnical(message: string) {
     /\bat\s+\S+\s+\(.+:\d+:\d+\)/.test(message) // stack frame
     || /[A-Za-z]:\\|\/(home|var|usr|srv)\//.test(message) // path OS
     || /\{"|\[object |<html|<!doctype/i.test(message)
+    || /https?:\/\/|www\.|\b(?:sk-[\w-]+|bearer\s+\S+|[\w.-]+\.ai\b)/i.test(message)
     || message.length > 300
   );
 }
@@ -54,11 +58,15 @@ function looksTechnical(message: string) {
  * tanpa jejak teknis) diteruskan; sisanya dipetakan ke fallback ramah.
  */
 export function getErrorMessage(error: unknown, fallback = "Terjadi kesalahan. Coba lagi."): string {
-  const raw = rawMessage(error).trim();
-  if (!raw) return fallback;
-  for (const [pattern, friendly] of TECHNICAL_PATTERNS) {
-    if (pattern.test(raw)) return friendly;
+  if (typeof error === "object" && error !== null && "status" in error && Number(error.status) === 402) {
+    return "Layanan AI sedang tidak tersedia. Coba lagi beberapa saat.";
   }
+  const raw = rawMessage(error).trim();
+  const code = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+  for (const [pattern, friendly] of TECHNICAL_PATTERNS) {
+    if (pattern.test(raw) || (code && pattern.test(code))) return friendly;
+  }
+  if (!raw) return fallback;
   if (looksTechnical(raw)) return fallback;
   // Jangan pernah tampilkan nama model/provider.
   return raw.replace(MODEL_NAME_RE, "AI").slice(0, 300);
@@ -66,6 +74,22 @@ export function getErrorMessage(error: unknown, fallback = "Terjadi kesalahan. C
 
 /** Alias server-side untuk pesan yang masuk ke event/log yang dilihat klien. */
 export const toPublicErrorMessage = getErrorMessage;
+
+/** For mixed status/log content: leave normal text intact, redact provider failures as a whole. */
+export function sanitizePublicErrorText(text: string): string {
+  if (!PROVIDER_FAILURE_RE.test(text)) return text;
+  const fallback = "Layanan AI sedang bermasalah. Coba lagi beberapa saat.";
+  const safe = getErrorMessage(text, fallback);
+  return PROVIDER_FAILURE_RE.test(safe) ? fallback : safe;
+}
+
+/** Redact legacy persisted failure replies without touching ordinary assistant text or links. */
+export function toPublicAssistantMessage(content: string): string {
+  const match = content.match(/^Maaf, proses gagal:\s*([\s\S]*)$/);
+  if (!match) return sanitizePublicErrorText(content);
+  const error = match[1].replace(/\.?\s*Ketik "lanjut" untuk mencoba meneruskan\.?\s*$/, "");
+  return `Maaf, proses belum berhasil. ${getErrorMessage(error)} Silakan coba lagi.`;
+}
 
 /** Pesan mentah (untuk console/log server saja, JANGAN dikirim ke klien). */
 export function getRawErrorMessage(error: unknown, fallback = "unknown error") {

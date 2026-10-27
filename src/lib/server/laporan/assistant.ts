@@ -10,6 +10,7 @@
  */
 import type OpenAI from "openai";
 import { prisma } from "@/lib/db/prisma";
+import { toPublicAssistantMessage, toPublicErrorMessage } from "@/lib/errors";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripDashes, stripThinking } from "@/lib/ai/client";
 import { promptInline } from "@/lib/ai/guard";
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
@@ -279,8 +280,8 @@ ALUR:
 3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED: user bisa minta revisi bagian tertentu, panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat, jangan membuat ulang kecuali diminta.
 5. VISUAL: laporan tidak boleh polos. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
-   a) diagrams type flowchart/usecase/activity/sequence: dibuat otomatis oleh engine UML Builder (vektor, bisa diedit user).
-   b) diagrams type arsitektur/erd/class/konsep/kerangka: dibuat otomatis sebagai diagram vektor terstruktur (kotak komponen + relasi), BUKAN gambar AI.
+   a) diagrams type flowchart/usecase/activity/sequence/class/state/erd/component/deployment: dibuat otomatis oleh engine UML Builder (notasi formal, vektor, bisa diedit user). Gunakan component untuk diagram komponen dan deployment untuk node server/perangkat.
+   b) diagrams type arsitektur/konsep/kerangka: dibuat otomatis sebagai diagram vektor konsep, BUKAN gambar AI.
    c) figures (ilustrasi: skema konsep, ilustrasi proses nyata, gambaran lingkungan/alat): dibuat otomatis lewat model gambar di background saat eksekusi; prompt bahasa Inggris, gaya ilustrasi teknis bersih latar putih, tanpa teks panjang.
    Target: tiap bab inti (landasan teori, metode/perancangan, hasil) punya minimal 1 visual; bab pendahuluan boleh 1 ilustrasi; semua diberi sectionId. Setelah drafted, bila user minta gambar tambahan, pakai generateFigure (ilustrasi), jangan untuk diagram.
 6. BAHAN USER: isi bahan di state hanya ringkasan awal. Untuk membahas kode/isi bahan secara spesifik, buka file aslinya: listMaterialFiles (daftar file ZIP proyek, telusuri per folder), readMaterialFile (isi file utuh, bisa beberapa path sekaligus), viewMaterialPages (halaman PDF/scan/gambar), extractMaterialImages (screenshot di DOCX/PDF/PPTX/ZIP). Untuk proyek web: baca dulu package.json/composer.json, README, skema DB (prisma/migrations/.sql), routes/API, lalu halaman/controller utama. Screenshot aplikasi dari bahan dimasukkan ke laporan lewat addMaterialFigure (bab hasil/implementasi), bukan dibuat ulang dengan generateFigure. packageMaterialsZip membuat ZIP bahan untuk diunduh.
@@ -338,7 +339,7 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
         type: "object",
         properties: {
           outline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, requiredDiagrams: { type: "array", items: { type: "string" } } }, required: ["title", "purpose"] } },
-          diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "UML: flowchart|usecase|activity|sequence. Non-UML (vektor terstruktur): arsitektur|erd|class|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen), bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
+           diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "Diagram editable: flowchart|usecase|activity|sequence|class|state|erd|component|deployment. Konsep non-UML: arsitektur|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen), bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
           tables: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, columns: { type: "array", items: { type: "string" } }, sectionId: { type: "string" } }, required: ["title", "purpose", "sectionId"] } },
           figures: { type: "array", description: "Ilustrasi non-diagram (maks 6) yang dibuat model gambar saat eksekusi.", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string", description: "Judul singkat Bahasa Indonesia, mis. 'Ilustrasi Proses Fermentasi'." }, caption: { type: "string" }, prompt: { type: "string", description: "Deskripsi visual detail bahasa Inggris untuk model gambar." }, sectionId: { type: "string" } }, required: ["title", "prompt", "sectionId"] } },
           sourceQueries: { type: "array", items: { type: "string" }, description: "3-6 query pencarian literatur (bahasa Inggris & Indonesia)." },
@@ -542,7 +543,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
     try {
       return await materialTool(materialCtx(state, emit, attachments), args);
     } catch (err) {
-      return { error: err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : err instanceof Error ? err.message : "Gagal membuka bahan." };
+      return { error: toPublicErrorMessage(err instanceof Error && "publicMessage" in err ? String((err as { publicMessage: string }).publicMessage) : err, "Gagal membuka bahan.") };
     }
   }
   switch (name) {
@@ -692,7 +693,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       try {
         job = await startImageJob({ ownerId: state.ownerId, prompt: stylePrompt, title, sessionId: state.id });
       } catch (err) {
-        return { error: err instanceof Error ? err.message : "Gagal memulai pembuatan gambar." };
+        return { error: toPublicErrorMessage(err, "Gagal memulai pembuatan gambar.") };
       }
       let placed: string | null = null;
       const placeholder = `[Gambar: ${title} - ${caption}]`;
@@ -719,7 +720,7 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       try {
         picked = await materialImageAsPng(materialCtx(state, emit, attachments), args.materialId, asStr(args.path, 400) || undefined);
       } catch (err) {
-        return { error: err instanceof Error ? err.message : "Gambar bahan tidak bisa diambil." };
+        return { error: toPublicErrorMessage(err, "Gambar bahan tidak bisa diambil.") };
       }
       const saved = await saveUpload({ ownerId: state.ownerId, buffer: picked.png, originalName: `${slug(title, 0)}.png`, mime: "image/png" });
       const plan = state.plan ?? { outline: [], diagrams: [], tables: [], figures: [], sourceQueries: [] };
@@ -851,7 +852,7 @@ async function announceJobFailed(state: SessionState, job: ReportJob) {
     if (await alreadyAnnounced(state.id, job.id)) return;
     const content = job.status === "cancelled"
       ? "Penulisan dibatalkan. Rencana dan sumber masih tersimpan; klik **Setujui & eksekusi** atau ketik \"eksekusi\" untuk memulai lagi."
-      : `Penulisan berhenti: ${job.error || "terjadi kesalahan"}. Ketik "eksekusi" untuk mencoba lagi, bagian yang sudah jadi tidak diulang.`;
+      : `Penulisan berhenti: ${toPublicErrorMessage(job.error)} Ketik "eksekusi" untuk mencoba lagi, bagian yang sudah jadi tidak diulang.`;
     await prisma.reportMessage.create({ data: { sessionId: state.id, role: "assistant", content, toolCalls: { tools: [], jobDone: job.id } } });
   } catch (error) {
     console.error("[laporan] announceJobFailed gagal:", error);
@@ -954,7 +955,7 @@ export async function approveDiagramToSession(sessionId: string, ownerId: string
       const diagrams = payload.diagrams.map((d) => {
         const dobj = asObj(d);
         if (dobj.id !== input.diagramId) return d;
-        return { ...dobj, title, status: "approved", diagramData: state.plan!.diagrams[idx].diagramData, svg, flowSummary, error: undefined };
+        return { ...dobj, title, type: input.diagramType || planned.type, status: "approved", diagramData: state.plan!.diagrams[idx].diagramData, svg, flowSummary, error: undefined };
       });
       await prisma.reportJob.update({ where: { id: state.jobId }, data: { payload: { ...payload, diagrams } as object } });
     }
@@ -1078,11 +1079,12 @@ export async function startReportAssistantRun(input: AssistantTurnInput): Promis
 
   await prisma.reportMessage.create({ data: { sessionId: state.id, role: "user", content: input.message } });
 
-  const all = await prisma.reportMessage.findMany({
+  const history = await prisma.reportMessage.findMany({
     where: { sessionId: state.id, role: { in: ["user", "assistant"] } },
     orderBy: { createdAt: "asc" },
     select: { role: true, content: true },
   });
+  const all = history.map((message) => message.role === "assistant" ? { ...message, content: toPublicAssistantMessage(message.content) } : message);
   let recent = all;
   if (all.length > HISTORY_LIMIT) {
     const old = all.slice(0, all.length - HISTORY_LIMIT);
@@ -1132,7 +1134,7 @@ MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama, boleh memanggil too
   },
   async onFinish(run: AgentRunPublic) {
     if (run.status === "cancelled" && !run.reply) return;
-    const content = run.reply || (run.status === "failed" ? `Maaf, proses gagal: ${run.error || "kesalahan tak dikenal"}. Ketik "lanjut" untuk mencoba meneruskan.` : "");
+    const content = run.reply || (run.status === "failed" ? `Maaf, proses belum berhasil. ${toPublicErrorMessage(run.error)} Silakan coba lagi.` : "");
     if (!content) return;
     const toolEvents = run.events.filter((e) => e.level === "tool").map((e) => e.text);
     await prisma.reportMessage.create({

@@ -28,7 +28,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { aiClient, stripDashes, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
 import { detectInjection, injectionWarning } from "@/lib/ai/guard";
-import { toPublicErrorMessage } from "@/lib/errors";
+import { sanitizePublicErrorText, toPublicAssistantMessage, toPublicErrorMessage } from "@/lib/errors";
 
 export type AgentKind = "laporan" | "tugas";
 export type AgentRunStatus = "queued" | "running" | "paused" | "waiting_user" | "done" | "failed" | "cancelled";
@@ -161,6 +161,26 @@ const nowIso = () => new Date().toISOString();
 const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 const asObj = (v: unknown): Record<string, unknown> => (typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
 
+function toPublicEvent(event: AgentEvent): AgentEvent {
+  return { ...event, text: sanitizePublicErrorText(event.text) };
+}
+
+/** Only error fields in tool context are private; successful tool content stays intact. */
+function sanitizeToolErrorContext(content: string): string {
+  let changed = false;
+  try {
+    const parsed: unknown = JSON.parse(content, (key, value: unknown) => {
+      if (key !== "error" || typeof value !== "string") return value;
+      const safe = toPublicErrorMessage(value);
+      if (safe !== value) changed = true;
+      return safe;
+    });
+    return changed ? JSON.stringify(parsed) : content;
+  } catch {
+    return sanitizePublicErrorText(content);
+  }
+}
+
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   let t: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error("AI timeout")), ms); });
@@ -176,12 +196,12 @@ function toPublic(row: Row): AgentRunPublic {
     status: row.status as AgentRunStatus,
     stepCount: row.stepCount,
     maxSteps: row.maxSteps,
-    events: asArr(row.events) as AgentEvent[],
+    events: (asArr(row.events) as AgentEvent[]).map(toPublicEvent),
     toolsUsed: asArr(row.toolsUsed).map(String),
     attachments: asArr(row.attachments) as AgentAttachment[],
     pendingQuestion: row.pendingQuestion ? (row.pendingQuestion as unknown as PendingQuestion) : null,
-    reply: row.reply,
-    error: row.error,
+    reply: row.reply === null ? null : toPublicAssistantMessage(row.reply),
+    error: row.error === null ? null : toPublicErrorMessage(row.error),
     idleSeconds: Math.max(0, Math.round((Date.now() - heartbeat.getTime()) / 1000)),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -201,7 +221,7 @@ async function loadDriver(kind: AgentKind): Promise<AgentDriver> {
 }
 
 function clipToolResult(obj: unknown): string {
-  const s = JSON.stringify(obj ?? null);
+  const s = sanitizeToolErrorContext(JSON.stringify(obj ?? null));
   const clipped = s.length > TOOL_RESULT_MAX_CHARS ? `${s.slice(0, TOOL_RESULT_MAX_CHARS)}…[dipotong]` : s;
   // Hasil tool bisa memuat konten pihak ketiga (file mahasiswa, PDF, web) → scan pola prompt injection.
   const warning = injectionWarning(detectInjection(s), "Hasil tool ini");
@@ -449,9 +469,9 @@ async function finishRun(
     where: { id: runId, finishedAt: null },
     data: {
       status: patch.status,
-      reply: patch.reply ?? undefined,
-      error: patch.error ?? undefined,
-      events: patch.events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue,
+      reply: patch.reply == null ? undefined : toPublicAssistantMessage(patch.reply),
+      error: patch.error == null ? undefined : toPublicErrorMessage(patch.error),
+      events: patch.events.slice(-EVENT_LIMIT).map(toPublicEvent) as unknown as Prisma.InputJsonValue,
       pendingQuestion: patch.pendingQuestion ? (patch.pendingQuestion as unknown as Prisma.InputJsonValue) : undefined,
       messages: patch.messages ? (patch.messages as unknown as Prisma.InputJsonValue) : undefined,
       toolsUsed: patch.toolsUsed ? (patch.toolsUsed as unknown as Prisma.InputJsonValue) : undefined,
@@ -469,7 +489,7 @@ async function finishRun(
       const driver = await loadDriver(pub.kind);
       await driver.onFinish({ ...pub, meta: asObj(row.meta) });
     } catch (err) {
-      console.error(`[agent-run ${runId}] onFinish gagal:`, err instanceof Error ? err.message : err);
+      console.error(`[agent-run ${runId}] onFinish gagal:`, sanitizePublicErrorText(err instanceof Error ? err.message : String(err)));
     }
   }
   return pub;
@@ -487,8 +507,12 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   const ref = toRef(row0);
   const driver = await loadDriver(ref.kind);
 
-  let messages = asArr(row0.messages) as Msg[];
-  const events = asArr(row0.events) as AgentEvent[];
+  let messages = (asArr(row0.messages) as Msg[]).map((message) => (
+    message.role === "tool" && typeof message.content === "string"
+      ? { ...message, content: sanitizeToolErrorContext(message.content) }
+      : message
+  ));
+  const events = (asArr(row0.events) as AgentEvent[]).map(toPublicEvent);
   const toolsUsed = asArr(row0.toolsUsed).map(String);
   const attachments = asArr(row0.attachments) as AgentAttachment[];
   let stepCount = row0.stepCount;
@@ -510,7 +534,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
     return flushing;
   };
   const emit = (text: string, level: AgentEvent["level"] = "info") => {
-    const ev: AgentEvent = { t: nowIso(), text: text.slice(0, 400), level };
+    const ev: AgentEvent = { t: nowIso(), text: sanitizePublicErrorText(text).slice(0, 400), level };
     events.push(ev);
     if (events.length > EVENT_LIMIT) events.splice(0, events.length - EVENT_LIMIT);
     opts.emit?.({ type: "event", event: ev });
@@ -614,7 +638,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         consecutiveErrors = 0;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[agent-run ${runId}] AI error:`, msg.slice(0, 300));
+        console.warn(`[agent-run ${runId}] AI error:`, sanitizePublicErrorText(msg).slice(0, 300));
         // Rate limit bukan kegagalan: ganti model, tunggu sesuai "reset after" bila masih muat di segmen.
         const waitMs = rateLimitWaitMs(err);
         if (waitMs !== null) {
@@ -710,11 +734,10 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         try {
           result = await driver.runTool(name, args, { run: ref, emit: (text) => emit(text), attachments, toolsUsed, messages });
         } catch (err) {
-          // Pesan mentah hanya untuk konteks model (bukan user); log + event publik disaring.
-          const raw = err instanceof Error ? err.message : "Tool gagal.";
-          console.warn(`[agent-run ${runId}] tool ${name} gagal:`, raw.slice(0, 300));
-          result = { error: raw.slice(0, 400) };
-          emit(`${describeTool(driver, name)} gagal: ${toPublicErrorMessage(err, "terjadi gangguan")}`, "warn");
+          const message = toPublicErrorMessage(err, "Tool gagal.");
+          console.warn(`[agent-run ${runId}] tool ${name} gagal:`, sanitizePublicErrorText(err instanceof Error ? err.message : "Tool gagal.").slice(0, 300));
+          result = { error: message };
+          emit(`${describeTool(driver, name)} gagal: ${message}`, "warn");
         }
         const secs = Math.round((Date.now() - t0) / 1000);
         if (secs >= 3) emit(`${describeTool(driver, name)} selesai (${secs}s)`);
@@ -734,7 +757,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       }
     }
   } catch (err) {
-    console.error(`[agent-run ${runId}] loop error:`, err instanceof Error ? err.message : err);
+    console.error(`[agent-run ${runId}] loop error:`, sanitizePublicErrorText(err instanceof Error ? err.message : String(err)));
     const message = toPublicErrorMessage(err, "Terjadi kesalahan tak terduga.");
     emit(`${message}, run disimpan, bisa dilanjutkan.`, "error");
     await flushing;
@@ -811,7 +834,7 @@ export async function tickAgentRuns(limit = 1, budgetMs = 80_000) {
       const r = await serveAgentRun(c.id, c.ownerId, { budgetMs });
       processed.push({ id: c.id, status: r.status });
     } catch (err) {
-      console.error(`[agent-run tick ${c.id}]`, err instanceof Error ? err.message : err);
+      console.error(`[agent-run tick ${c.id}]`, sanitizePublicErrorText(err instanceof Error ? err.message : String(err)));
     }
   }
   return { scanned: candidates.length, processed };

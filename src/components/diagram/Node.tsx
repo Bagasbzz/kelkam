@@ -3,6 +3,7 @@ import { DiagramNode } from '@/lib/types/diagram';
 import { layoutNodeText } from '@/lib/uml/text-fit';
 import { isSequenceNode } from '@/lib/uml/sequence';
 import { sequenceShapes } from '@/lib/uml/sequence-shapes';
+import { isStructuralNode, structuralShapes } from '@/lib/uml/structure-shapes';
 import {
   FONT_FAMILY,
   INK,
@@ -38,6 +39,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
 
   const renderShape = () => {
     if (isSequenceNode(node)) return sequenceShapes(node, borderColor, borderWidth).map((shape, i) => React.createElement(shape.tag, { ...shape.attrs, key: i }, shape.text));
+    if (isStructuralNode(node)) return structuralShapes(node, borderColor, borderWidth).map((shape, i) => React.createElement(shape.tag, { ...shape.attrs, key: i }, shape.text));
     switch (type) {
       case 'start':
       case 'end':
@@ -171,7 +173,7 @@ const Node: React.FC<NodeProps> = ({ node, isSelected, isConnectSource, onClick,
       {renderShape()}
       {type === 'lifeline' && <rect x={curX} y={curY} width={width} height={height} fill="transparent" stroke="none" />}
 
-      {!isSequenceNode(node) && <text
+      {!isSequenceNode(node) && !isStructuralNode(node) && <text
         x={curX + width / 2}
         y={textLayout.firstLineY}
         textAnchor="middle"

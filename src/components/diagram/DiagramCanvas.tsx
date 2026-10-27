@@ -21,6 +21,7 @@ import {
 import Node from './Node';
 import Edge, { EdgeLabel } from './Edge';
 import { sequenceNodeOrder } from '@/lib/uml/sequence-shapes';
+import { orderStructureNodes } from '@/lib/uml/structure-shapes';
 
 interface DiagramCanvasProps {
   nodes: DiagramNode[];
@@ -98,6 +99,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   const laneWidth = resolveLaneWidth(nodes, visibleLanes, savedLaneWidth);
   const laneHeight = Math.max(canvasHeight - 80, 900, ...nodes.map((node) => node.y + node.height + 80));
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const isBackground = (n: DiagramNode) => n.type === 'fragment' || n.type === 'lifeline' || n.type === 'activation' || nodes.some((child) => child.parentId === n.id);
   // Plafon font seragam: dihitung dari teks & ukuran saja (bukan posisi) → tidak
   // dihitung ulang saat drag.
   const fontKey = nodes.map((n) => `${n.type}|${n.width}|${n.height}|${n.text}`).join('\n');
@@ -310,6 +312,9 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           <marker id="arrowhead-open" markerWidth={ARROW_OPEN.width} markerHeight={ARROW_OPEN.height} refX={ARROW_OPEN.refX} refY={ARROW_OPEN.refY} orient="auto">
             <path d={ARROW_OPEN.path} fill="none" stroke={EDGE_STROKE} strokeWidth="1.5" />
           </marker>
+          <marker id="inheritance" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><path d="M 1 1 L 11 6 L 1 11 Z" fill="white" stroke={EDGE_STROKE} /></marker>
+          <marker id="aggregation" markerWidth="14" markerHeight="12" refX="1" refY="6" orient="auto"><path d="M 1 6 L 7 1 L 13 6 L 7 11 Z" fill="white" stroke={EDGE_STROKE} /></marker>
+          <marker id="composition" markerWidth="14" markerHeight="12" refX="1" refY="6" orient="auto"><path d="M 1 6 L 7 1 L 13 6 L 7 11 Z" fill={EDGE_STROKE} stroke={EDGE_STROKE} /></marker>
         </defs>
 
         <rect width="5000" height="5000" fill="url(#grid)" />
@@ -357,7 +362,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             </g>
           )}
 
-          {sequenceNodeOrder(nodes).filter((n) => n.type === 'fragment' || n.type === 'lifeline' || n.type === 'activation').map((node) => (
+          {orderStructureNodes(sequenceNodeOrder(nodes)).filter(isBackground).map((node) => (
             <Node key={node.id} node={node} isSelected={node.id === selectedNodeId} isConnectSource={node.id === connectFromId} onClick={() => onNodeClick?.(node.id)} onDragStart={handleNodeDragStart} fontCap={fontCap} />
           ))}
           {edges.map((edge) => {
@@ -383,7 +388,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
             />
           )}
 
-          {nodes.filter((n) => n.type !== 'fragment' && n.type !== 'lifeline' && n.type !== 'activation').map((node) => (
+          {orderStructureNodes(nodes).filter((n) => !isBackground(n)).map((node) => (
             <Node
               key={node.id}
               node={node}
@@ -399,7 +404,7 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
           {edges.map((edge) => {
             const fromNode = nodeById.get(edge.fromId);
             const toNode = nodeById.get(edge.toId);
-            return fromNode && toNode && edge.label
+            return fromNode && toNode && (edge.label || edge.fromCardinality || edge.toCardinality)
               ? <EdgeLabel key={`label-${edge.id}`} edge={edge} fromNode={fromNode} toNode={toNode} nodes={nodes} />
               : null;
           })}

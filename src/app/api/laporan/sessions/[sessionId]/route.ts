@@ -12,6 +12,7 @@ import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server
 import { getSessionState } from "@/lib/server/laporan/assistant";
 import { listImageJobs } from "@/lib/server/image-jobs";
 import type { VerifiedSource } from "@/lib/references/find-sources";
+import { sanitizePublicErrorText, toPublicAssistantMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
 
@@ -57,7 +58,17 @@ export async function GET(_req: Request, context: Ctx) {
     },
     job,
     figures,
-    messages,
+    messages: messages.map((message) => {
+      if (message.role !== "assistant") return message;
+      const tools = message.toolCalls;
+      return {
+        ...message,
+        content: toPublicAssistantMessage(message.content),
+        toolCalls: tools && typeof tools === "object" && !Array.isArray(tools) && Array.isArray(tools.events)
+          ? { ...tools, events: tools.events.map((event) => typeof event === "string" ? sanitizePublicErrorText(event) : event) }
+          : tools,
+      };
+    }),
   }, NO_STORE);
 }
 

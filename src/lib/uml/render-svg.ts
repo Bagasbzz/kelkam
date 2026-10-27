@@ -15,6 +15,7 @@ import { fitTerminators } from "@/lib/uml/node-size";
 import { diagramFontCap, laneTitleFont, layoutNodeText } from "@/lib/uml/text-fit";
 import { isSequenceNode, messageKind } from "./sequence";
 import { sequenceNodeOrder, sequenceShapes } from "./sequence-shapes";
+import { isStructuralNode, orderStructureNodes, structuralShapes } from "./structure-shapes";
 import {
   ARROW,
   ARROW_OPEN,
@@ -60,8 +61,8 @@ const num = (value: number) => Number(value.toFixed(1)).toString();
 const LANE_BOTTOM_PAD = 28;
 
 function renderNode(node: DiagramNode, fontCap?: number): string {
-  if (isSequenceNode(node)) {
-    return `<g>${sequenceShapes(node).map((shape) => {
+  if (isSequenceNode(node) || isStructuralNode(node)) {
+    return `<g>${(isSequenceNode(node) ? sequenceShapes(node) : structuralShapes(node)).map((shape) => {
       const attrs = Object.entries(shape.attrs).map(([key, value]) => `${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}="${esc(String(value))}"`).join(" ");
       return `<${shape.tag} ${attrs}>${shape.text === undefined ? "" : esc(shape.text)}</${shape.tag}>`;
     }).join("")}</g>`;
@@ -181,6 +182,7 @@ export function diagramToSvg(input: SvgDiagramInput): string {
     for (const p of item.route.points) grow(p.x - 6, p.y - 6, p.x + 6, p.y + 6);
     const l = item.route.label;
     if (l) grow(l.x - l.width / 2, l.y - l.height / 2, l.x + l.width / 2, l.y + l.height / 2);
+    item.route.cardinalities?.forEach((c) => grow(c.x - c.text.length * 5, c.y - 16, c.x + c.text.length * 5, c.y + 4));
   }
   if (!Number.isFinite(minX)) { minX = 0; minY = 0; maxX = SVG_MIN_WIDTH; maxY = SVG_MIN_HEIGHT; }
 
@@ -210,23 +212,26 @@ export function diagramToSvg(input: SvgDiagramInput): string {
   const lineSvg = routed
     .map((item) => {
       if (!item) return "";
-      const dashed = Boolean(item.edge.dashed) || ["return", "create"].includes(messageKind(item.edge));
-      return `<path d="${item.route.path}" fill="none" stroke="${dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}" stroke-width="${EDGE_STROKE_WIDTH}" stroke-dasharray="${dashed ? EDGE_DASH : "none"}" marker-end="url(#${item.route.marker === "open" ? "arrowhead-open" : dashed ? "arrowhead-dashed" : "arrowhead"})"/>`;
+      const dashed = Boolean(item.edge.dashed) || ["return", "create"].includes(messageKind(item.edge)) || ["dependency", "realization"].includes(item.edge.relation ?? "");
+      const route = item.route;
+      const end = route.endMarker === "none" ? "" : ` marker-end="url(#${route.endMarker === "inheritance" ? "inheritance" : route.marker === "open" ? "arrowhead-open" : dashed ? "arrowhead-dashed" : "arrowhead"})"`;
+      return `<path d="${route.path}" fill="none" stroke="${dashed ? EDGE_DASHED_STROKE : EDGE_STROKE}" stroke-width="${EDGE_STROKE_WIDTH}" stroke-dasharray="${dashed ? EDGE_DASH : "none"}"${end}${route.startMarker ? ` marker-start="url(#${route.startMarker})"` : ""}/>`;
     })
     .join("");
   // Label digambar setelah semua garis & node agar tidak tertimpa garis lain.
-  const labelSvg = routed.map((item) => (item?.route.label ? renderLabel(item.route.label) : "")).join("");
+  const labelSvg = routed.map((item) => (item?.route.label ? renderLabel(item.route.label) : "") + (item?.route.cardinalities?.map((c) => `<text x="${c.x}" y="${c.y}" text-anchor="middle" font-family="${FONT_FAMILY}" font-size="15" fill="${EDGE_STROKE}" stroke="white" stroke-width="4" paint-order="stroke">${esc(c.text)}</text>`).join("") ?? "")).join("");
   const fontCap = diagramFontCap(nodes);
-  const ordered = sequenceNodeOrder(nodes);
-  const backgroundSvg = ordered.filter((n) => n.type === "fragment" || n.type === "lifeline" || n.type === "activation").map((n) => renderNode(n, fontCap)).join("");
-  const nodeSvg = ordered.filter((n) => n.type !== "fragment" && n.type !== "lifeline" && n.type !== "activation").map((n) => renderNode(n, fontCap)).join("");
+  const ordered = orderStructureNodes(sequenceNodeOrder(nodes));
+  const isBackground = (n: DiagramNode) => n.type === "fragment" || n.type === "lifeline" || n.type === "activation" || nodes.some((child) => child.parentId === n.id);
+  const backgroundSvg = ordered.filter(isBackground).map((n) => renderNode(n, fontCap)).join("");
+  const nodeSvg = ordered.filter((n) => !isBackground(n)).map((n) => renderNode(n, fontCap)).join("");
   const marker = (id: string, fill: string) =>
     `<marker id="${id}" markerWidth="${ARROW.width}" markerHeight="${ARROW.height}" refX="${ARROW.refX}" refY="${ARROW.refY}" orient="auto"><polygon points="${ARROW.points}" fill="${fill}"/></marker>`;
   const openMarker = `<marker id="arrowhead-open" markerWidth="${ARROW_OPEN.width}" markerHeight="${ARROW_OPEN.height}" refX="${ARROW_OPEN.refX}" refY="${ARROW_OPEN.refY}" orient="auto"><path d="${ARROW_OPEN.path}" fill="none" stroke="${EDGE_STROKE}" stroke-width="1.5"/></marker>`;
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${vw}" height="${vh}" viewBox="${vx} ${vy} ${vw} ${vh}" font-family="${FONT_FAMILY}">` +
-    `<defs>${marker("arrowhead", EDGE_STROKE)}${marker("arrowhead-dashed", EDGE_DASHED_STROKE)}${openMarker}</defs>` +
+    `<defs>${marker("arrowhead", EDGE_STROKE)}${marker("arrowhead-dashed", EDGE_DASHED_STROKE)}${openMarker}<marker id="inheritance" markerWidth="12" markerHeight="12" refX="11" refY="6" orient="auto"><path d="M 1 1 L 11 6 L 1 11 Z" fill="white" stroke="${EDGE_STROKE}"/></marker><marker id="aggregation" markerWidth="14" markerHeight="12" refX="1" refY="6" orient="auto"><path d="M 1 6 L 7 1 L 13 6 L 7 11 Z" fill="white" stroke="${EDGE_STROKE}"/></marker><marker id="composition" markerWidth="14" markerHeight="12" refX="1" refY="6" orient="auto"><path d="M 1 6 L 7 1 L 13 6 L 7 11 Z" fill="${EDGE_STROKE}" stroke="${EDGE_STROKE}"/></marker></defs>` +
     `<rect x="${vx}" y="${vy}" width="${vw}" height="${vh}" fill="white"/>` +
     laneSvg + backgroundSvg + lineSvg + nodeSvg + labelSvg +
     `</svg>`
@@ -239,9 +244,9 @@ export function summarizeDiagram(input: SvgDiagramInput, max = 900): string {
   const byId = new Map(nodes.map((n) => [n.id, n.text]));
   const parts: string[] = [];
   if (input.lanes?.length) parts.push(`Lane: ${input.lanes.join(", ")}`);
-  parts.push(`Elemen: ${nodes.map((n) => `${n.text} (${n.type})`).join("; ")}`);
+  parts.push(`Elemen: ${nodes.map((n) => `${n.text} (${n.type})${n.attributes?.length ? ` atribut: ${n.attributes.join(", ")}` : ""}${n.operations?.length ? ` operasi: ${n.operations.join(", ")}` : ""}${n.parentId ? ` di dalam ${byId.get(n.parentId) ?? n.parentId}` : ""}`).join("; ")}`);
   const flows = (input.edges ?? [])
-    .map((e) => `${byId.get(e.fromId) ?? e.fromId} → ${byId.get(e.toId) ?? e.toId}${e.label ? ` [${e.label}]` : ""}`)
+    .map((e) => `${byId.get(e.fromId) ?? e.fromId} → ${byId.get(e.toId) ?? e.toId}${e.relation ? ` (${e.relation})` : ""}${e.fromCardinality || e.toCardinality ? ` ${e.fromCardinality ?? ""}:${e.toCardinality ?? ""}` : ""}${e.label ? ` [${e.label}]` : ""}`)
     .join("; ");
   if (flows) parts.push(`Alur: ${flows}`);
   const text = parts.join(". ");

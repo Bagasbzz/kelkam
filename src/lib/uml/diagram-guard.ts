@@ -1,4 +1,6 @@
 import type { DiagramEdge, DiagramNode } from "../types/diagram";
+import type { DiagramType } from "../types/diagram";
+import { isStructuralType, layoutStructure, structuralSpecErrors, type StructureSpec } from "./structure";
 import { layoutSequence, messageKind, sequenceHeaderHeight, sequenceSpecErrors, type SequenceSpec } from "./sequence";
 import {
   ACTOR_GAP,
@@ -21,11 +23,16 @@ import {
   USECASE_TOP_Y,
 } from "./theme";
 
-export type SupportedDiagramType = "flowchart" | "usecase" | "activity" | "sequence";
+export type SupportedDiagramType = DiagramType;
 
 /** Tipe yang disebut eksplisit di prompt menang atas dropdown, supaya "buat use case ..." tidak jadi flowchart. */
 export function inferDiagramTypeFromPrompt(prompt: string): SupportedDiagramType | null {
   const p = prompt.toLowerCase();
+  if (/\bclass\s+diagram\b|diagram\s+(class|kelas)\b/.test(p)) return "class";
+  if (/\bstate\b|diagram keadaan/.test(p)) return "state";
+  if (/\berd\b|entity.relationship/.test(p)) return "erd";
+  if (/\bcomponent\b|diagram komponen/.test(p)) return "component";
+  if (/\bdeployment\b|diagram penyebaran/.test(p)) return "deployment";
   if (/\buse\s?-?case\b|\busecase\b/.test(p)) return "usecase";
   if (/\bsequence\b|\bsekuens(ial)?\b|diagram urutan/.test(p)) return "sequence";
   if (/\bactivity\b|\baktivitas\b|swimlane/.test(p)) return "activity";
@@ -43,7 +50,7 @@ export interface CompactStepLike {
   no?: string;
 }
 
-export interface CompactSpecLike extends SequenceSpec {
+export interface CompactSpecLike extends SequenceSpec, StructureSpec {
   title?: string;
   lanes?: string[];
   steps?: CompactStepLike[];
@@ -125,6 +132,11 @@ function appendPromptCoverageWarning(
 export function validateSpec(spec: CompactSpecLike, diagramType: SupportedDiagramType, promptContext = ""): DiagramValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+
+  if (isStructuralType(diagramType)) {
+    errors.push(...structuralSpecErrors(spec, diagramType));
+    return { ok: errors.length === 0, errors, warnings };
+  }
 
   if (diagramType === "usecase") {
     const actors = spec.actors || [];
@@ -379,7 +391,7 @@ export function validateDiagramData(
     if (!nodeIds.has(edge.fromId)) errors.push(`Edge ${edge.id} berasal dari node yang tidak ada: ${edge.fromId}.`);
     if (!nodeIds.has(edge.toId)) errors.push(`Edge ${edge.id} menuju node yang tidak ada: ${edge.toId}.`);
     if (edge.y !== undefined && !Number.isFinite(edge.y)) errors.push(`Edge ${edge.id} memiliki posisi pesan tidak valid.`);
-    if (edge.fromId === edge.toId && diagramType !== "sequence") errors.push(`Edge ${edge.id} tidak boleh menghubungkan node ke dirinya sendiri.`);
+    if (edge.fromId === edge.toId && diagramType !== "sequence" && !isStructuralType(diagramType)) errors.push(`Edge ${edge.id} tidak boleh menghubungkan node ke dirinya sendiri.`);
     const pair = `${edge.fromId}->${edge.toId}:${(edge.label || "").trim().toLowerCase()}`;
     if (edgePairs.has(pair)) warnings.push(`Relasi render duplikat ditemukan: ${edge.fromId} ke ${edge.toId}.`);
     edgePairs.add(pair);
@@ -407,6 +419,11 @@ export function validateDiagramData(
     errors.push(...sequenceSpecErrors({ participants: [...lifelines.values()].map((n) => ({ id: n.id, name: n.text })), messages: [...edges].sort((a, b) => (a.y ?? 0) - (b.y ?? 0)).map((e) => ({ from: e.fromId, to: e.toId, text: e.label || "Pesan", kind: messageKind(e) })) }));
   }
 
+  if (isStructuralType(diagramType)) errors.push(...structuralSpecErrors({
+    elements: nodes.map((n) => ({ id: n.id, name: n.text, kind: n.type as NonNullable<StructureSpec["elements"]>[number]["kind"], attributes: n.attributes, operations: n.operations, stereotype: n.stereotype, parent: n.parentId })),
+    relations: edges.map((e) => ({ from: e.fromId, to: e.toId, label: e.label, kind: e.relation, fromCardinality: e.fromCardinality, toCardinality: e.toCardinality })),
+  }, diagramType));
+
   if (diagramType === "usecase") {
     const connected = new Set<string>();
     edges.forEach((edge) => { connected.add(edge.fromId); connected.add(edge.toId); });
@@ -426,6 +443,13 @@ export function validateDiagramData(
       for (let rightIndex = leftIndex + 1; rightIndex < nodes.length; rightIndex += 1) {
         const left = nodes[leftIndex];
         const right = nodes[rightIndex];
+        const isAncestor = (child: DiagramNode, ancestor: DiagramNode) => {
+          let parent = child.parentId;
+          const seen = new Set<string>();
+          while (parent && !seen.has(parent)) { if (parent === ancestor.id) return true; seen.add(parent); parent = nodes.find((n) => n.id === parent)?.parentId; }
+          return false;
+        };
+        if (diagramType === "deployment" && (isAncestor(left, right) || isAncestor(right, left))) continue;
         const overlaps = (
           left.x + left.width + collisionPadding > right.x
           && right.x + right.width + collisionPadding > left.x
@@ -654,6 +678,7 @@ export function autoLayoutDiagram(
   diagramType: SupportedDiagramType,
   lanes: string[] = [],
 ) {
+  if (isStructuralType(diagramType)) return layoutStructure(nodes, edges, diagramType);
   if (diagramType === "flowchart") return layoutFlowchart(nodes, edges, lanes);
   if (diagramType === "activity") return layoutActivity(nodes, edges, lanes);
   if (diagramType === "usecase") return layoutUseCase(nodes, edges);
