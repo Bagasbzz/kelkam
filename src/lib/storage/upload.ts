@@ -5,12 +5,12 @@
  *
  * Fitur:
  *   - Simpan file ke filesystem (path dari env UPLOAD_DIR, default `./uploads`).
- *   - Dedup berdasarkan SHA256: kalau file dengan hash yang sama sudah ada,
+ *   - Dedup berdasarkan owner + SHA256: kalau file dengan hash yang sama sudah ada,
  *     return row yang sama (no re-upload).
  *   - Catat di tabel `file_uploads` untuk ownership & quota tracking.
  *
  * Layout file di disk:
- *   ${UPLOAD_DIR}/${ownerId}/${sha256}${ext}
+ *   ${UPLOAD_DIR}/${ownerId}/${sha256}-${randomId}${ext}
  *
  * Kenapa bukan path by user-supplied name?
  *   - Anti path traversal (../  attack).
@@ -18,7 +18,7 @@
  *
  * Schema tabel `file_uploads`:
  *   - id        : cuid (primary key)
- *   - sha256    : unique (untuk dedup)
+ *   - sha256    : unique bersama ownerId (untuk dedup per owner)
  *   - ownerId   : user yang upload (foreign key ke users)
  *   - filePath  : path absolut di server
  *   - mime      : MIME type
@@ -110,7 +110,7 @@ export interface SavedUpload {
 
 /**
  * Simpan file ke disk, catat di DB.
- * Idempotent: kalau SHA256 sudah ada → return row existing.
+ * Idempotent: kalau owner + SHA256 sudah ada → return row existing.
  *
  * @param input.ownerId - user yang upload
  * @param input.buffer - file bytes
@@ -129,8 +129,8 @@ export async function saveUpload(input: {
   // Compute SHA256 (hex). Untuk file besar ini O(N) memory-bandwidth.
   const sha256 = createHash("sha256").update(input.buffer).digest("hex");
 
-  // Dedup: kalau SHA256 sudah ada → return row existing tanpa tulis ke disk.
-  const existing = await prisma.fileUpload.findUnique({ where: { sha256 } });
+  // Dedup hanya dalam owner yang sama, tanpa berbagi file antar user.
+  const existing = await prisma.fileUpload.findUnique({ where: { ownerId_sha256: { ownerId: input.ownerId, sha256 } } });
   if (existing) {
     return {
       id: existing.id,
@@ -144,8 +144,8 @@ export async function saveUpload(input: {
   const ext = extensionFor(input.originalName, input.mime);
   const ownerDir = path.join(uploadDir(), input.ownerId);
   await fs.mkdir(ownerDir, { recursive: true });
-  const filePath = path.join(ownerDir, `${sha256}${ext}`);
-  await fs.writeFile(filePath, input.buffer);
+  const filePath = path.join(ownerDir, `${sha256}-${randomBytes(16).toString("hex")}${ext}`);
+  await fs.writeFile(filePath, input.buffer, { flag: "wx" });
 
   return recordUpload({
     sha256,
@@ -160,9 +160,9 @@ export async function saveUpload(input: {
 /**
  * Simpan file BESAR (video) langsung dari stream ke disk tanpa menahan
  * seluruh isi di memori. SHA256 dihitung sambil menulis; file ditulis ke
- * nama sementara lalu di-rename ke `${sha256}${ext}` setelah hash diketahui.
+ * nama sementara lalu di-rename ke `${sha256}-${randomId}${ext}` setelah hash diketahui.
  *
- * Dedup tetap berlaku: kalau SHA256 sudah ada, file sementara dihapus dan
+ * Dedup tetap berlaku: kalau owner + SHA256 sudah ada, file sementara dihapus dan
  * row existing dikembalikan.
  *
  * @param input.stream - web ReadableStream (mis. `file.stream()` dari FormData)
@@ -183,7 +183,8 @@ export async function saveUploadFromStream(input: {
   const ext = extensionFor(input.originalName, input.mime);
   const ownerDir = path.join(uploadDir(), input.ownerId);
   await fs.mkdir(ownerDir, { recursive: true });
-  const tmpPath = path.join(ownerDir, `.tmp-${randomBytes(8).toString("hex")}${ext}`);
+  const writeId = randomBytes(16).toString("hex");
+  const tmpPath = path.join(ownerDir, `.tmp-${writeId}${ext}`);
 
   const hash = createHash("sha256");
   let size = 0;
@@ -216,7 +217,7 @@ export async function saveUploadFromStream(input: {
   });
 
   try {
-    await pipeline(Readable.fromWeb(input.stream as import("stream/web").ReadableStream<Uint8Array>), hasher, createWriteStream(tmpPath));
+    await pipeline(Readable.fromWeb(input.stream as import("stream/web").ReadableStream<Uint8Array>), hasher, createWriteStream(tmpPath, { flags: "wx" }));
   } catch (error) {
     await fs.unlink(tmpPath).catch(() => undefined);
     throw error;
@@ -232,13 +233,13 @@ export async function saveUploadFromStream(input: {
     throw new IncompleteUploadError(size, input.expectedSize);
   }
 
-  const existing = await prisma.fileUpload.findUnique({ where: { sha256 } });
+  const existing = await prisma.fileUpload.findUnique({ where: { ownerId_sha256: { ownerId: input.ownerId, sha256 } } });
   if (existing) {
     await fs.unlink(tmpPath).catch(() => undefined);
     return { id: existing.id, sha256: existing.sha256, filePath: existing.filePath, deduplicated: true, size: existing.size };
   }
 
-  const filePath = path.join(ownerDir, `${sha256}${ext}`);
+  const filePath = path.join(ownerDir, `${sha256}-${writeId}${ext}`);
   await fs.rename(tmpPath, filePath);
   const saved = await recordUpload({
     sha256,
@@ -251,7 +252,7 @@ export async function saveUploadFromStream(input: {
   return { ...saved, size };
 }
 
-/** Catat row `file_uploads`; tangani race unique SHA256 sebagai dedup. */
+/** Catat row `file_uploads`; tangani race unique owner + SHA256 sebagai dedup. */
 async function recordUpload(data: {
   sha256: string;
   ownerId: string;
@@ -260,17 +261,19 @@ async function recordUpload(data: {
   size: number;
   originalName: string;
 }): Promise<SavedUpload> {
-  const { sha256, filePath } = data;
+  const { ownerId, sha256, filePath } = data;
   let row;
   try {
     row = await prisma.fileUpload.create({ data });
   } catch (error) {
     // Dua upload identik yang masuk bersamaan bisa sama-sama lolos findUnique.
-    // Jadikan unique SHA256 sebagai dedup normal, lalu hapus file sementara.
+    // Setiap write punya path sendiri; jangan pernah hapus file pemenang race.
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      await fs.unlink(filePath).catch(() => undefined);
-      const concurrent = await prisma.fileUpload.findUnique({ where: { sha256 } });
+      const concurrent = await prisma.fileUpload.findUnique({ where: { ownerId_sha256: { ownerId, sha256 } } });
       if (concurrent) {
+        if (filePath !== concurrent.filePath) {
+          await fs.unlink(filePath).catch(() => undefined);
+        }
         return {
           id: concurrent.id,
           sha256: concurrent.sha256,

@@ -279,11 +279,11 @@ model ReportJobStep {
 /**
  * Catatan file yang di-upload user. Bytes-nya disimpan di filesystem,
  * bukan di DB (lihat src/lib/storage/upload.ts).
- * sha256 unique → kalau user upload file yang sama (byte-identical), reuse row.
+ * (ownerId, sha256) unique → kalau owner upload file yang sama, reuse row.
  */
 model FileUpload {
   id           String   @id @default(cuid())
-  sha256       String   @unique
+  sha256       String
   ownerId      String   @map("owner_id")
   owner        User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   filePath     String   @map("file_path")
@@ -297,6 +297,7 @@ model FileUpload {
   imageJobs   ImageJob[]
   tugasAttachments TugasAttachment[]
 
+  @@unique([ownerId, sha256])
   @@index([ownerId])
   @@index([createdAt])
   @@map("file_uploads")

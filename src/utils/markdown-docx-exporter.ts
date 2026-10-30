@@ -48,6 +48,7 @@ import {
   convertMillimetersToTwip,
   type ISectionOptions,
 } from "docx";
+import { normalizeFigureKey, parseFigurePlaceholder } from "@/lib/report/figure-placeholders";
 
 // ---------------------------------------------------------------------------
 // Profil format
@@ -196,9 +197,6 @@ type Block =
 
 /** Baris `**Tabel: Judul**` / `**Tabel 2.1 Judul**` tepat sebelum tabel → judul tabel (bukan paragraf). */
 const TABLE_TITLE_RE = /^\*\*\s*Tabel\s*(?:[\d.]+\s*)?[:.]?\s*(.+?)\s*\*\*\s*$/i;
-/** `[Gambar: Judul - keterangan]`; pemisah " - " terakhir, judul boleh mengandung tanda hubung. */
-const FIGURE_RE = /^\[Gambar:\s*(.+?)\]\s*(.*)$/i;
-
 function sanitizeFileName(value: string) {
   return String(value || "laporan-akademik")
     .toLowerCase()
@@ -217,7 +215,7 @@ function parseMarkdownTable(lines: string[]) {
   return rows.map((row) => [...row, ...new Array(Math.max(0, width - row.length)).fill("")]);
 }
 
-export function parseMarkdownToBlocks(markdown: string): Block[] {
+export function parseMarkdownToBlocks(markdown: string, knownImageTitles: readonly string[] = []): Block[] {
   const lines = String(markdown || "").replace(/\r/g, "").split("\n");
   const blocks: Block[] = [];
   let paragraph: string[] = [];
@@ -229,19 +227,6 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     if (!paragraph.length) return;
     const text = paragraph.join(" ").trim();
     paragraph = [];
-    // Placeholder gambar sebagai blok tersendiri
-    const figure = text.match(FIGURE_RE);
-    if (figure) {
-      const inner = figure[1].trim();
-      const sep = inner.lastIndexOf(" - ");
-      const title = (sep > 0 ? inner.slice(0, sep) : inner).trim();
-      const captionFromInner = sep > 0 ? inner.slice(sep + 3).trim() : "";
-      const trailing = (figure[2] || "").replace(/^caption:\s*/i, "").trim();
-      // Buang nomor manual dari AI ("Gambar 2.", "Gambar 3.1:"), penomoran dilakukan exporter.
-      const caption = (captionFromInner || trailing || title).replace(/^(gambar|figure)\s*[\d.]*\s*[:.\-\u2013]?\s*/i, "").trim() || title;
-      blocks.push({ type: "figure", title, caption });
-      return;
-    }
     blocks.push({ type: "paragraph", text });
   };
   const flushTable = () => {
@@ -279,6 +264,17 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
 
     if (line.trim().startsWith("|")) { flushParagraph(); flushList(); table.push(line.trim()); continue; }
     flushTable();
+
+    const figure = parseFigurePlaceholder(line, knownImageTitles);
+    if (figure) {
+      flushParagraph(); flushList();
+      const trailingCaption = /^caption:\s*(.*)$/i.exec(figure.trailing);
+      const caption = (figure.caption || trailingCaption?.[1] || figure.title)
+        .replace(/^(gambar|figure)\s+\d+(?:\.\d+)*[.:]?\s*/i, "").trim() || figure.title;
+      blocks.push({ type: "figure", title: figure.title, caption });
+      if (figure.trailing && (!trailingCaption || figure.caption)) blocks.push({ type: "paragraph", text: figure.trailing });
+      continue;
+    }
 
     // Judul tabel berdiri sendiri → paragraf tersendiri agar bisa diambil flushTable
     if (TABLE_TITLE_RE.test(line.trim())) { flushParagraph(); flushList(); blocks.push({ type: "paragraph", text: line.trim() }); continue; }
@@ -423,6 +419,8 @@ export interface ExportOptions {
   profile?: Partial<DocxFormatProfile>;
   /** key: judul gambar (lowercase, trimmed) → PNG bytes */
   images?: Record<string, Uint8Array | ArrayBuffer>;
+  /** Includes planned assets whose bytes are not available yet. */
+  figureTitles?: readonly string[];
   /** Italic otomatis untuk istilah asing umum (default true). */
   autoItalic?: boolean;
 }
@@ -432,7 +430,8 @@ type BodyChild = Paragraph | Table;
 /** Bangun objek Document (dipakai klien via toBlob dan server via toBuffer). */
 export function buildDocxDocument(markdown: string, options: ExportOptions = {}): Document {
   const profile: DocxFormatProfile = { ...DEFAULT_DOCX_PROFILE, ...options.profile, margin: { ...DEFAULT_DOCX_PROFILE.margin, ...options.profile?.margin } };
-  const images = options.images || {};
+  const images: Record<string, Uint8Array | ArrayBuffer> = Object.create(null);
+  for (const [key, bytes] of Object.entries(options.images || {})) images[normalizeFigureKey(key)] = bytes;
   const autoItalic = options.autoItalic !== false;
   const sizeHalfPt = Math.round(profile.fontSize * 2);
   const lineTwips = Math.round(240 * profile.lineSpacing);
@@ -445,7 +444,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   const maxImageWidthPx = Math.round(mmToPx(paper.width - (profile.margin.left + profile.margin.right) * 10));
   const maxImageHeightPx = Math.round(mmToPx(paper.height - (profile.margin.top + profile.margin.bottom) * 10) * 0.72);
 
-  const blocks = parseMarkdownToBlocks(markdown);
+  const blocks = parseMarkdownToBlocks(markdown, [...Object.keys(options.images || {}), ...(options.figureTitles || [])]);
 
   // Judul H1 pertama dianggap judul dokumen (dipakai sampul) bila diikuti struktur bab.
   const firstHeading = blocks.find((b) => b.type === "heading");
@@ -690,7 +689,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
       }
       case "figure": {
         figureCounter += 1;
-        const key = block.title.toLowerCase().trim();
+        const key = normalizeFigureKey(block.title);
         const image = images[key];
         const prefix = `Gambar ${chapterCounter > 0 ? `${chapterCounter}.` : ""}${figureCounter}`;
         const bookmark = nextBookmark("gambar");

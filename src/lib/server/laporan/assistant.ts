@@ -671,8 +671,9 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
         title,
         draft: state.draft,
         brief: state.brief,
-        diagrams: (state.plan?.diagrams || []).map((d) => ({ title: d.title, svg: d.svg })),
-        figures: (state.plan?.figures || []).filter((f) => f.fileId).map((f) => ({ title: f.title, fileId: f.fileId })),
+        outline: state.plan?.outline || [],
+        diagrams: state.plan?.diagrams || [],
+        figures: state.plan?.figures || [],
       });
       events.push(`File ${exported.name} siap diunduh`);
       return {
@@ -680,7 +681,9 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
         downloadMarkdown: `[Unduh ${exported.name}](${exported.url}) (${Math.max(1, Math.round(exported.size / 1024))} KB)`,
         pendingFigures: exported.pendingFigures,
         missingImages: exported.missingImages,
-        note: "Tempel downloadMarkdown apa adanya di jawaban. Ingatkan user melakukan Update Field di Word untuk daftar isi/gambar/tabel.",
+        missingImageTitles: exported.missingImageTitles,
+        pendingFigureTitles: exported.pendingFigureTitles,
+        note: "Tempel downloadMarkdown apa adanya di jawaban. Jika ada gambar hilang/masih diproses, sebutkan judulnya dan jangan klaim file sudah lengkap. Ingatkan user melakukan Update Field di Word untuk daftar isi/gambar/tabel.",
       };
     }
     case "generateFigure": {
@@ -810,12 +813,13 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
         title,
         draft: state.draft || "",
         brief: state.brief,
-        diagrams: (state.plan?.diagrams || []).map((d) => ({ title: d.title, svg: d.svg })),
-        figures: (state.plan?.figures || []).filter((f) => f.fileId).map((f) => ({ title: f.title, fileId: f.fileId })),
+        outline: state.plan?.outline || [],
+        diagrams: state.plan?.diagrams || [],
+        figures: state.plan?.figures || [],
       });
       fileLine = `[Unduh ${exported.name}](${exported.url}) (${Math.max(1, Math.round(exported.size / 1024))} KB)`;
-      if (exported.pendingFigures) pendingNote = `\n- ${exported.pendingFigures} ilustrasi masih diproses; minta "kirim file lagi" setelah muncul di tab Gambar agar ikut terpasang.`;
-      if (exported.missingImages) pendingNote += `\n- ${exported.missingImages} gambar belum punya sumber (ditandai catatan di dokumen).`;
+      if (exported.pendingFigures) pendingNote = `\n- Ilustrasi masih diproses: ${exported.pendingFigureTitles.join(", ")}. Unduh DOCX terbaru dari tab Draft setelah selesai.`;
+      if (exported.missingImages) pendingNote += `\n- Gambar belum tersedia: ${exported.missingImageTitles.join(", ")}. Placeholder tetap disimpan agar ekspor berikutnya bisa memasangnya.`;
     } catch (error) {
       console.error("[laporan] export DOCX otomatis gagal:", error);
       fileLine = "File DOCX otomatis gagal dibuat; gunakan tombol **Unduh DOCX** di tab Draft.";

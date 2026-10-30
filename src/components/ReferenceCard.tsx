@@ -3,6 +3,8 @@
 import { getErrorMessage } from "@/lib/errors";
 import React, { useState } from "react";
 import { authenticatedFetch } from "@/components/AuthProvider";
+import JournalCheck from "./JournalCheck";
+import type { JournalVerification } from "@/lib/references/journal-check";
 
 export interface ReferenceItem {
   id: string;
@@ -14,6 +16,9 @@ export interface ReferenceItem {
   url?: string | null;
   pdfUrl?: string | null;
   doi?: string | null;
+  doiUrl?: string | null;
+  issn?: string[];
+  journalVerification?: JournalVerification;
   doiVerified?: boolean;
   pdfStatus?: "verified" | "landing_page" | "closed" | "broken" | "unknown";
   citationCount?: number;
@@ -27,10 +32,12 @@ export default function ReferenceCard({
   paper,
   onSave,
   onReject,
+  onVerificationChange,
 }: {
   paper: ReferenceItem;
   onSave?: (paper: ReferenceItem) => void;
   onReject?: (paperId: string) => void;
+  onVerificationChange?: (paperId: string, value: JournalVerification | null) => void;
 }) {
   const handleSave = () => {
     if (onSave) onSave(paper);
@@ -101,7 +108,7 @@ export default function ReferenceCard({
       </div>
 
       <div className="mb-3 flex flex-wrap gap-2 text-[11px] font-semibold">
-        {paper.doi && <span className={`rounded-full px-2 py-1 ${paper.doiVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{paper.doiVerified ? "DOI tervalidasi" : "DOI belum tervalidasi"}</span>}
+        {paper.doi && <span className={`rounded-full px-2 py-1 ${paper.doiVerified ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>{paper.doiVerified ? "DOI artikel tervalidasi" : "DOI artikel belum tervalidasi"}</span>}
         <span className={`rounded-full px-2 py-1 ${
           paper.pdfStatus === "verified" ? "bg-blue-50 text-blue-700"
             : paper.pdfStatus === "landing_page" ? "bg-amber-50 text-amber-700"
@@ -112,7 +119,7 @@ export default function ReferenceCard({
             : paper.pdfStatus === "landing_page" ? "Hanya halaman artikel"
             : paper.pdfStatus === "closed" ? "PDF berbayar/tertutup"
             : paper.pdfStatus === "broken" ? "Link PDF rusak"
-            : "Hanya abstrak"}
+            : "PDF belum diperiksa"}
         </span>
         {paper.isOpenAccess ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-emerald-700">Open access</span> : <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">Akses belum pasti</span>}
       </div>
@@ -122,27 +129,14 @@ export default function ReferenceCard({
         {paper.abstract && paper.abstract.length > 600 ? "..." : ""}
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex gap-2 items-center text-xs">
-          {paper.pdfUrl ? (
-            <a href={paper.pdfUrl} target="_blank" rel="noopener noreferrer" className="px-2 py-1 border rounded text-xs">
-              Buka PDF
-            </a>
-          ) : paper.url ? (
-            <a href={paper.url} target="_blank" rel="noopener noreferrer" className="px-2 py-1 border rounded text-xs">
-              Buka halaman
-            </a>
-          ) : (
-            <span className="text-xs text-slate-400">Tidak ada link</span>
-          )}
-          {paper.doi && (
-            <a href={paper.doi.startsWith("http") ? paper.doi : `https://doi.org/${paper.doi}`} target="_blank" rel="noopener noreferrer" className="ml-2 text-xs text-blue-600 underline">
-              DOI
-            </a>
-          )}
-        </div>
+      <JournalCheck
+        source={{ ...paper, doiUrl: paper.doiUrl || (paper.doi ? `https://doi.org/${paper.doi.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").split("/").map(encodeURIComponent).join("/")}` : null) }}
+        verification={paper.journalVerification}
+        onVerificationChange={onVerificationChange ? (value) => onVerificationChange(paper.id, value) : undefined}
+      />
 
-        <div className="flex gap-2 items-center">
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <div className="flex flex-wrap gap-2 items-center">
           <button onClick={handleReject} className="px-3 py-1 border rounded text-sm text-red-600">
             Tolak
           </button>

@@ -45,6 +45,7 @@ import { generateConceptForReport, isConceptDiagramType } from "@/lib/uml/render
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
+import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
 
 // ---------------------------------------------------------------------------
 // Jenis step. Disimpan lewat prefix `sectionId` supaya tidak perlu kolom baru:
@@ -909,43 +910,42 @@ async function runAuditStep(
   });
 }
 
-/**
- * Placeholder `[Gambar: Judul - caption]` yang tidak punya sumber gambar (diagram
- * tidak dibuat / ilustrasi gagal) diganti catatan eksplisit agar tidak lolos
- * diam-diam ke DOCX. Ilustrasi yang masih diproses dibiarkan (eksport akan
- * mengambilnya bila sudah jadi).
- */
+/** Keep recoverable markers intact; report missing/pending assets through logs. */
 async function annotateMissingFigures(markdown: string, payload: unknown, ownerId: string) {
+  const compact = compactProject(payload);
   const available = new Set<string>();
   for (const diagram of payloadDiagrams(payload)) {
-    if (diagram.status === "approved" && typeof diagram.svg === "string") available.add(String(diagram.title || "").trim().toLowerCase());
+    if (typeof diagram.svg === "string" && diagram.svg.trim()) available.add(normalizeFigureKey(String(diagram.title || "")));
   }
   // Gambar dari bahan user (screenshot/foto) sudah tersimpan sebagai file.
   if (isRecord(payload) && Array.isArray(payload.figures)) {
     for (const figure of payload.figures) {
-      if (isRecord(figure) && typeof figure.fileId === "string" && figure.fileId) available.add(String(figure.title || "").trim().toLowerCase());
+      if (isRecord(figure) && typeof figure.fileId === "string" && figure.fileId) available.add(normalizeFigureKey(String(figure.title || "")));
     }
   }
   const sessionId = isRecord(payload) && typeof payload.reportSessionId === "string" ? payload.reportSessionId : undefined;
-  const pending = new Set<string>();
+  const pending = new Map<string, string>();
+  const jobAssets: Array<{ title: string }> = [];
   if (sessionId) {
-    const jobs = await listImageJobs(ownerId, { sessionId, limit: 40 }).catch(() => []);
+    const jobs = await listImageJobs(ownerId, { sessionId, limit: 50 }).catch(() => []);
     for (const job of jobs) {
-      const key = (job.title || "").trim().toLowerCase();
+      const key = normalizeFigureKey(job.title || "");
       if (!key) continue;
-      if (job.status === "done") available.add(key);
-      else if (job.status !== "failed") pending.add(key);
+      jobAssets.push({ title: job.title });
+      if (job.status === "done" && job.fileId) available.add(key);
+      else if (job.status === "queued" || job.status === "running") pending.set(key, job.title);
     }
   }
-  const missing: string[] = [];
-  const result = markdown.replace(/^\[Gambar:\s*(.+?)\]\s*$/gim, (line, inner: string) => {
-    const title = inner.split(" - ")[0].trim();
-    const key = title.toLowerCase();
-    if (available.has(key) || pending.has(key)) return line;
-    missing.push(title);
-    return `> **Catatan gambar:** "${title}" belum tersedia (diagram/ilustrasi gagal dibuat). Minta lewat chat untuk membuat ulang, atau sisipkan gambar manual.`;
-  });
-  return { result, missing };
+  const assets = [...compact.diagrams.map((diagram) => ({ ...diagram, caption: diagram.caption || diagram.purpose })), ...compact.figures, ...jobAssets]
+    .map((asset) => ({ ...asset, available: available.has(normalizeFigureKey(asset.title)) }));
+  const { markdown: result, insertedTitles } = reconcileFigurePlaceholders(markdown, assets, compact.outline);
+  const titles = assets.map((asset) => asset.title);
+  const missing = new Map<string, string>();
+  for (const asset of [...assets, ...figurePlaceholders(result, titles)]) {
+    const key = normalizeFigureKey(asset.title);
+    if (!available.has(key) && !pending.has(key)) missing.set(key, asset.title);
+  }
+  return { result, missing: [...missing.values()], pending: [...pending].filter(([key]) => !available.has(key)).map(([, title]) => title), insertedTitles };
 }
 
 async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]): Promise<ReportJob> {
@@ -978,13 +978,14 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
   const diagramsDone = extractDiagramArtifacts(row.payload).length;
   const auditedCount = auditByTarget.size;
   const assembled = assembleReport(row.payload, chapters);
-  // Placeholder gambar yang tidak punya sumber (diagram gagal / ilustrasi belum jadi) tidak boleh lolos diam-diam.
-  const { result, missing } = await annotateMissingFigures(assembled, row.payload, ownerId);
+  const { result, missing, pending, insertedTitles } = await annotateMissingFigures(assembled, row.payload, ownerId);
   const totalWords = countWords(result);
   const totalTokens = row.steps.reduce((acc, step) => acc + step.tokensUsed, 0);
   if (missing.length) {
-    await appendLog(row.id, log, "warn", `${missing.length} gambar tidak tersedia & diberi catatan di laporan: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "; …" : ""}`);
+    await appendLog(row.id, log, "warn", `${missing.length} gambar belum tersedia; penanda dipertahankan untuk ekspor berikutnya: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "; ..." : ""}`);
   }
+  if (pending.length) await appendLog(row.id, log, "warn", `${pending.length} gambar masih diproses: ${pending.slice(0, 4).join("; ")}`);
+  if (insertedTitles.length) await appendLog(row.id, log, "info", `${insertedTitles.length} penanda gambar dipulihkan dari rencana`);
   await appendLog(
     row.id,
     log,

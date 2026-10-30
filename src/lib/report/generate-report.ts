@@ -1,6 +1,7 @@
 import { aiClient, AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW, assertAiConfigured, stripDashes, stripThinking } from "@/lib/ai/client";
 import { UNTRUSTED_DATA_NOTICE, promptInline } from "@/lib/ai/guard";
 import { isAbortLikeError } from "@/lib/errors";
+import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
 
 const REPORT_TIMEOUT_MS = Number(process.env.AI_REPORT_TIMEOUT_MS || 25000);
 
@@ -280,7 +281,9 @@ function cleanChapterOutput(raw: string) {
   let output = String(raw || "").trim();
   output = output.replace(/^```(?:markdown|md)?\s*/i, "").replace(/\s*```$/i, "").trim();
   output = output.replace(/^(berikut|tentu|baik)[^\n]*\n+/i, "").trim();
-  return stripDashes(output);
+  // Asset titles are identifiers: punctuation cleanup must not change them.
+  return output.split(/(\[Gambar:[^\]]+\])/gi)
+    .map((part) => /^\[Gambar:/i.test(part) ? part : stripDashes(part)).join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -778,14 +781,9 @@ ATURAN TIPOGRAFI:
 
   // Jaminan: placeholder gambar wajib selalu ada (model kadang lupa). Ditempel
   // di akhir bab agar exporter tetap menyisipkan gambarnya.
-  const missing = mandatoryPlaceholders.filter((placeholder) => {
-    const title = placeholder.slice("[Gambar: ".length).split(" - ")[0].trim().toLowerCase();
-    return !content.toLowerCase().includes(`[gambar: ${title}`);
-  });
-  if (missing.length) {
-    emit(`Menambahkan ${missing.length} penanda gambar yang belum ada`);
-    content = `${content.trimEnd()}\n\n${missing.join("\n\n")}\n`;
-  }
+  const reconciled = reconcileFigurePlaceholders(content, [...sectionDiagrams.map((diagram) => ({ ...diagram, caption: diagram.caption || diagram.purpose })), ...sectionFigures]);
+  if (reconciled.insertedTitles.length) emit(`Menambahkan ${reconciled.insertedTitles.length} penanda gambar yang belum ada`);
+  content = reconciled.markdown;
   const citationCount = countDistinctCitations(content);
   emit(`Sitasi terdeteksi: ${citationCount}${citationCount < minCitations ? ` (target ${minCitations}, akan dilengkapi saat audit)` : ""}`);
   const overlap = detectSourceOverlap(content, overlapCorpus(compact));
@@ -915,7 +913,9 @@ Output: hanya markdown bab final, tanpa komentar, tanpa code fence.`;
     emit(`Audit selesai: ${originalWords} → ${words} kata${overlapAfter ? `, kemiripan ${overlap.percent}% → ${overlapAfter.percent}%` : ""}`);
 
     // Guard: hasil audit terpotong/menyusut drastis/kehilangan placeholder → pakai asli.
-    const lostPlaceholder = placeholders.some((placeholder) => !content.includes(placeholder));
+    const knownTitles = [...compact.diagrams, ...compact.figures].map((asset) => asset.title);
+    const retained = new Set(figurePlaceholders(content, knownTitles).map((figure) => figure.key));
+    const lostPlaceholder = figurePlaceholders(input.content, knownTitles).some((figure) => !retained.has(normalizeFigureKey(figure.title)));
     const shrunk = words < originalWords * 0.7;
     if (!content || choice?.finish_reason === "length" || lostPlaceholder || shrunk) {
       emit("Hasil audit kurang baik, versi awal dipertahankan");

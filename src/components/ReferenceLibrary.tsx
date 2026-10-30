@@ -4,8 +4,22 @@ import { getErrorMessage } from "@/lib/errors";
 import { useCallback, useEffect, useState } from "react";
 import ReferenceCard, { ReferenceItem } from "./ReferenceCard";
 import { authenticatedFetch } from "@/components/AuthProvider";
+import { parseJournalVerification, type JournalVerification } from "@/lib/references/journal-check";
 
 const STORAGE_KEY = "reference_search_results";
+const VERIFICATION_KEY = "reference_journal_verifications";
+
+function withLocalVerifications(papers: ReferenceItem[]): ReferenceItem[] {
+  let records: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(localStorage.getItem(VERIFICATION_KEY) || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) records = parsed as Record<string, unknown>;
+  } catch {}
+  return papers.map((paper) => ({
+    ...paper,
+    journalVerification: parseJournalVerification(Object.hasOwn(records, paper.id) ? records[paper.id] : paper.journalVerification) || undefined,
+  }));
+}
 
 export default function ReferenceLibrary({ initialQuery }: { initialQuery?: string }) {
   const [query, setQuery] = useState(initialQuery || "");
@@ -20,7 +34,7 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
       const raw = localStorage.getItem(STORAGE_KEY);
       const parsed: ReferenceItem[] = raw ? JSON.parse(raw) : [];
       if (Array.isArray(parsed) && parsed.length) {
-        setResults(parsed);
+        setResults(withLocalVerifications(parsed));
       }
     } catch {
       // ignore
@@ -40,9 +54,10 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
       });
       const data = await resp.json();
       if (data?.success && Array.isArray(data.data)) {
-        setResults(data.data);
+        const papers = withLocalVerifications(data.data);
+        setResults(papers);
         try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(data.data));
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(papers));
         } catch {}
       } else {
         setError(data?.error || "Gagal mengambil referensi");
@@ -69,6 +84,24 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
 
   const handleReject = (paperId: string) => {
     setResults((r) => r.filter((p) => p.id !== paperId));
+  };
+
+  const handleVerificationChange = (paperId: string, value: JournalVerification | null) => {
+    const verification = parseJournalVerification(value);
+    if (value !== null && !verification) return;
+    try {
+      const parsed: unknown = JSON.parse(localStorage.getItem(VERIFICATION_KEY) || "{}");
+      const records = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+      localStorage.setItem(VERIFICATION_KEY, JSON.stringify({ ...records, [paperId]: verification }));
+      const updated = results.map((paper) => paper.id === paperId ? { ...paper, journalVerification: verification || undefined } : paper);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      const library: unknown = JSON.parse(localStorage.getItem("reference_library_local") || "[]");
+      if (Array.isArray(library)) localStorage.setItem("reference_library_local", JSON.stringify(withLocalVerifications(library)));
+      setResults(updated);
+      setSaveStatus("Konfirmasi jurnal disimpan di browser ini (bukan verifikasi otomatis).");
+    } catch {
+      setError("Konfirmasi jurnal tidak dapat disimpan di browser ini.");
+    }
   };
 
   const saveAllToSupabase = async () => {
@@ -118,7 +151,7 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
           const resp = await authenticatedFetch(`/api/references/list?projectId=${encodeURIComponent(projectId)}`);
           const j = await resp.json().catch(() => null);
           if (j?.success && Array.isArray(j.data) && j.data.length) {
-            setResults(j.data);
+            setResults(withLocalVerifications(j.data));
           }
         } catch {
           // ignore, keep local results
@@ -179,7 +212,7 @@ export default function ReferenceLibrary({ initialQuery }: { initialQuery?: stri
 
       <div className="grid grid-cols-1 gap-3">
         {results.map((paper) => (
-          <ReferenceCard key={paper.id} paper={paper} onSave={handleSave} onReject={handleReject} />
+          <ReferenceCard key={paper.id} paper={paper} onSave={handleSave} onReject={handleReject} onVerificationChange={handleVerificationChange} />
         ))}
       </div>
     </div>

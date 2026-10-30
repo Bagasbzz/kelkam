@@ -1,6 +1,7 @@
 import { getErrorMessage } from "@/lib/errors";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import { ProviderPaper, SearchOptions } from "./types";
+import { normalizeJournalIssns } from "./journal-check";
 
 const CROSSREF_BASE = "https://api.crossref.org/works";
 
@@ -49,10 +50,19 @@ function inferPdfUrl(value: unknown) {
   return pdf?.URL ? String(pdf.URL) : null;
 }
 
+function reconstructIssn(value: unknown): string[] {
+  const item = isRecord(value) ? value : {};
+  const values = [item.ISSN, item["issn-type"]].flatMap((entry) => {
+    if (Array.isArray(entry)) return entry.map((part) => isRecord(part) ? part.value : part);
+    return [entry];
+  });
+  return normalizeJournalIssns(values);
+}
+
 export async function verifyCrossrefDoi(doi: string) {
   const normalized = normalizeDoi(doi);
   if (!normalized) {
-    return { verified: false, canonicalDoi: null, publisherUrl: null, pdfUrl: null, venue: null };
+    return { verified: false, canonicalDoi: null, publisherUrl: null, pdfUrl: null, venue: null, issn: [] as string[] };
   }
 
   try {
@@ -62,7 +72,7 @@ export async function verifyCrossrefDoi(doi: string) {
     });
     const payload = isRecord(json) ? json : {};
     const item = isRecord(payload.message) ? payload.message : null;
-    if (!item) return { verified: false, canonicalDoi: normalized, publisherUrl: null, pdfUrl: null, venue: null };
+    if (!item) return { verified: false, canonicalDoi: normalized, publisherUrl: null, pdfUrl: null, venue: null, issn: [] as string[] };
 
     return {
       verified: true,
@@ -70,9 +80,10 @@ export async function verifyCrossrefDoi(doi: string) {
       publisherUrl: item.URL ? String(item.URL) : null,
       pdfUrl: inferPdfUrl(item),
       venue: reconstructVenue(item),
+      issn: reconstructIssn(item),
     };
   } catch {
-    return { verified: false, canonicalDoi: normalized, publisherUrl: null, pdfUrl: null, venue: null };
+    return { verified: false, canonicalDoi: normalized, publisherUrl: null, pdfUrl: null, venue: null, issn: [] as string[] };
   }
 }
 
@@ -81,7 +92,7 @@ export async function searchCrossref(query: string, options: SearchOptions = {})
   const url = new URL(CROSSREF_BASE);
   url.searchParams.set("query.bibliographic", String(query || ""));
   url.searchParams.set("rows", String(rows));
-  url.searchParams.set("select", "DOI,title,author,issued,container-title,URL,is-referenced-by-count,link,publisher");
+  url.searchParams.set("select", "DOI,title,author,issued,container-title,URL,is-referenced-by-count,link,publisher,ISSN");
 
   try {
     const json = await fetchWithRetryAndCache(url.toString(), {
@@ -102,6 +113,7 @@ export async function searchCrossref(query: string, options: SearchOptions = {})
           authors: reconstructAuthors(item),
           year,
           venue: reconstructVenue(item),
+          issn: reconstructIssn(item),
           abstract: null,
           url: item.URL ? String(item.URL) : null,
           pdfUrl,

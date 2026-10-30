@@ -16,12 +16,14 @@ import ReportJobProgress from "@/components/ReportJobProgress";
 import AgentRunProgress from "@/components/ui/AgentRunProgress";
 import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import Button from "@/components/ui/Button";
+import JournalCheck from "@/components/JournalCheck";
+import type { JournalVerification } from "@/lib/references/journal-check";
 import { getErrorMessage as baseErrorMessage, toPublicAssistantMessage } from "@/lib/errors";
 import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/client/report-job";
 import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
 import type { VerifiedSource } from "@/lib/references/find-sources";
 import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
-import { DOCX_PRESETS, exportMarkdownToDocx, parseFormatRules } from "@/utils/markdown-docx-exporter";
+import { DOCX_PRESETS } from "@/utils/markdown-docx-exporter";
 import { attachmentError, clipboardFiles, MAX_CHAT_ATTACHMENTS } from "@/lib/client/report-attachments";
 import { isDiagramType } from "@/lib/types/diagram";
 
@@ -57,47 +59,11 @@ const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF terbuka", landing_page: "Halaman penerbit", closed: "Berbayar", broken: "Tautan rusak", unknown: "PDF ?" };
 
-/** Sumber lama tersimpan dengan domain SINTA yang sudah mati + ISSN bertanda hubung (0 hasil). */
-function fixCheckLink(url: string) {
-  return url
-    .replace("://sinta.kemdikbud.go.id/", "://sinta.kemdiktisaintek.go.id/")
-    .replace(/([?&]q=)(\d{4})-(\d{3}[\dXx])\b/, "$1$2$3");
-}
-
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
   const data = (await res.json().catch(() => null)) as (T & { success?: boolean; error?: string }) | null;
   if (!res.ok || !data?.success) throw new Error(data?.error || `Permintaan gagal (${res.status}).`);
   return data;
-}
-
-/** Rasterisasi SVG (string) → PNG bytes via canvas, skala 2x agar tajam di DOCX. */
-async function svgToPng(svg: string, scale = 2): Promise<Uint8Array> {
-  const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const el = new Image();
-      el.onload = () => resolve(el);
-      el.onerror = () => reject(new Error("SVG tidak bisa dimuat"));
-      el.src = url;
-    });
-    const width = Math.max(1, Math.round((img.naturalWidth || 800) * scale));
-    const height = Math.max(1, Math.round((img.naturalHeight || 600) * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas tidak tersedia");
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.drawImage(img, 0, 0, width, height);
-    const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-    if (!png) throw new Error("Gagal encode PNG");
-    return new Uint8Array(await png.arrayBuffer());
-  } finally {
-    URL.revokeObjectURL(url);
-  }
 }
 
 export default function LaporanPage() {
@@ -111,6 +77,7 @@ export default function LaporanPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [job, setJob] = useState<ReportJob | null>(null);
   const [figures, setFigures] = useState<FigureJob[]>([]);
+  const [downloadingSources, setDownloadingSources] = useState(false);
   const [polling, setPolling] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -442,37 +409,63 @@ export default function LaporanPage() {
     if (!detail?.draft) return;
     setExporting(true);
     try {
-      // Sertakan gambar AI yang sudah jadi; key = judul lowercase (cocok dengan placeholder [Gambar: Judul - …]).
-      const images: Record<string, Uint8Array> = {};
-      await Promise.all(figures.filter((f) => f.status === "done" && f.url).map(async (f) => {
-        try {
-          const res = await authenticatedFetch(f.url!, { cache: "force-cache" });
-          if (res.ok) images[f.title.trim().toLowerCase()] = new Uint8Array(await res.arrayBuffer());
-        } catch { /* gambar dilewati, placeholder tetap tercetak */ }
-      }));
-      // Diagram UML dari engine (SVG) → PNG
-      await Promise.all((detail.plan?.diagrams ?? []).filter((d) => d.svg).map(async (d) => {
-        try { images[d.title.trim().toLowerCase()] = await svgToPng(d.svg!); } catch { /* placeholder tetap tercetak */ }
-      }));
-      const title = detail.title || detail.brief.title || "Laporan";
-      const b = detail.brief;
-      const cover = {
-        title,
-        subtitle: b.documentType ? `${b.documentType}${b.course ? ` ${b.course}` : ""}` : undefined,
-        author: b.studentName || user?.name || undefined,
-        studentId: b.studentId,
-        lecturer: b.lecturer,
-        program: b.program,
-        faculty: b.faculty,
-        institution: b.institution || undefined,
-        year: String(new Date().getFullYear()),
-      };
-      // Preset pilihan user, lalu ditimpa ketentuan format kampus dari brief (margin/font/spasi).
-      const base = DOCX_PRESETS[preset].profile;
-      const rules = parseFormatRules(b.formatRules);
-      await exportMarkdownToDocx(detail.draft, title, { profile: { ...base, ...rules, margin: { ...base.margin, ...rules.margin }, cover }, images });
+      const res = await authenticatedFetch(`/api/laporan/sessions/${detail.id}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draft: detail.draft, preset }),
+      });
+      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string; url?: string; name?: string; missingImageTitles?: string[]; pendingFigureTitles?: string[] } | null;
+      if (!res.ok || !data?.success || !data.url) throw new Error(data?.error || "Gagal membuat DOCX.");
+      const link = document.createElement("a");
+      link.href = data.url;
+      link.download = data.name || "laporan.docx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      const notes = [
+        data.missingImageTitles?.length ? `${data.missingImageTitles.length} gambar belum tersedia: ${data.missingImageTitles.slice(0, 3).join(", ")}` : "",
+        data.pendingFigureTitles?.length ? `${data.pendingFigureTitles.length} ilustrasi masih diproses` : "",
+      ].filter(Boolean);
+      if (notes.length) setError(`DOCX dibuat, tetapi ${notes.join("; ")}.`);
     } catch (e) { setError(getErrorMessage(e)); }
     finally { setExporting(false); }
+  };
+
+  const saveJournalVerification = async (id: string, journalVerification: JournalVerification | null) => {
+    if (!activeId) return;
+    const sessionId = activeId;
+    try {
+      await api(`/api/laporan/sessions/${sessionId}`, { method: "PATCH", body: JSON.stringify({ sources: [{ id, journalVerification }] }) });
+      await loadDetail(sessionId);
+    } catch (e) { setError(getErrorMessage(e)); }
+  };
+
+  const downloadSources = async (ids: string[], zip: boolean) => {
+    if (!activeId || !ids.length || downloadingSources) return;
+    setDownloadingSources(true);
+    try {
+      const res = await authenticatedFetch(`/api/laporan/sessions/${activeId}/sources/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids, zip }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error || "PDF tidak bisa diunduh.");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") || "")?.[1] || (zip ? "referensi-laporan.zip" : "referensi.pdf");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      const skipped = Number(res.headers.get("x-skipped-count") || 0);
+      if (skipped) setError(`${skipped} PDF tidak dapat diunduh. Rinciannya ada di daftar-sumber.json dalam ZIP; gunakan Buka PDF sebagai alternatif.`);
+    } catch (e) { setError(getErrorMessage(e)); }
+    finally { setDownloadingSources(false); }
   };
 
   /** Buka diagram hasil engine di UML Builder untuk diedit. */
@@ -511,7 +504,7 @@ export default function LaporanPage() {
     rencana: detail?.plan ? detail.plan.outline.length : null,
     sumber: detail ? detail.sources.filter((s) => s.selected !== false).length : null,
     bahan: detail?.materials.length ?? null,
-    gambar: detail ? (detail.plan?.diagrams.length ?? 0) + figures.length : null,
+    gambar: detail ? (detail.plan?.diagrams.length ?? 0) + figures.length + (detail.plan?.figures ?? []).filter((f) => f.fileId).length : null,
     draft: detail?.draft ? draftSections.length : null,
   };
 
@@ -608,16 +601,19 @@ export default function LaporanPage() {
               {detail && tab === "sumber" && (() => {
                 const selectedCount = detail.sources.filter((s) => s.selected !== false).length;
                 const fullCount = detail.sources.filter((s) => s.readLevel === "fulltext").length;
+                const downloadable = detail.sources.filter((s) => s.selected !== false && s.pdfStatus === "verified");
                 return (
                 <div className="space-y-2">
-                  <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />Semua DOI diverifikasi ke Crossref. Peringkat SINTA/Scopus <b>tidak</b> dipastikan otomatis, cek lewat tautan di tiap sumber. PDF open access diunduh dan dibaca penuh oleh sistem; sumber lain hanya abstrak. Centang sumber yang mau dipakai; yang tidak dicentang tidak dikutip.</p>
-                  {detail.sources.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
-                      <span><b>{selectedCount}</b> dari {detail.sources.length} dipakai, <b>{fullCount}</b> dibaca penuh</span>
-                      <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua</button>
-                      <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan</button>
-                    </div>
-                  )}
+                  <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />DOI valid bukan berarti jurnal terakreditasi SINTA atau terindeks Scopus. Cek <b>nama jurnal dan semua ISSN</b> di bawah, lalu simpan hasil beserta tautan bukti resminya. Jika pencarian resmi kosong, gunakan pencarian alternatif berdasarkan nama. Label teks penuh hanya muncul bila PDF berhasil dibaca.</p>
+                 {detail.sources.length > 0 && (
+                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
+                        <span><b>{selectedCount}</b> dari {detail.sources.length} dipakai, <b>{fullCount}</b> dibaca penuh</span>
+                       <span><b>{detail.sources.filter((s) => s.journalVerification).length}</b> hasil cek jurnal tersimpan</span>
+                       <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua</button>
+                       <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan</button>
+                       {downloadable.length > 0 && <button type="button" disabled={downloadingSources || downloadable.length > 10} onClick={() => void downloadSources(downloadable.map((s) => s.id), true)} className="font-semibold text-emerald-700 hover:underline disabled:opacity-50">{downloadingSources ? "Menyiapkan ZIP..." : `Unduh ${downloadable.length} PDF terpilih (ZIP, maks. 10)`}</button>}
+                     </div>
+                   )}
                   {!detail.sources.length && <p className="text-sm text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
                   {detail.sources.map((s) => {
                     const on = s.selected !== false;
@@ -634,12 +630,7 @@ export default function LaporanPage() {
                           {s.qualitySignals.filter((q) => q !== "Teks penuh dibaca AI").map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">{q}</span>)}
                           {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-[13px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
                         </div>
-                        <div className="mt-2 flex flex-wrap gap-3 text-sm font-semibold">
-                          {s.doiUrl && <a href={s.doiUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" />DOI</a>}
-                          {s.pdfUrl && s.pdfStatus === "verified" && <a href={s.pdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-emerald-700 hover:underline"><Download className="h-3.5 w-3.5" />Unduh PDF</a>}
-                          {!s.doiUrl && s.url && s.pdfStatus !== "verified" && <a href={s.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-blue-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" />Halaman artikel</a>}
-                          {s.checkLinks.map((c) => { const href = fixCheckLink(c.url); return <a key={href} href={href} target="_blank" rel="noreferrer" className="text-slate-500 hover:underline">{c.label}</a>; })}
-                        </div>
+                         <JournalCheck key={`${detail.id}:${s.id}`} source={s} verification={s.journalVerification} onVerificationChange={(value) => void saveJournalVerification(s.id, value)} onDownload={() => void downloadSources([s.id], false)} downloading={downloadingSources} />
                       </div>
                     </div>
                     );
@@ -689,7 +680,15 @@ export default function LaporanPage() {
                       ))}
                     </div>
                   )}
-                  {!figures.length && !(detail.plan?.diagrams ?? []).length && <p className="text-sm text-slate-500">Belum ada gambar.</p>}
+                  {(detail.plan?.figures ?? []).filter((f) => f.fileId).map((f) => (
+                    <div key={f.id} className="rounded-xl border border-emerald-100 p-2.5 text-sm">
+                      <div className="font-semibold">{f.title} <span className="font-normal text-emerald-700">Gambar bahan</span></div>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`/api/files/${f.fileId}`} alt={f.caption || f.title} className="mt-2 w-full rounded-lg border border-slate-100" />
+                      <p className="mt-1 text-slate-500">{f.caption}. Disertakan otomatis saat ekspor DOCX.</p>
+                    </div>
+                  ))}
+                  {!figures.length && !(detail.plan?.diagrams ?? []).length && !(detail.plan?.figures ?? []).some((f) => f.fileId) && <p className="text-sm text-slate-500">Belum ada gambar.</p>}
                   {figures.length > 0 && <div className="flex items-center gap-1 text-sm font-bold text-slate-700"><ImageIcon className="h-4 w-4" /> Ilustrasi AI ({figures.length})</div>}
                   {figures.map((f) => (
                     <div key={f.id} className="rounded-xl border border-slate-100 p-2.5 text-sm">

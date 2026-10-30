@@ -17,6 +17,7 @@ import { searchCrossref, verifyCrossrefDoi } from "./crossref";
 import { checkPdfUrls, type PdfStatus } from "./verify-pdf";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import type { ProviderPaper, SearchOptions } from "./types";
+import { buildJournalCheckLinks, normalizeJournalIssns, type JournalVerification } from "./journal-check";
 
 export type JournalRequirement =
   | "bebas"
@@ -51,6 +52,8 @@ export interface VerifiedSource {
   qualitySignals: string[];
   /** Tautan untuk user mengecek sendiri peringkat jurnal. */
   checkLinks: { label: string; url: string }[];
+  /** Catatan peringkat manual, bila caller menyimpannya. Tidak pernah diisi otomatis. */
+  journalVerification?: JournalVerification;
   /** Seberapa isi yang kami baca: teks penuh (PDF OA terunduh), abstrak, atau tidak ada. */
   readLevel: "fulltext" | "abstract" | "none";
   /** Skor relevansi 0-100 terhadap query (overlap kata kunci + kebaruan + sitasi). */
@@ -133,7 +136,7 @@ export function mergeAndDeduplicate(
       if (!merged.url && paper.url) merged.url = paper.url;
       if (!merged.venue && paper.venue) merged.venue = paper.venue;
       if (!merged.authors?.length) merged.authors = paper.authors || [];
-      if (!merged.issn?.length && paper.issn?.length) merged.issn = paper.issn;
+      merged.issn = normalizeJournalIssns([...(merged.issn || []), ...(paper.issn || [])]);
       if (merged.inDoaj === undefined && paper.inDoaj !== undefined) merged.inDoaj = paper.inDoaj;
       if (!merged.venueType && paper.venueType) merged.venueType = paper.venueType;
       if (!merged.language && paper.language) merged.language = paper.language;
@@ -177,7 +180,7 @@ function qualitySignals(p: ProviderPaper, pdfStatus: PdfStatus): string[] {
   else if (p.venueType === "repository") out.push("Repositori/preprint (belum tentu peer-review)");
   if (p.issn?.length) out.push(`ISSN ${p.issn[0]}`);
   if ((p.citationCount || 0) >= 50) out.push(`${p.citationCount} sitasi`);
-  if (pdfStatus === "verified") out.push("PDF bisa diunduh");
+  if (pdfStatus === "verified") out.push("Tautan PDF terverifikasi");
   else if (pdfStatus === "landing_page") out.push("Halaman penerbit tersedia");
   return out;
 }
@@ -188,17 +191,7 @@ export function doiToUrl(doi: string) {
 }
 
 function checkLinks(p: ProviderPaper): { label: string; url: string }[] {
-  const links: { label: string; url: string }[] = [];
-  // SINTA hanya cocok dengan ISSN TANPA tanda hubung (12345678); "1234-5678" → 0 hasil.
-  const issn = (p.issn?.[0] || "").replace(/[^0-9xX]/g, "").toUpperCase();
-  const venue = (p.venue || "").trim();
-  const q = issn.length === 8 ? issn : venue;
-  if (q) {
-    links.push({ label: "Cek Scimago (Q1-Q4)", url: `https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(q)}` });
-    // Domain lama sinta.kemdikbud.go.id sudah mati sejak pindah ke Kemdiktisaintek.
-    links.push({ label: "Cek SINTA", url: `https://sinta.kemdiktisaintek.go.id/journals?q=${encodeURIComponent(q)}` });
-  }
-  return links;
+  return buildJournalCheckLinks({ venue: p.venue, issn: p.issn });
 }
 
 /**
@@ -258,19 +251,10 @@ export function scoreSource(p: ProviderPaper, terms: string[], nowYear = new Dat
   return Math.round((relevance * 0.6 + recency * 0.3 + citations * 0.1) * 100);
 }
 
-/** Filter keras berdasarkan syarat yang bisa kami pastikan; tier dicek user via link. */
+/** Only narrow to journal candidates; ISSN/DOAJ cannot establish any requested rank. */
 function passesRequirement(p: ProviderPaper, req: JournalRequirement | undefined) {
   if (!req || req === "bebas") return true;
-  const isJournal = p.venueType === "journal" || (!p.venueType && Boolean(p.venue));
-  if (!isJournal) return false;
-  if (req === "sinta-1-2" || req === "sinta-1-4") {
-    // SINTA mensyaratkan jurnal Indonesia; sinyal terbaik yang bisa dicek otomatis: DOAJ/ISSN.
-    return Boolean(p.issn?.length) || Boolean(p.inDoaj);
-  }
-  if (req === "scopus-q1-q2" || req === "scopus-any" || req === "internasional-bereputasi") {
-    return Boolean(p.issn?.length) && Boolean(p.doiVerified);
-  }
-  return true;
+  return p.venueType === "journal" || (!p.venueType && Boolean(p.venue));
 }
 
 export async function findVerifiedSources(query: string, options: FindSourcesOptions = {}): Promise<VerifiedSource[]> {
@@ -309,6 +293,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
           url: paper.url || check.publisherUrl || null,
           pdfUrl: paper.pdfUrl || check.pdfUrl || null,
           venue: paper.venue || check.venue || "",
+          issn: normalizeJournalIssns([...(paper.issn || []), ...(check.issn || [])]),
         },
       };
     }),
@@ -320,7 +305,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     .sort((a, b) => b.score - a.score)
     .slice(0, limit);
 
-  progress(`${eligibleRanked.length} lolos verifikasi DOI & syarat jurnal, mengecek PDF open access…`);
+  progress(`${eligibleRanked.length} kandidat setelah pemeriksaan DOI${options.requirement && options.requirement !== "bebas" ? "; peringkat/indeks jurnal belum dikonfirmasi" : ""}, mengecek PDF open access…`);
   // Tahap 1: cek pdfUrl dari provider (sekaligus cari PDF asli bila ternyata landing page).
   let checks = await checkPdfUrls(eligibleRanked.map(({ paper }) => paper.pdfUrl));
 
@@ -361,7 +346,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
       pdfStatus,
       citationCount: Number(p.citationCount || 0),
       isOpenAccess: Boolean(p.isOpenAccess) || pdfStatus === "verified",
-      issn: p.issn || [],
+      issn: normalizeJournalIssns(p.issn),
       inDoaj: Boolean(p.inDoaj),
       venueType: p.venueType || null,
       language: p.language || null,
@@ -378,9 +363,9 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
 
 export const JOURNAL_REQUIREMENT_LABEL: Record<JournalRequirement, string> = {
   "bebas": "Bebas (DOI valid)",
-  "sinta-1-2": "SINTA 1-2 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
-  "sinta-1-4": "SINTA 1-4 (jurnal Indonesia, ISSN/DOAJ; tier dicek user)",
-  "scopus-q1-q2": "Scopus Q1-Q2 (ISSN + DOI; kuartil dicek user via Scimago)",
-  "scopus-any": "Scopus (ISSN + DOI; indeks dicek user)",
-  "internasional-bereputasi": "Internasional bereputasi (ISSN + DOI; dicek user)",
+  "sinta-1-2": "Target SINTA 1-2 (kandidat; akreditasi wajib dicek manual)",
+  "sinta-1-4": "Target SINTA 1-4 (kandidat; akreditasi wajib dicek manual)",
+  "scopus-q1-q2": "Target Scopus Q1-Q2 (indeks dan kuartil wajib dicek manual)",
+  "scopus-any": "Target Scopus (indeks wajib dicek manual)",
+  "internasional-bereputasi": "Target internasional bereputasi (wajib dicek manual)",
 };

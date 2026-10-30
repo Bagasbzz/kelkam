@@ -5,6 +5,8 @@ import { searchOpenAlex } from "@/lib/references/openalex";
 import { searchCrossref, verifyCrossrefDoi } from "@/lib/references/crossref";
 import { checkPdfUrls } from "@/lib/references/verify-pdf";
 import type { ProviderPaper } from "@/lib/references/types";
+import { buildJournalCheckLinks, normalizeJournalIssns } from "@/lib/references/journal-check";
+import { doiToUrl } from "@/lib/references/find-sources";
 
 function toApaFromProvider(paper: ProviderPaper) {
   const authors = (paper.authors || []).slice(0, 5).join(", ");
@@ -89,6 +91,10 @@ function mergeAndDeduplicate(
       if (!merged.url && paper.url) merged.url = paper.url;
       if (!merged.venue && paper.venue) merged.venue = paper.venue;
       if (!merged.authors?.length) merged.authors = paper.authors || [];
+      merged.issn = normalizeJournalIssns([...(merged.issn || []), ...(paper.issn || [])]);
+      merged.inDoaj = Boolean(merged.inDoaj || paper.inDoaj);
+      if (!merged.venueType && paper.venueType) merged.venueType = paper.venueType;
+      if (!merged.language && paper.language) merged.language = paper.language;
       if (!merged.pdfStatus || merged.pdfStatus === "unknown") {
         merged.pdfStatus = paper.pdfStatus || merged.pdfStatus || "unknown";
       }
@@ -172,6 +178,7 @@ export async function POST(req: Request) {
           url: paper.url || doiCheck.publisherUrl || null,
           pdfUrl: paper.pdfUrl || doiCheck.pdfUrl || null,
           venue: paper.venue || doiCheck.venue || "",
+          issn: normalizeJournalIssns([...(paper.issn || []), ...(doiCheck.issn || [])]),
         };
       })
     );
@@ -195,6 +202,7 @@ export async function POST(req: Request) {
       url: p.url || null,
       pdfUrl: p.pdfUrl || null,
       doi: p.doi || null,
+      doiUrl: p.doi ? doiToUrl(p.doi) : null,
       doiVerified: Boolean(p.doiVerified),
       pdfStatus: p.pdfStatus,
       citationCount: p.citationCount || 0,
@@ -202,6 +210,11 @@ export async function POST(req: Request) {
       source: p.source || null,
       sourceProviders: p.sourceProviders || (p.source ? [p.source] : []),
       citationApa: toApaFromProvider(p),
+      issn: normalizeJournalIssns(p.issn),
+      inDoaj: Boolean(p.inDoaj),
+      venueType: p.venueType || null,
+      language: p.language || null,
+      checkLinks: buildJournalCheckLinks(p),
     }));
 
     return NextResponse.json({ success: true, data: mapped });

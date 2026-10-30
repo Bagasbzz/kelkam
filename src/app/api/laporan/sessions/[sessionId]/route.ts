@@ -13,6 +13,7 @@ import { getSessionState } from "@/lib/server/laporan/assistant";
 import { listImageJobs } from "@/lib/server/image-jobs";
 import type { VerifiedSource } from "@/lib/references/find-sources";
 import { sanitizePublicErrorText, toPublicAssistantMessage } from "@/lib/errors";
+import { parseJournalVerification, type JournalVerification } from "@/lib/references/journal-check";
 
 export const runtime = "nodejs";
 
@@ -83,18 +84,35 @@ export async function PATCH(req: Request, context: Ctx) {
     if (typeof body.draft === "string") data.draft = body.draft.slice(0, 1_200_000);
     if (typeof body.title === "string") data.title = body.title.trim().slice(0, 120);
     if (Array.isArray(body.sources)) {
-      // Centang/lepas centang sumber: hanya field `selected` yang boleh diubah klien.
-      const toggles = new Map<string, boolean>();
+      const changes = new Map<string, { selected?: boolean; journalVerification?: JournalVerification | null }>();
       for (const item of body.sources.slice(0, 200)) {
         if (item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string") {
-          toggles.set((item as { id: string }).id, (item as { selected?: unknown }).selected !== false);
+          const value = item as Record<string, unknown>;
+          const change: { selected?: boolean; journalVerification?: JournalVerification | null } = {};
+          if ("selected" in value) {
+            if (typeof value.selected !== "boolean") throw new ApiRequestError(400, "Pilihan sumber tidak valid.");
+            change.selected = value.selected;
+          }
+          if ("journalVerification" in value) {
+            const verification = parseJournalVerification(value.journalVerification);
+            if (value.journalVerification !== null && (!verification || !verification.evidenceUrl)) throw new ApiRequestError(400, "Hasil cek jurnal perlu peringkat dan tautan bukti resmi yang valid.");
+            change.journalVerification = verification ? { ...verification, checkedAt: new Date().toISOString() } : null;
+          }
+          if (Object.keys(change).length) changes.set(value.id as string, change);
         }
       }
-      if (toggles.size) {
+      if (changes.size) {
         const row = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId: auth.user.id }, select: { sources: true } });
         if (!row) return NextResponse.json({ success: false, error: "Sesi tidak ditemukan." }, { status: 404 });
         const sources = (Array.isArray(row.sources) ? row.sources : []) as unknown as VerifiedSource[];
-        data.sources = sources.map((s) => (toggles.has(s.id) ? { ...s, selected: toggles.get(s.id) } : s));
+        if ([...changes.keys()].some((id) => !sources.some((s) => s.id === id))) throw new ApiRequestError(404, "Sumber tidak ditemukan di sesi ini.");
+        data.sources = sources.map((s) => {
+          const change = changes.get(s.id);
+          if (!change) return s;
+          const updated = { ...s, ...change };
+          if (change.journalVerification === null) delete updated.journalVerification;
+          return updated;
+        });
       }
     }
     if (!Object.keys(data).length) return NextResponse.json({ success: false, error: "Tidak ada perubahan." }, { status: 400 });
