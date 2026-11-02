@@ -11,6 +11,8 @@ import { requireCourseAdmin } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { controlAgentRun, findActiveAgentRun, getAgentRun } from "@/lib/server/agent-runs/engine";
 import { streamAgentRun } from "@/lib/server/agent-runs/stream";
+import { prisma } from "@/lib/db/prisma";
+import { assertTugasAssistantRunAccess } from "@/lib/server/tugas/assistant-access";
 
 export const maxDuration = 120;
 export const runtime = "nodejs";
@@ -26,7 +28,13 @@ export async function GET(req: Request, context: { params: Promise<{ courseId: s
     const admin = await requireCourseAdmin(courseId);
     const sessionId = new URL(req.url).searchParams.get("sessionId");
     if (!sessionId) return NextResponse.json({ success: false, error: "sessionId wajib." }, { status: 400 });
+    const session = await prisma.adminChatSession.findFirst({
+      where: { id: sessionId, courseId, userId: admin.id },
+      select: { id: true },
+    });
+    if (!session) throw new ApiRequestError(404, "Sesi tidak ditemukan.");
     const run = await findActiveAgentRun(admin.id, "tugas", sessionId);
+    if (run) await assertTugasAssistantRunAccess(run.id, admin.id, courseId);
     return NextResponse.json({ success: true, run }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof ApiRequestError) return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
@@ -45,6 +53,7 @@ export async function POST(req: Request, context: { params: Promise<{ courseId: 
 
     const run = await getAgentRun(parsed.data.runId, admin.id);
     if (!run || run.kind !== "tugas") return NextResponse.json({ success: false, error: "Run tidak ditemukan." }, { status: 404 });
+    await assertTugasAssistantRunAccess(run.id, admin.id, courseId);
 
     if (parsed.data.action === "pause" || parsed.data.action === "cancel") {
       const updated = await controlAgentRun(run.id, admin.id, parsed.data.action);

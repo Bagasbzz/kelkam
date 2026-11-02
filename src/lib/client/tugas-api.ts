@@ -305,10 +305,10 @@ export function addCourseAdmin(courseId: string, email: string) {
 }
 
 /** Enroll user ke course (opsional). */
-export function enrollCourse(courseId: string) {
+export function enrollCourse(courseId: string, token: string) {
   return request<{ enrollmentId: string }>(
     `/api/tugas/courses/${courseId}/enroll`,
-    { method: "POST" }
+    { method: "POST", json: { token } }
   );
 }
 
@@ -358,7 +358,7 @@ export function deleteTugas(tugasId: string) {
 // Submission
 // ---------------------------------------------------------------------------
 
-export function submitTugas(tugasId: string, input: SubmissionInput) {
+export function submitTugas(tugasId: string, input: SubmissionInput & { token: string }) {
   return request<{ submission: SubmissionRow; position: number; total: number }>(
     `/api/tugas/tugas/${tugasId}/submit`,
     { method: "POST", json: input }
@@ -366,7 +366,7 @@ export function submitTugas(tugasId: string, input: SubmissionInput) {
 }
 
 /** Ubah pengumpulan sendiri (hanya sebelum deadline; urutan tidak berubah). */
-export function updateMySubmission(tugasId: string, input: SubmissionInput) {
+export function updateMySubmission(tugasId: string, input: SubmissionInput & { token: string }) {
   return request<{ submission: SubmissionRow; position: number; total: number }>(
     `/api/tugas/tugas/${tugasId}/submit`,
     { method: "PATCH", json: input }
@@ -402,12 +402,12 @@ export function deleteSubmission(submissionId: string) {
   });
 }
 
-export function fetchMySubmission(tugasId: string) {
+export function fetchMySubmission(tugasId: string, token: string) {
   return request<{
     submission: SubmissionRow | null;
     count: number;
     myPosition: number | null;
-  }>(`/api/tugas/tugas/${tugasId}/my-submission`);
+  }>(`/api/tugas/tugas/${tugasId}/my-submission?token=${encodeURIComponent(token)}`);
 }
 
 export function fetchAdminSubmissions(tugasId: string) {
@@ -604,13 +604,13 @@ export interface MyTugasWithSubmission extends TugasSummary {
   };
 }
 
-export function fetchMyCourseHistory(courseId: string) {
+export function fetchMyCourseHistory(courseId: string, token: string) {
   return request<{
     submitted: MyTugasWithSubmission[];
     missed: TugasSummary[];
     pending: TugasSummary[];
     counts: { submitted: number; missed: number; pending: number };
-  }>(`/api/tugas/me/submissions?courseId=${encodeURIComponent(courseId)}`);
+  }>(`/api/tugas/me/submissions?courseId=${encodeURIComponent(courseId)}&token=${encodeURIComponent(token)}`);
 }
 
 // ---------------------------------------------------------------------------

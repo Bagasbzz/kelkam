@@ -14,12 +14,12 @@ import {
   ApiRequestError,
   publicErrorResponse,
 } from "@/lib/server/request-guards";
-import { getTugasOrThrow } from "@/lib/server/tugas/access";
+import { assertCourseAccess, getTugasOrThrow } from "@/lib/server/tugas/access";
 import { getStudentView } from "@/lib/server/tugas/visibility";
 import { serializeSubmission } from "@/lib/server/tugas/serialize";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ id: string }> },
 ) {
   const auth = await authenticateRequestFromCookie();
@@ -30,7 +30,9 @@ export async function GET(
   try {
     const { id } = await context.params;
     // Throw 404 kalau tugas tidak ada (biar konsisten dengan visibility helper).
-    await getTugasOrThrow(id);
+    const tugas = await getTugasOrThrow(id);
+    const token = new URL(req.url).searchParams.get("token");
+    await assertCourseAccess(tugas.courseId, auth.user, token);
 
     const view = await getStudentView(id, auth.user.id);
     if (!view) {

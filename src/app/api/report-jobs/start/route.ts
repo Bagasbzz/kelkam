@@ -17,7 +17,7 @@
  *   - title atau topic harus diisi
  *   - sources min 1
  *   - outline min 1
- *   - max 50 sources, max 50 outline items (anti payload gila)
+ *   - max 50 sources, max 10 outline items
  *
  * Rate limit: 5 job per 10 menit per user (AI mahal + lama).
  *
@@ -32,6 +32,7 @@
 
 import { NextResponse } from "next/server";
 import { startReportJob } from "@/lib/report/report-jobs";
+import { normalizeReportIntent } from "@/lib/report/report-intent";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import {
   enforceRateLimit,
@@ -49,10 +50,16 @@ export const maxDuration = 60;
 function validateProject(project: unknown) {
   if (!project || typeof project !== "object" || Array.isArray(project)) return "Data proyek tidak valid.";
   const candidate = project as Record<string, unknown>;
+  const intent = normalizeReportIntent(candidate.intent);
   if (!candidate.title && !candidate.topic) return "Judul atau topik belum diisi.";
+  if (intent.outputMode === "citations_only") {
+    if (!Array.isArray(candidate.references) || !candidate.references.length) return "Pilih sumber sitasi terlebih dahulu.";
+    if (candidate.references.length > 60) return "Maksimal 60 referensi.";
+    return "";
+  }
   if (!Array.isArray(candidate.sources) || candidate.sources.length === 0) return "Sumber/konteks proyek belum diisi.";
-  if (!Array.isArray(candidate.outline) || candidate.outline.length === 0) return "Outline belum dibuat. Jalankan brainstorm rencana dulu.";
-  if (candidate.sources.length > 50 || candidate.outline.length > 50) return "Isi proyek melewati batas pemrosesan.";
+  if (intent.outputMode === "full_report" && !intent.scope.requestedSections.length && (!Array.isArray(candidate.outline) || candidate.outline.length === 0)) return "Outline belum dibuat. Jalankan brainstorm rencana dulu.";
+  if (candidate.sources.length > 50 || (Array.isArray(candidate.outline) && candidate.outline.length > 10)) return "Maksimal 50 sumber dan 10 bagian outline per laporan.";
   return "";
 }
 

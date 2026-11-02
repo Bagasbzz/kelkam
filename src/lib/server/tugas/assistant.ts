@@ -13,6 +13,10 @@ import { prisma } from "@/lib/db/prisma";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, stripDashes, stripThinking } from "@/lib/ai/client";
 import { TOOL_DEFS, TOOL_IMPL, type ToolContext } from "@/lib/server/tugas/assistant-tools";
 import { readUpload } from "@/lib/storage/upload";
+import { isCourseAdmin } from "@/lib/server/auth";
+import { ApiRequestError } from "@/lib/server/request-guards";
+import { assertTugasAssistantBinding, assertTugasAssistantRunAccess } from "@/lib/server/tugas/assistant-access";
+import { runWithAiOwner } from "@/lib/server/ai-budget";
 import {
   appendUserMessage, controlAgentRun, createAgentRun, findActiveAgentRun, isContinueKeyword,
   type AgentDriver, type AgentRunPublic, type AgentToolContext,
@@ -147,6 +151,9 @@ export interface StartRunResult { runId: string; sessionId: string; resumed: boo
  * riwayat; loop tool dijalankan engine. Return id run untuk di-stream route.
  */
 export async function startTugasAssistantRun(input: AssistantTurnInput): Promise<StartRunResult> {
+  if (!await isCourseAdmin(input.adminId, input.courseId)) {
+    throw new ApiRequestError(403, "Kamu bukan admin untuk course ini.");
+  }
   const course = await prisma.course.findUnique({ where: { id: input.courseId }, select: { name: true } });
   if (!course) throw new Error("Course tidak ditemukan.");
 
@@ -154,6 +161,7 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
   let session = input.sessionId
     ? await prisma.adminChatSession.findFirst({ where: { id: input.sessionId, courseId: input.courseId, userId: input.adminId } })
     : null;
+  if (input.sessionId && !session) throw new ApiRequestError(404, "Sesi tidak ditemukan.");
   if (!session) {
     session = await prisma.adminChatSession.create({
       data: { courseId: input.courseId, userId: input.adminId, title: input.message.slice(0, 80) },
@@ -166,6 +174,7 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
   // Lanjutkan run yang dijeda/antre (mis. user ketik "lanjut" setelah sinyal putus).
   const active = await findActiveAgentRun(input.adminId, RUN_KIND, session.id);
   if (active) {
+    await assertTugasAssistantRunAccess(active.id, input.adminId, input.courseId);
     if (active.status === "running") return { runId: active.id, sessionId: session.id, resumed: true };
     if (active.status === "paused") await controlAgentRun(active.id, input.adminId, "resume");
     if (!isContinueKeyword(input.message) || files.length) {
@@ -201,7 +210,7 @@ export async function startTugasAssistantRun(input: AssistantTurnInput): Promise
   if (all.length > HISTORY_LIMIT) {
     const old = all.slice(0, all.length - HISTORY_LIMIT);
     recent = all.slice(-HISTORY_LIMIT);
-    summary = await summarizeOld(old, summary);
+    summary = await runWithAiOwner(input.adminId, "tugas-summary", () => summarizeOld(old, summary));
   }
 
   const messages: Msg[] = recent.map((m): Msg => ({ role: m.role as "user" | "assistant", content: m.content }));
@@ -320,12 +329,14 @@ export const tugasAgentDriver: AgentDriver = {
   maxTokens: 1600,
   describeToolCall,
   async systemPrompt(run) {
-    const session = await prisma.adminChatSession.findFirst({ where: { id: run.sessionId, userId: run.ownerId }, select: { memory: true, summary: true } });
+    const courseId = await assertTugasAssistantBinding(run);
+    const session = await prisma.adminChatSession.findFirst({ where: { id: run.sessionId, userId: run.ownerId, courseId }, select: { memory: true, summary: true } });
     const courseName = String(run.meta.courseName ?? "");
     const userFiles = Array.isArray(run.meta.userFiles) ? (run.meta.userFiles as UserAttachmentMeta[]) : [];
     return systemPrompt(courseName, (session?.memory as Record<string, unknown> | null) ?? null, session?.summary ?? null, userFiles);
   },
   async runTool(name, args, ctx: AgentToolContext) {
+    const courseId = await assertTugasAssistantBinding(ctx.run);
     const impl = TOOL_IMPL[name];
     if (!impl) return { error: `Tool ${name} tidak dikenal.` };
     if (name === "setFeedback") {
@@ -333,7 +344,7 @@ export const tugasAgentDriver: AgentDriver = {
       if (denied) return { error: denied };
     }
     const userFiles = Array.isArray(ctx.run.meta.userFiles) ? (ctx.run.meta.userFiles as UserAttachmentMeta[]) : [];
-    const toolCtx: ToolContext = { courseId: String(ctx.run.meta.courseId), adminId: ctx.run.ownerId, attachments: ctx.attachments, userFileIds: userFiles.map((f) => f.fileId), emit: ctx.emit };
+    const toolCtx: ToolContext = { courseId, adminId: ctx.run.ownerId, attachments: ctx.attachments, userFileIds: userFiles.map((f) => f.fileId), emit: ctx.emit };
     return impl(toolCtx, args as never);
   },
   async onFinish(run: AgentRunPublic) {

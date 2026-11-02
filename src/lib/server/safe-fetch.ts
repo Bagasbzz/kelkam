@@ -14,9 +14,9 @@
  *   - Redirect diikuti manual (maks 5), tiap lompatan dicek ulang.
  *   - Ukuran body dibatasi (stream dibaca bertahap, berhenti saat lewat batas).
  *
- * Catatan: masih ada celah teoretis DNS rebinding (resolve publik, lalu koneksi
- * ke IP lain). Risikonya kecil untuk kasus ini; untuk perlindungan penuh perlu
- * custom dispatcher yang mem-pin IP.
+ * DNS validation does NOT pin the connection address. DNS rebinding remains
+ * possible between lookup and fetch; a pinned dispatcher or egress policy is
+ * required when that guarantee is needed.
  * -----------------------------------------------------------------------------
  */
 
@@ -33,30 +33,38 @@ export class SafeFetchError extends Error {
 /** true bila alamat IP termasuk jaringan privat/loopback/link-local/reserved. */
 export function isPrivateAddress(ip: string): boolean {
   if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
+    const [a, b, c] = ip.split(".").map(Number);
     if (a === 0 || a === 10 || a === 127) return true;
     if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
     if (a === 169 && b === 254) return true; // link-local + metadata cloud
     if (a === 172 && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
-    if (a === 192 && b === 0) return true; // 192.0.0.0/24 + 192.0.2.0/24 (TEST-NET-1)
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true; // special use + TEST-NET-1
+    if (a === 192 && b === 88 && c === 99) return true; // deprecated 6to4 relay
     if (a === 198 && (b === 18 || b === 19)) return true; // benchmark
-    if (a === 198 && b === 51) return true; // TEST-NET-2
-    if (a === 203 && b === 0) return true; // TEST-NET-3
+    if (a === 198 && b === 51 && c === 100) return true; // TEST-NET-2
+    if (a === 203 && b === 0 && c === 113) return true; // TEST-NET-3
     if (a >= 224) return true; // multicast + reserved + broadcast
     return false;
   }
-  if (net.isIPv6(ip)) {
-    const v = ip.toLowerCase();
-    if (v === "::" || v === "::1") return true;
-    // IPv4-mapped (::ffff:10.0.0.1) → cek bagian IPv4-nya.
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v);
-    if (mapped) return isPrivateAddress(mapped[1]);
-    if (/^f[cd]/.test(v)) return true; // unique local fc00::/7
-    if (/^fe[89ab]/.test(v)) return true; // link-local fe80::/10
-    if (/^ff/.test(v)) return true; // multicast
-    if (v.startsWith("2001:db8")) return true; // dokumentasi
-    if (v.startsWith("64:ff9b:")) return true; // NAT64 (bisa memetakan ke IPv4 privat)
+  if (net.isIPv6(ip) && !ip.includes("%")) {
+    // WHATWG URLs convert dotted mapped IPv4 to hex. Classify words, not spelling.
+    const canonical = new URL(`http://[${ip}]/`).hostname.slice(1, -1);
+    const [left, right] = canonical.split("::");
+    const head = left ? left.split(":") : [];
+    const tail = right ? right.split(":") : [];
+    const words = (right === undefined ? head : [...head, ...Array(8 - head.length - tail.length).fill("0"), ...tail])
+      .map((word) => parseInt(word, 16));
+    if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff) {
+      return isPrivateAddress(`${words[6] >>> 8}.${words[6] & 255}.${words[7] >>> 8}.${words[7] & 255}`);
+    }
+    // Only global unicast 2000::/3; excludes compatible IPv4, NAT64, ULA,
+    // link/site-local, multicast, unspecified and other reserved allocations.
+    if ((words[0] & 0xe000) !== 0x2000) return true;
+    if (words[0] === 0x2001 && words[1] < 0x200) return true; // special-use /23, incl. Teredo
+    if (words[0] === 0x2001 && words[1] === 0xdb8) return true;
+    if (words[0] === 0x2002) return true; // 6to4 can embed private IPv4
+    if (words[0] === 0x3fff && words[1] < 0x1000) return true; // documentation /20
     return false;
   }
   return true; // bukan IP valid → anggap tidak aman
@@ -77,7 +85,7 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   // 8080/8443 dipakai banyak server OJS jurnal kampus; port lain tetap ditolak.
   if (url.port && !ALLOWED_PORTS.has(url.port)) throw new SafeFetchError("Port tidak diizinkan.");
 
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.$/, "");
   if (!host || /^localhost$/i.test(host) || /\.(localhost|local|internal|lan|home|corp)$/i.test(host)) {
     throw new SafeFetchError("Host tidak diizinkan.");
   }
@@ -117,6 +125,11 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
   const maxBytes = options.maxBytes ?? 15 * 1024 * 1024;
   const maxRedirects = options.maxRedirects ?? 5;
   const timeoutMs = options.timeoutMs ?? 20_000;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > 20 ||
+      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647 / 2 ||
+      (options.peekBytes !== undefined && (!Number.isSafeInteger(options.peekBytes) || options.peekBytes < 0))) {
+    throw new SafeFetchError("Batas fetch tidak valid.");
+  }
   // Batas total supaya rantai redirect lambat tetap berhenti; tiap hop juga punya
   // timeout sendiri agar satu hop lambat tidak memakan jatah hop berikutnya.
   const overall = AbortSignal.timeout(timeoutMs * 2);
@@ -154,9 +167,9 @@ export async function safeFetch(rawUrl: string, options: SafeFetchOptions = {}):
       if (done) break;
       total += value.byteLength;
       if (peek && total >= peek) {
-        chunks.push(value);
+        chunks.push(value.subarray(0, peek - (total - value.byteLength)));
         await reader.cancel().catch(() => undefined);
-        return { ok: resp.ok, status: resp.status, headers: resp.headers, finalUrl: url.toString(), body: Buffer.concat(chunks).subarray(0, peek) };
+        return { ok: resp.ok, status: resp.status, headers: resp.headers, finalUrl: url.toString(), body: Buffer.concat(chunks, peek) };
       }
       if (total > maxBytes) {
         await reader.cancel().catch(() => undefined);

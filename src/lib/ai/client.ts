@@ -1,32 +1,21 @@
 import OpenAI from "openai";
 import { AI_SECURITY_POLICY, AI_SECURITY_POLICY_MARKER, leaksSystemPrompt, sanitizeForPrompt } from "@/lib/ai/guard";
 import { safeFetch } from "@/lib/server/safe-fetch";
+import { AiBudgetError, budgetLimit, estimateAiCharge, getAiOwnerContext, reserveAiBudget } from "@/lib/server/ai-budget";
 
-/**
- * Model configuration (diukur 2026-10-08 di api.z0ne.ai):
- * - gpt-5.x / gpt-6.x: 0 token dalam 60 s (reasoning tersembunyi + antrean) → JANGAN dipakai.
- * - claude-sonnet-5: TTFT ~2-14 s, total ~16 s untuk 500 token → model utama.
- * - deepseek-v4-flash-fast: TTFT ~2.5 s, total ~3 s → model cepat (JSON, klasifikasi, ringkasan).
- * - gpt-image-2: ~95-140 s per gambar → hanya lewat job background.
- *
- * Env boleh override, tapi nama yang diketahui lambat dipetakan ulang ke default
- * supaya salah konfigurasi di hosting tidak melumpuhkan semua fitur.
- */
-const SLOW_MODEL = /^gpt-(5|6)/i;
+// Honor provider model IDs from configuration; latency is not a model-name policy.
 function pickModel(envValue: string | undefined, fallback: string) {
   const value = (envValue || "").trim();
-  if (!value || SLOW_MODEL.test(value)) return fallback;
-  return value;
+  return value || fallback;
 }
 
-export const AI_MODEL_DEFAULT = pickModel(process.env.AI_MODEL, "claude-sonnet-5");
-
 export const AI_MODEL_FAST = pickModel(process.env.AI_MODEL_FAST || process.env.AI_MODEL_MINI, "deepseek-v4-flash-fast");
-export const AI_MODEL_REVIEW = pickModel(process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE, AI_MODEL_DEFAULT);
+export const AI_MODEL_DEFAULT = AI_MODEL_FAST;
+export const AI_MODEL_REVIEW = pickModel(process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE || process.env.AI_MODEL, "claude-sonnet-5");
 export const AI_MODEL = AI_MODEL_DEFAULT;
 export const AI_MODEL_IMAGE = process.env.AI_MODEL_IMAGE || "gpt-image-2";
 
-/** Helper to determine fallback fast model name if provider returns model not found or slow */
+/** Configured fast model used by explicit fallback paths. */
 export function getFastModelName(): string {
   return AI_MODEL_FAST;
 }
@@ -45,8 +34,8 @@ function getAiRuntimeConfig() {
 let runtimeClient: OpenAI | null = null;
 
 /** Batas atas output per panggilan (anti penyalahgunaan biaya). Panggilan tanpa max_tokens dapat default. */
-const MAX_OUTPUT_TOKENS_CAP = Number(process.env.AI_MAX_OUTPUT_TOKENS_CAP || 8_000);
-const DEFAULT_OUTPUT_TOKENS = Number(process.env.AI_DEFAULT_OUTPUT_TOKENS || 2_500);
+const MAX_OUTPUT_TOKENS_CAP = Math.min(8000, budgetLimit(process.env.AI_MAX_OUTPUT_TOKENS_CAP, 8000));
+const DEFAULT_OUTPUT_TOKENS = Math.min(MAX_OUTPUT_TOKENS_CAP, budgetLimit(process.env.AI_DEFAULT_OUTPUT_TOKENS, 2500));
 const LEAK_REPLACEMENT = "Maaf, permintaan itu tidak bisa diproses.";
 
 type ChatParams = OpenAI.Chat.Completions.ChatCompletionCreateParams;
@@ -70,7 +59,7 @@ function sanitizeMessageContent(msg: ChatMsg): ChatMsg {
  *  1. Kebijakan keamanan (anti prompt injection) ditempel di system prompt pertama.
  *  2. Karakter tersembunyi di pesan user/tool/assistant dibuang.
  *  3. max_tokens wajib ada & dibatasi (anti boros biaya).
- *  4. Nama model lambat (gpt-5/6) dipetakan ke model cepat.
+ *  4. Permintaan gambar diarahkan ke model review yang mendukung vision.
  */
 function hardenChatRequest(body: ChatParams): ChatParams {
   const messages = body.messages.map(sanitizeMessageContent);
@@ -84,13 +73,26 @@ function hardenChatRequest(body: ChatParams): ChatParams {
   } else {
     messages.unshift({ role: "system", content: AI_SECURITY_POLICY });
   }
-  const requested = typeof body.max_tokens === "number" && body.max_tokens > 0 ? body.max_tokens : DEFAULT_OUTPUT_TOKENS;
+  const requested = body.max_completion_tokens ?? body.max_tokens ?? DEFAULT_OUTPUT_TOKENS;
+  if (!Number.isSafeInteger(requested) || requested <= 0) throw new AiBudgetError("Batas token tidak valid.");
+  const vision = messages.some((message) => Array.isArray(message.content) && message.content.some((part) => part.type === "image_url"));
   return {
     ...body,
-    model: pickModel(body.model, AI_MODEL_FAST),
+    model: vision ? AI_MODEL_REVIEW : pickModel(body.model, AI_MODEL_FAST),
     messages,
     max_tokens: Math.min(requested, MAX_OUTPUT_TOKENS_CAP),
+    max_completion_tokens: undefined,
+    n: 1,
   };
+}
+
+function rethrowBudgetError(error: unknown): never {
+  let cause = error;
+  for (let i = 0; i < 8 && cause && typeof cause === "object"; i++) {
+    if (cause instanceof AiBudgetError) throw cause;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  throw error;
 }
 
 /** Ganti output yang membocorkan system prompt (non-stream saja). */
@@ -106,6 +108,34 @@ function scrubCompletion(result: unknown) {
   }
 }
 
+export async function budgetedAiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  let context = getAiOwnerContext();
+  if (!context) {
+    // Legacy authenticated HTTP callers still receive the same provider boundary.
+    // Background workers must pass their persisted owner explicitly.
+    const { authenticateRequestFromCookie } = await import("@/lib/server/auth");
+    const auth = await authenticateRequestFromCookie().catch(() => null);
+    if (auth?.ok) context = { ownerId: auth.user.id, operation: "authenticated-request" };
+  }
+  if (!context) throw new AiBudgetError("Pemilik permintaan AI tidak tersedia.");
+  const url = new URL(input instanceof Request ? input.url : String(input));
+  const configured = new URL(getAiRuntimeConfig().baseURL);
+  if (url.origin !== configured.origin) throw new AiBudgetError("Endpoint AI tidak valid.");
+  const basePath = configured.pathname.replace(/\/$/, "");
+  const kind = url.pathname === `${basePath}/chat/completions` ? "chat" : url.pathname === `${basePath}/images/generations` ? "image" : null;
+  if (!kind || (init?.method ?? "GET").toUpperCase() !== "POST" || typeof init?.body !== "string" || init.body.length > 16_000_000) throw new AiBudgetError("Operasi provider AI belum didukung.");
+  const body = JSON.parse(init.body) as Record<string, unknown>;
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new AiBudgetError("Payload AI tidak valid.");
+  if (kind === "chat" && body.model !== AI_MODEL_FAST && body.model !== AI_MODEL_REVIEW || kind === "image" && body.model !== AI_MODEL_IMAGE) throw new AiBudgetError("Model AI belum diizinkan.");
+  const charge = estimateAiCharge(body, kind, AI_MODEL_FAST);
+  charge.provider = configured.hostname;
+  await reserveAiBudget(context, charge);
+  const signal = context.signal && init.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal ?? init.signal;
+  signal?.throwIfAborted();
+  // Do not follow provider redirects: POST replay would escape transport admission.
+  return fetch(input, { ...init, signal, redirect: "error" });
+}
+
 export function getAiClient() {
   const { apiKey, baseURL } = getAiRuntimeConfig();
   if (!apiKey) {
@@ -113,17 +143,25 @@ export function getAiClient() {
   }
 
   if (!runtimeClient) {
-    const client = new OpenAI({ apiKey, baseURL });
+    const client = new OpenAI({ apiKey, baseURL, maxRetries: 0, timeout: 35_000, fetch: budgetedAiFetch });
     // Bungkus chat.completions.create sekali di sini supaya SEMUA pemanggil
     // (route lama maupun baru) otomatis lewat pengaman yang sama.
     const completions = client.chat.completions;
     const original = completions.create.bind(completions);
     const guarded = async (body: ChatParams, options?: Parameters<typeof original>[1]) => {
-      const result = await original(hardenChatRequest(body) as never, options);
-      if (!body.stream) scrubCompletion(result);
-      return result;
+      try {
+        const result = await original(hardenChatRequest(body) as never, { ...options, maxRetries: 0 });
+        if (!body.stream) scrubCompletion(result);
+        return result;
+      } catch (error) { rethrowBudgetError(error); }
     };
     completions.create = guarded as unknown as typeof completions.create;
+    const images = client.images;
+    const originalImage = images.generate.bind(images);
+    images.generate = (async (body, options) => {
+      try { return await originalImage(body, { ...options, maxRetries: 0 }); }
+      catch (error) { rethrowBudgetError(error); }
+    }) as typeof images.generate;
     runtimeClient = client;
   }
 

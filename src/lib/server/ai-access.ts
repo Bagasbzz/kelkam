@@ -6,8 +6,7 @@
  * Setiap route AI memanggil `guardAiRequest()` di baris pertama:
  *   1. Auth ke DB (bukan cuma JWT di proxy): sesi yang sudah logout/di-revoke ditolak.
  *   2. Rate limit per route per user (burst).
- *   3. Kuota harian per user lintas SEMUA fitur AI (biaya total terkendali).
- *      Admin mendapat kuota lebih besar.
+ *   3. Anggaran harian durable diperiksa di transport provider, bukan di gate ini.
  *
  * Contoh:
  *   const gate = await guardAiRequest("academic-rewrite", { limit: 15 });
@@ -19,16 +18,11 @@
 import { NextResponse } from "next/server";
 import { authenticateRequestFromCookie, type SessionUser } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
+import { runWithAiOwner } from "@/lib/server/ai-budget";
 
 const TEN_MINUTES = 10 * 60 * 1000;
-const ONE_DAY = 24 * 60 * 60 * 1000;
-
-/** Kuota harian panggilan AI (bisa diatur lewat env di hosting). */
-const DAILY_LIMIT_USER = Number(process.env.AI_DAILY_LIMIT_USER || 150);
-const DAILY_LIMIT_ADMIN = Number(process.env.AI_DAILY_LIMIT_ADMIN || 1500);
-
 export type AiGateResult =
-  | { ok: true; user: SessionUser }
+  | { ok: true; user: SessionUser; run: <T>(fn: () => T) => T }
   | { ok: false; response: NextResponse };
 
 export interface AiGateOptions {
@@ -51,20 +45,7 @@ export async function guardAiRequest(routeKey: string, options: AiGateOptions = 
   const burst = enforceRateLimit(`ai:${routeKey}:${user.id}`, { limit: options.limit ?? 20, windowMs: options.windowMs ?? TEN_MINUTES });
   if (burst) return { ok: false, response: burst };
 
-  // Kuota harian dihitung per unit biaya. Rate limiter dipanggil `cost` kali (cost kecil, 1-3).
-  const dailyLimit = user.role === "ADMIN" ? DAILY_LIMIT_ADMIN : DAILY_LIMIT_USER;
-  for (let i = 0; i < Math.max(1, Math.min(options.cost ?? 1, 5)); i++) {
-    const daily = enforceRateLimit(`ai-daily:${user.id}`, { limit: dailyLimit, windowMs: ONE_DAY });
-    if (daily) {
-      return {
-        ok: false,
-        response: NextResponse.json(
-          { success: false, error: "Kuota AI harian kamu sudah habis. Coba lagi besok." },
-          { status: 429, headers: daily.headers },
-        ),
-      };
-    }
-  }
-
-  return { ok: true, user };
+  // Route weights cannot represent actual provider fanout. Every transport attempt
+  // (including tools, jobs and retries) is charged by the shared provider boundary.
+  return { ok: true, user, run: (fn) => runWithAiOwner(user.id, routeKey, fn) };
 }

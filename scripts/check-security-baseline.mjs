@@ -61,7 +61,8 @@ expect("prisma/schema.prisma", /model\s+StudioProject\b/, "StudioProject model i
 expect("prisma/schema.prisma", /model\s+FileUpload\b/, "FileUpload model is missing");
 
 reject("src/app/api/context/extract/route.ts", /\.env(\.|$)/i, "env files in readable extension list");
-expect("src/app/api/context/extract/route.ts", /MAX_ZIP_UNCOMPRESSED_BYTES/, "ZIP expansion limit is missing");
+expect("src/app/api/context/extract/route.ts", /extractTextFromBuffer/, "shared bounded extraction is missing");
+expect("src/lib/server/extract-text.ts", /MAX_ZIP_UNCOMPRESSED_BYTES/, "ZIP expansion limit is missing");
 expect("src/app/api/report-jobs/status/[jobId]/route.ts", /authenticateRequestFromCookie/, "job status route is not authenticated");
 expect("src/lib/server/auth.ts", /argon2/, "argon2 password hashing is missing");
 expect("src/lib/server/auth.ts", /jwtVerify/, "JWT verification is missing");

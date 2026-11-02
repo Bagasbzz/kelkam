@@ -30,7 +30,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { createSession, hashPassword } from "@/lib/server/auth";
-import { enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
+import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+import { assertSameOriginJsonRequest } from "@/lib/server/csrf-origin";
 
 /** Schema input, semua field di-sanitize otomatis oleh zod (lowercase + trim email). */
 const registerSchema = z.object({
@@ -54,7 +55,8 @@ export async function POST(req: Request) {
   if (rateLimit) return rateLimit;
 
   try {
-    const body = await req.json().catch(() => null);
+    assertSameOriginJsonRequest(req);
+    const body = await readJsonBody(req, 4096);
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json(

@@ -16,6 +16,35 @@
 import { prisma } from "@/lib/db/prisma";
 import { ApiRequestError } from "@/lib/server/request-guards";
 
+export type CourseAccessUser = { id: string; role: "USER" | "ADMIN" };
+
+/**
+ * Course access for student-facing authenticated APIs.
+ * A self-created enrollment is deliberately not sufficient: the public share
+ * token or a real admin relationship must authorize the course.
+ */
+export async function assertCourseAccess(
+  courseId: string,
+  user: CourseAccessUser,
+  shareToken?: string | null,
+) {
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { id: true, token: true },
+  });
+  if (!course) throw new ApiRequestError(404, "Course tidak ditemukan.");
+
+  if (user.role === "ADMIN") return course;
+  const admin = await prisma.courseAdmin.findUnique({
+    where: { courseId_userId: { courseId, userId: user.id } },
+    select: { id: true },
+  });
+  if (admin || (typeof shareToken === "string" && shareToken.trim().toUpperCase() === course.token)) {
+    return course;
+  }
+  throw new ApiRequestError(403, "Token course tidak valid atau akses belum diberikan.");
+}
+
 // ---------------------------------------------------------------------------
 // Course lookup
 // ---------------------------------------------------------------------------

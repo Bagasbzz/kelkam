@@ -202,6 +202,7 @@ export default function TugasDetailPage() {
 
         <SubmissionForm
           tugasId={tugas.id}
+          token={token}
           deadline={tugas.deadline}
           classes={course.classes}
           lockedClassId={tugas.classId}

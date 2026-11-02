@@ -19,6 +19,7 @@ import { prisma } from "@/lib/db/prisma";
 import { generateImage } from "@/lib/ai/client";
 import { saveUpload } from "@/lib/storage/upload";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
+import { runWithAiOwner, budgetLimit } from "@/lib/server/ai-budget";
 
 export type ImageJobStatus = "queued" | "running" | "done" | "failed";
 
@@ -39,7 +40,7 @@ export interface ImageJobView {
 const MAX_ATTEMPTS = 2;
 /** Job running tanpa update lebih lama dari ini dianggap mati (proses restart). */
 export const IMAGE_STALE_MS = 6 * 60 * 1000;
-const IMAGE_TIMEOUT_MS = Number(process.env.AI_IMAGE_TIMEOUT_MS || 240_000);
+const IMAGE_TIMEOUT_MS = Math.min(240_000, budgetLimit(process.env.AI_IMAGE_TIMEOUT_MS, 240_000));
 /** Maks job per user yang masih antre/berjalan. */
 const MAX_ACTIVE_PER_USER = 3;
 
@@ -91,11 +92,16 @@ export async function listImageJobs(ownerId: string, opts: { sessionId?: string;
  * user masih punya terlalu banyak job aktif.
  */
 export async function startImageJob(input: { ownerId: string; prompt: string; title?: string; sessionId?: string }): Promise<ImageJobView> {
-  const active = await prisma.imageJob.count({ where: { ownerId: input.ownerId, status: { in: ["queued", "running"] } } });
+  const row = await prisma.$transaction(async (tx) => {
+  // All image admission uses the same DB lock, including the global active cap.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-image-admission'))`;
+  const active = await tx.imageJob.count({ where: { ownerId: input.ownerId, status: { in: ["queued", "running"] } } });
   if (active >= MAX_ACTIVE_PER_USER) {
     throw new Error(`Masih ada ${active} gambar yang sedang diproses. Tunggu selesai dulu.`);
   }
-  const row = await prisma.imageJob.create({
+  const globalActive = await tx.imageJob.count({ where: { status: { in: ["queued", "running"] } } });
+  if (globalActive >= 12) throw new Error("Antrean gambar penuh. Coba lagi nanti.");
+  return tx.imageJob.create({
     data: {
       id: `img_${crypto.randomUUID()}`,
       ownerId: input.ownerId,
@@ -104,6 +110,7 @@ export async function startImageJob(input: { ownerId: string; prompt: string; ti
       prompt: input.prompt.slice(0, 4000),
       status: "queued",
     },
+  });
   });
   kickImageJobs();
   return toView(row);
@@ -122,6 +129,10 @@ export function kickImageJobs() {
  */
 export async function tickImageJobs(limit = 1): Promise<{ processed: string[] }> {
   const staleBefore = new Date(Date.now() - IMAGE_STALE_MS);
+  await prisma.imageJob.updateMany({
+    where: { attempts: { gte: MAX_ATTEMPTS }, OR: [{ status: "queued" }, { status: "running", updatedAt: { lt: staleBefore } }] },
+    data: { status: "failed", finishedAt: new Date(), error: "Batas percobaan gambar tercapai." },
+  });
   const candidates = await prisma.imageJob.findMany({
     where: {
       OR: [
@@ -153,7 +164,7 @@ async function runImageJob(id: string) {
   // Klaim atomik: hanya satu proses yang berhasil mengubah ke running.
   const staleBefore = new Date(Date.now() - IMAGE_STALE_MS);
   const claimed = await prisma.imageJob.updateMany({
-    where: { id, OR: [{ status: "queued" }, { status: "running", updatedAt: { lt: staleBefore } }] },
+    where: { id, attempts: { lt: MAX_ATTEMPTS }, OR: [{ status: "queued" }, { status: "running", updatedAt: { lt: staleBefore } }] },
     data: { status: "running", startedAt: new Date(), error: null, attempts: { increment: 1 } },
   });
   if (claimed.count === 0) return;
@@ -162,7 +173,7 @@ async function runImageJob(id: string) {
   if (!job) return;
 
   try {
-    const image = await generateImage(job.prompt, { timeoutMs: IMAGE_TIMEOUT_MS });
+    const image = await runWithAiOwner(job.ownerId, "image-job", () => generateImage(job.prompt, { timeoutMs: IMAGE_TIMEOUT_MS }), AbortSignal.timeout(IMAGE_TIMEOUT_MS));
     const safeName = (job.title || "gambar").replace(/[^\w\- ]+/g, "").trim().slice(0, 60) || "gambar";
     const upload = await saveUpload({
       ownerId: job.ownerId,
@@ -170,15 +181,15 @@ async function runImageJob(id: string) {
       originalName: `${safeName}.png`,
       mime: "image/png",
     });
-    await prisma.imageJob.update({
-      where: { id },
+    await prisma.imageJob.updateMany({
+      where: { id, status: "running", attempts: job.attempts, startedAt: job.startedAt },
       data: { status: "done", fileUploadId: upload.id, finishedAt: new Date(), error: null },
     });
   } catch (err) {
     const message = toPublicErrorMessage(err, "Generate gambar gagal.");
     const exhausted = job.attempts >= MAX_ATTEMPTS;
-    await prisma.imageJob.update({
-      where: { id },
+    await prisma.imageJob.updateMany({
+      where: { id, status: "running", attempts: job.attempts, startedAt: job.startedAt },
       data: { status: exhausted ? "failed" : "queued", error: message, finishedAt: exhausted ? new Date() : null },
     });
     console.error(`[image-jobs] ${id} attempt ${job.attempts} failed:`, sanitizePublicErrorText(err instanceof Error ? err.message : "Generate gambar gagal.").slice(0, 400));

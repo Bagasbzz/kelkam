@@ -14,9 +14,10 @@
  * -----------------------------------------------------------------------------
  */
 
-import mammoth from "mammoth";
+import { Worker } from "node:worker_threads";
 import { ApiRequestError } from "@/lib/server/request-guards";
 import { isSensitivePath, redactSensitiveText } from "@/lib/security/redact-secrets";
+import { loadBoundedArchive, readBoundedEntry, type ExpansionBudget } from "./bounded-archive";
 
 export type ExtractKind = "note" | "guide" | "code";
 
@@ -211,17 +212,17 @@ interface FlatEntry {
   name: string;
   declaredSize: number;
   text(): Promise<string>;
-  bytes(): Promise<Buffer>;
+  bytes(maxBytes?: number): Promise<Buffer>;
 }
 
 async function loadArchiveEntries(buffer: Buffer): Promise<FlatEntry[]> {
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const zip = await withTimeout(loadBoundedArchive(buffer));
+  const budget: ExpansionBudget = { used: 0, limit: MAX_ZIP_UNCOMPRESSED_BYTES };
   const wrap = (entry: import("jszip").JSZipObject, name: string): FlatEntry => ({
     name,
     declaredSize: declaredUncompressedSize(entry),
-    text: () => withTimeout(entry.async("string"), 8_000),
-    bytes: async () => Buffer.from(await withTimeout(entry.async("nodebuffer"), 15_000)),
+    text: async () => (await readBoundedEntry(entry, budget, MAX_ZIP_SINGLE_READ_BYTES, 8_000)).toString("utf8"),
+    bytes: (maxBytes = MAX_ZIP_SINGLE_READ_BYTES) => readBoundedEntry(entry, budget, maxBytes),
   });
   const out: FlatEntry[] = [];
   const nested: Array<{ name: string; entry: import("jszip").JSZipObject }> = [];
@@ -234,9 +235,9 @@ async function loadArchiveEntries(buffer: Buffer): Promise<FlatEntry[]> {
   for (const n of nested.slice(0, MAX_NESTED_ZIPS)) {
     if (declaredUncompressedSize(n.entry) > MAX_ZIP_UNCOMPRESSED_BYTES) continue;
     try {
-      const buf = Buffer.from(await withTimeout(n.entry.async("nodebuffer"), 15_000));
+      const buf = await readBoundedEntry(n.entry, budget, MAX_ZIP_UNCOMPRESSED_BYTES);
       if (!hasZipSignature(buf)) continue;
-      const inner = await withTimeout(JSZip.loadAsync(buf));
+      const inner = await withTimeout(loadBoundedArchive(buf));
       let count = 0;
       for (const ie of Object.values(inner.files)) {
         if (ie.dir) continue;
@@ -246,7 +247,8 @@ async function loadArchiveEntries(buffer: Buffer): Promise<FlatEntry[]> {
         if (++count > MAX_ZIP_VISIBLE_ENTRIES) break;
         out.push(wrap(ie, nestedName));
       }
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiRequestError && error.status === 413) throw error;
       out.push({ name: `${n.name}${NESTED_ZIP_SEPARATOR}[gagal dibuka]`, declaredSize: 0, text: async () => "", bytes: async () => Buffer.alloc(0) });
     }
   }
@@ -269,8 +271,39 @@ function findEntry(entries: FlatEntry[], requested: string): FlatEntry | undefin
 
 export async function extractDocx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
   if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File DOCX tidak valid.");
-  const result = await withTimeout(mammoth.extractRawText({ buffer }));
-  const { text, truncated } = sanitizeText(result.value, maxChars);
+  const zip = await loadBoundedArchive(buffer, true);
+  const JSZip = (await import("jszip")).default;
+  const checked = new JSZip();
+  const budget: ExpansionBudget = { used: 0, limit: MAX_ZIP_UNCOMPRESSED_BYTES };
+  // Mammoth has its own unbounded ZIP reader. Feed it only verified STORE data,
+  // never the original attacker-controlled compressed entries.
+  for (const entry of Object.values(zip.files)) {
+    if (!entry.dir) checked.file(entry.name, await readBoundedEntry(entry, budget));
+  }
+  const safeBuffer = await checked.generateAsync({ type: "nodebuffer", compression: "STORE" });
+  const mammothPath = require.resolve("mammoth");
+  const raw = await new Promise<string>((resolve, reject) => {
+    const worker = new Worker(`
+      const { parentPort, workerData } = require('node:worker_threads');
+      require(workerData.mammothPath).extractRawText({ buffer: Buffer.from(workerData.buffer) })
+        .then(result => parentPort.postMessage(result.value))
+        .catch(() => { throw new Error('File DOCX gagal dibaca.'); });
+    `, { eval: true, workerData: { buffer: safeBuffer, mammothPath }, resourceLimits: { maxOldGenerationSizeMb: 128, stackSizeMb: 4 } });
+    const timer = setTimeout(() => finish(new ApiRequestError(408, "File membutuhkan waktu terlalu lama untuk dibaca.")), PARSER_TIMEOUT_MS);
+    let settled = false;
+    const finish = (error?: Error, value?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      if (error) reject(error);
+      else resolve(value ?? "");
+    };
+    worker.once("message", (value: string) => finish(undefined, value));
+    worker.once("error", (error) => finish(error));
+    worker.once("exit", () => finish(new ApiRequestError(415, "File DOCX gagal dibaca.")));
+  });
+  const { text, truncated } = sanitizeText(raw, maxChars);
   return { content: text, charCount: text.length, kind: "guide", truncated };
 }
 
@@ -337,8 +370,8 @@ export async function renderPdfPages(
  */
 export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
   if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File PPTX tidak valid (format .ppt lama tidak didukung; simpan ulang sebagai .pptx).");
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const zip = await withTimeout(loadBoundedArchive(buffer, true));
+  const budget: ExpansionBudget = { used: 0, limit: MAX_ZIP_UNCOMPRESSED_BYTES };
   const slides = Object.keys(zip.files)
     .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
     .sort((a, b) => Number(/slide(\d+)/i.exec(a)?.[1] ?? 0) - Number(/slide(\d+)/i.exec(b)?.[1] ?? 0));
@@ -350,7 +383,7 @@ export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
   let total = 0;
   for (const [i, name] of slides.entries()) {
     if (total >= maxChars) break;
-    const xml = await withTimeout(zip.files[name].async("string"), 8_000);
+    const xml = (await readBoundedEntry(zip.files[name], budget, MAX_ZIP_UNCOMPRESSED_BYTES, 8_000)).toString("utf8");
     // Paragraf <a:p> → baris; run <a:t> → teks.
     const paras = xml.split(/<\/a:p>/).map((p) =>
       [...p.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map((m) => decode(m[1])).join(""),
@@ -359,7 +392,7 @@ export async function extractPptx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
     const notesName = `ppt/notesSlides/notesSlide${i + 1}.xml`;
     let notes = "";
     if (zip.files[notesName]) {
-      const nx = await withTimeout(zip.files[notesName].async("string"), 5_000);
+      const nx = (await readBoundedEntry(zip.files[notesName], budget, MAX_ZIP_UNCOMPRESSED_BYTES, 5_000)).toString("utf8");
       notes = [...nx.matchAll(/<a:t[^>]*>([^<]*)<\/a:t>/g)].map((m) => decode(m[1])).join(" ").replace(/\s*\d+\s*$/, "").trim();
     }
     const block = `[Slide ${i + 1}]\n${paras.join("\n")}${notes ? `\n(Catatan: ${notes})` : ""}`;
@@ -394,15 +427,15 @@ const MAX_XLSX_ROWS_PER_SHEET = 2_000;
  */
 export async function extractXlsx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS): Promise<ExtractResult> {
   if (!hasZipSignature(buffer)) throw new ApiRequestError(415, "File XLSX tidak valid (format .xls lama tidak didukung; simpan ulang sebagai .xlsx atau CSV).");
-  const JSZip = (await import("jszip")).default;
-  const zip = await withTimeout(JSZip.loadAsync(buffer));
+  const zip = await withTimeout(loadBoundedArchive(buffer, true));
+  const budget: ExpansionBudget = { used: 0, limit: MAX_ZIP_UNCOMPRESSED_BYTES };
 
   // Anti ZIP bomb: total ukuran XML yang akan dibaca dibatasi.
   const xmlFiles = Object.values(zip.files).filter((f) => !f.dir && /^xl\/(sharedStrings|workbook|worksheets\/sheet\d+)\.xml$/i.test(f.name));
   const declaredTotal = xmlFiles.reduce((sum, f) => sum + declaredUncompressedSize(f), 0);
   if (declaredTotal > MAX_ZIP_UNCOMPRESSED_BYTES) throw new ApiRequestError(413, "Isi spreadsheet terlalu besar untuk dibaca.");
 
-  const read = async (name: string) => (zip.files[name] ? withTimeout(zip.files[name].async("string"), 10_000) : "");
+  const read = async (name: string) => (zip.files[name] ? (await readBoundedEntry(zip.files[name], budget, MAX_ZIP_UNCOMPRESSED_BYTES, 10_000)).toString("utf8") : "");
 
   const shared = [...(await read("xl/sharedStrings.xml")).matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => joinXmlText(m[1]));
   const sheetNames = [...(await read("xl/workbook.xml")).matchAll(/<sheet\b[^>]*\bname="([^"]*)"/g)].map((m) => decodeXml(m[1]));
@@ -667,7 +700,7 @@ export async function extractImagesFromFile(buffer: Buffer, fileName: string, op
       }
       let bytes: Buffer;
       try {
-        bytes = await entry.bytes();
+        bytes = await entry.bytes(MAX_IMAGE_ENTRY_BYTES);
       } catch {
         state.skipped.push(`${name}: gagal dibaca`);
         continue;

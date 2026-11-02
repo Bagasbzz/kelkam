@@ -18,6 +18,7 @@ import { checkPdfUrls, type PdfStatus } from "./verify-pdf";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import type { ProviderPaper, SearchOptions } from "./types";
 import { buildJournalCheckLinks, normalizeJournalIssns, type JournalVerification } from "./journal-check";
+import type { JournalVerificationResult } from "./journal-verifier";
 
 export type JournalRequirement =
   | "bebas"
@@ -54,6 +55,8 @@ export interface VerifiedSource {
   checkLinks: { label: string; url: string }[];
   /** Catatan peringkat manual, bila caller menyimpannya. Tidak pernah diisi otomatis. */
   journalVerification?: JournalVerification;
+  /** Hasil provider otomatis; terpisah dari catatan manual user. */
+  journalVerificationResult?: JournalVerificationResult;
   /** Seberapa isi yang kami baca: teks penuh (PDF OA terunduh), abstrak, atau tidak ada. */
   readLevel: "fulltext" | "abstract" | "none";
   /** Skor relevansi 0-100 terhadap query (overlap kata kunci + kebaruan + sitasi). */

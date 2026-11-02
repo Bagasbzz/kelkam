@@ -32,6 +32,7 @@ import {
   ImageRun,
   LeaderType,
   LevelFormat,
+  LevelSuffix,
   NumberFormat,
   Packer,
   PageBreak,
@@ -39,6 +40,7 @@ import {
   PageReference,
   Paragraph,
   Table,
+  TableOfContents,
   TableCell,
   TableRow,
   TabStopPosition,
@@ -49,6 +51,7 @@ import {
   type ISectionOptions,
 } from "docx";
 import { normalizeFigureKey, parseFigurePlaceholder } from "@/lib/report/figure-placeholders";
+import type { ReportOutputMode } from "@/lib/report/report-intent";
 
 // ---------------------------------------------------------------------------
 // Profil format
@@ -400,7 +403,6 @@ function pngSize(data: Uint8Array): { width: number; height: number } {
   return width > 0 && height > 0 ? { width, height } : { width: 4, height: 3 };
 }
 
-const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII", "XIV", "XV"];
 /** Heading level-1 yang bukan bab bernomor (bagian depan/belakang). */
 const NON_CHAPTER_RE = /^(daftar pustaka|referensi|bibliograf|lampiran|abstrak|abstract|kata pengantar|ringkasan|daftar isi|daftar gambar|daftar tabel|halaman|lembar|glosarium|daftar singkatan|daftar istilah|pernyataan|persembahan|motto)/i;
 const BIBLIOGRAPHY_RE = /^(daftar pustaka|referensi|bibliograf)/i;
@@ -417,6 +419,9 @@ const cleanHeading = (text: string) => text.replace(/^\*\*|\*\*$/g, "").trim();
 
 export interface ExportOptions {
   profile?: Partial<DocxFormatProfile>;
+  /** Scoped artifacts retain headings without being promoted to numbered chapters. */
+  outputMode?: ReportOutputMode;
+  numberChapters?: boolean;
   /** key: judul gambar (lowercase, trimmed) → PNG bytes */
   images?: Record<string, Uint8Array | ArrayBuffer>;
   /** Includes planned assets whose bytes are not available yet. */
@@ -425,17 +430,18 @@ export interface ExportOptions {
   autoItalic?: boolean;
 }
 
-type BodyChild = Paragraph | Table;
+type BodyChild = Paragraph | Table | TableOfContents;
 
 /** Bangun objek Document (dipakai klien via toBlob dan server via toBuffer). */
 export function buildDocxDocument(markdown: string, options: ExportOptions = {}): Document {
   const profile: DocxFormatProfile = { ...DEFAULT_DOCX_PROFILE, ...options.profile, margin: { ...DEFAULT_DOCX_PROFILE.margin, ...options.profile?.margin } };
+  const chaptersEnabled = options.numberChapters !== false && (!options.outputMode || options.outputMode === "full_report");
   const images: Record<string, Uint8Array | ArrayBuffer> = Object.create(null);
   for (const [key, bytes] of Object.entries(options.images || {})) images[normalizeFigureKey(key)] = bytes;
   const autoItalic = options.autoItalic !== false;
   const sizeHalfPt = Math.round(profile.fontSize * 2);
   const lineTwips = Math.round(240 * profile.lineSpacing);
-  const base = { font: profile.font, size: sizeHalfPt };
+  const base = { font: profile.font, size: sizeHalfPt, color: "000000" };
   const paper = PAPER_MM[profile.paperSize || "A4"];
   const numberStyle: PageNumberStyle = profile.pageNumberStyle || "academic";
 
@@ -444,7 +450,17 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   const maxImageWidthPx = Math.round(mmToPx(paper.width - (profile.margin.left + profile.margin.right) * 10));
   const maxImageHeightPx = Math.round(mmToPx(paper.height - (profile.margin.top + profile.margin.bottom) * 10) * 0.72);
 
-  const blocks = parseMarkdownToBlocks(markdown, [...Object.keys(options.images || {}), ...(options.figureTitles || [])]);
+  let generatedListLevel: number | undefined;
+  const blocks = parseMarkdownToBlocks(markdown, [...Object.keys(options.images || {}), ...(options.figureTitles || [])])
+    .filter((block) => {
+      if (!profile.includeToc) return true;
+      if (block.type === "heading" && /^(daftar isi|daftar gambar|daftar tabel|table of contents)$/i.test(cleanHeading(block.text))) {
+        generatedListLevel = block.level;
+        return false;
+      }
+      if (generatedListLevel !== undefined && block.type === "heading") generatedListLevel = undefined;
+      return generatedListLevel === undefined;
+    });
 
   // Judul H1 pertama dianggap judul dokumen (dipakai sampul) bila diikuti struktur bab.
   const firstHeading = blocks.find((b) => b.type === "heading");
@@ -455,16 +471,15 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   // geser semua heading satu level supaya `##` menjadi BAB (halaman baru, "BAB I").
   const h1Chapters = blocks.filter((b, i) => b.type === "heading" && b.level === 1 && i !== docTitleIndex && !NON_CHAPTER_RE.test(cleanHeading(b.text))).length;
   const hasH2 = blocks.some((b) => b.type === "heading" && b.level === 2);
-  const shift = h1Chapters === 0 && hasH2 ? 1 : 0;
+  const shift = chaptersEnabled && h1Chapters === 0 && hasH2 ? 1 : 0;
 
   let tableCounter = 0;
   let figureCounter = 0;
   let chapterCounter = 0;
-  let subChapterCounter = 0;
-  let subSubCounter = 0;
   let listInstance = 0;
   let bookmarkSeq = 0;
   let inBibliography = false;
+  let inNumberedChapter = false;
 
   // Daftar isi/gambar/tabel: bookmark pada heading/caption → PAGEREF di bagian depan.
   const tocEntries: Array<{ label: string; bookmark: string; level: number }> = [];
@@ -483,7 +498,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     const centered = (text: string, size: number, bold = false, spacingBefore = 0) => new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { before: spacingBefore, after: 120, line: 276 },
-      children: [new TextRun({ text, bold, size, font: profile.font })],
+      children: [new TextRun({ text, bold, size, font: profile.font, color: "000000" })],
     });
     const title = cover.title || (docTitleIndex >= 0 ? cleanHeading((blocks[docTitleIndex] as { text: string }).text) : "LAPORAN");
     coverChildren.push(centered(title.toUpperCase(), sizeHalfPt + 4, true, 600));
@@ -513,7 +528,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     alignment: AlignmentType.CENTER,
     spacing: { after: 360, line: lineTwips },
     pageBreakBefore: breakBefore,
-    children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 2 })],
+    children: [new TextRun({ text, bold: true, font: profile.font, size: sizeHalfPt + 2, color: "000000" })],
   });
   const listEntry = (label: string, bookmark: string, indentMm: number, bold = false) => new Paragraph({
     tabStops: [{ type: TabStopType.RIGHT, position: TabStopPosition.MAX, leader: LeaderType.DOT }],
@@ -522,7 +537,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     children: [new TextRun({ ...base, text: label, bold }), new TextRun({ ...base, children: ["\t"] }), new PageReference(bookmark, { hyperlink: true })],
   });
 
-  const headingParagraph = (level: number, lines: string[], bookmark: string | undefined, breakBefore = false) => {
+  const headingParagraph = (level: number, lines: string[], bookmark: string | undefined, breakBefore = false, numbered = false) => {
     const size = level === 1 ? sizeHalfPt + 2 : sizeHalfPt;
     const runs = lines.map((text, i) => new TextRun({ text, bold: true, font: profile.font, size, color: "000000", ...(i > 0 ? { break: 1 } : {}) }));
     return new Paragraph({
@@ -532,6 +547,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
       pageBreakBefore: breakBefore,
       keepNext: true,
       keepLines: true,
+      ...(numbered ? { numbering: { reference: "chapter-headings", level: level - 1, custom: true } } : {}),
       children: bookmark ? [new Bookmark({ id: bookmark, children: runs })] : runs,
     });
   };
@@ -543,7 +559,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     children: [new Bookmark({
       id: bookmark,
       children: [
-        new TextRun({ text: `${prefix} `, bold: true, font: profile.font, size: sizeHalfPt }),
+        new TextRun({ text: `${prefix} `, bold: true, font: profile.font, size: sizeHalfPt, color: "000000" }),
         ...inlineRuns(text, { ...base }, false),
       ],
     })],
@@ -562,15 +578,20 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
 
         if (blockIndex === docTitleIndex) {
           // Tanpa sampul: judul dokumen di atas halaman pertama isi.
-          current.push(headingParagraph(1, [text0.toUpperCase()], undefined));
+          current.push(new Paragraph({ style: "Title", alignment: AlignmentType.CENTER, spacing: { after: 360, line: lineTwips }, keepNext: true, children: inlineRuns(text0, { ...base, bold: true, size: sizeHalfPt + 2 }) }));
           break;
         }
 
         const bookmark = nextBookmark("toc");
+        if (!chaptersEnabled) {
+          inBibliography = BIBLIOGRAPHY_RE.test(text0);
+          tocEntries.push({ label: text0, bookmark, level });
+          current.push(headingParagraph(level, [text0], bookmark));
+          break;
+        }
         if (level === 1) {
           inBibliography = BIBLIOGRAPHY_RE.test(text0);
-          subChapterCounter = 0;
-          subSubCounter = 0;
+          inNumberedChapter = !NON_CHAPTER_RE.test(text0);
           let lines: string[];
           if (NON_CHAPTER_RE.test(text0)) {
             lines = [text0.toUpperCase()];
@@ -580,7 +601,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
             figureCounter = 0;
             const numbered = NUMBERED_CHAPTER_RE.exec(text0);
             const name = (numbered ? numbered[2] : text0).toUpperCase();
-            lines = name ? [`BAB ${ROMAN[chapterCounter - 1] || chapterCounter}`, name] : [`BAB ${ROMAN[chapterCounter - 1] || chapterCounter}`];
+            lines = name ? [name] : ["Bab"];
           }
           tocEntries.push({ label: lines.join(" "), bookmark, level: 1 });
 
@@ -592,20 +613,13 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
           } else {
             // Bab baru = section baru (otomatis halaman baru, nomor halaman bab di bawah-tengah).
             current = chunks[chunks.length - 1].length ? (chunks.push([]), chunks[chunks.length - 1]) : chunks[chunks.length - 1];
-            current.push(headingParagraph(1, lines, bookmark));
+            current.push(headingParagraph(1, lines, bookmark, false, !NON_CHAPTER_RE.test(text0)));
           }
         } else {
-          // Subbab tanpa nomor → "N.M Judul" / "N.M.K Judul" mengikuti bab aktif.
-          let text = text0;
-          const hasNumber = /^\d+(\.\d+)*\.?\s/.test(text);
-          if (level === 2) { subChapterCounter += 1; subSubCounter = 0; }
-          if (level === 3) subSubCounter += 1;
-          if (!hasNumber && chapterCounter > 0 && !inBibliography) {
-            if (level === 2) text = `${chapterCounter}.${subChapterCounter} ${text}`;
-            else if (level === 3 && subChapterCounter > 0) text = `${chapterCounter}.${subChapterCounter}.${subSubCounter} ${text}`;
-          }
+          // Word owns numbering; strip AI/manual prefixes to avoid duplicated numbers.
+          const text = text0.replace(/^\d+(?:\.\d+)*\.?\s+/, "");
           if (level <= 3) tocEntries.push({ label: text, bookmark, level });
-          current.push(headingParagraph(level, [text], level <= 3 ? bookmark : undefined));
+          current.push(headingParagraph(level, [text], level <= 3 ? bookmark : undefined, false, level <= 3 && inNumberedChapter));
         }
         break;
       }
@@ -637,6 +651,16 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
         }));
         break;
       case "list": {
+        if (inBibliography) {
+          block.items.forEach((item) => current.push(new Paragraph({
+            alignment: AlignmentType.JUSTIFIED,
+            spacing: { after: 240, line: 240 },
+            indent: { left: convertMillimetersToTwip(12.7), hanging: convertMillimetersToTwip(12.7) },
+            keepLines: true,
+            children: inlineRuns(item, base, false),
+          })));
+          break;
+        }
         // Tiap list bernomor punya instance sendiri → penomoran mulai dari 1 lagi.
         listInstance += 1;
         block.items.forEach((item) => {
@@ -731,7 +755,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
   const front: BodyChild[] = [...coverChildren, ...preface];
   if (profile.includeToc && tocEntries.length) {
     front.push(frontTitle("DAFTAR ISI", front.length > 0));
-    tocEntries.forEach((e) => front.push(listEntry(e.label, e.bookmark, 10 + (e.level - 1) * 8, e.level === 1)));
+    front.push(new TableOfContents("Daftar Isi", { headingStyleRange: "1-3", hyperlink: true, beginDirty: true, tabLeader: LeaderType.DOT }));
   }
   if (profile.includeToc && tableEntries.length) {
     front.push(frontTitle("DAFTAR TABEL", true));
@@ -803,7 +827,7 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
     title: profile.cover?.title,
     styles: {
       default: {
-        document: { run: { font: profile.font, size: sizeHalfPt, language: { value: "id-ID" } } },
+        document: { run: { font: profile.font, size: sizeHalfPt, color: "000000", language: { value: "id-ID" } } },
       },
       paragraphStyles: [
         { id: "Heading1", name: "Heading 1", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt + 2, font: profile.font, color: "000000" }, paragraph: { alignment: AlignmentType.CENTER, spacing: { after: 480 }, outlineLevel: 0 } },
@@ -811,9 +835,9 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
         { id: "Heading3", name: "Heading 3", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 240, after: 120 }, outlineLevel: 2 } },
         { id: "Heading4", name: "Heading 4", basedOn: "Normal", next: "Normal", quickFormat: true, run: { bold: true, italics: true, size: sizeHalfPt, font: profile.font, color: "000000" }, paragraph: { spacing: { before: 200, after: 100 }, outlineLevel: 3 } },
         // Gaya TOC: tanpa warna/underline hyperlink bawaan Word
-        { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true, font: profile.font, size: sizeHalfPt }, paragraph: { spacing: { after: 80 } } },
-        { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt }, paragraph: { indent: { left: 440 }, spacing: { after: 60 } } },
-        { id: "TOC3", name: "toc 3", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt }, paragraph: { indent: { left: 880 }, spacing: { after: 60 } } },
+        { id: "TOC1", name: "toc 1", basedOn: "Normal", next: "Normal", run: { bold: true, font: profile.font, size: sizeHalfPt, color: "000000" }, paragraph: { spacing: { after: 80 } } },
+        { id: "TOC2", name: "toc 2", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt, color: "000000" }, paragraph: { indent: { left: 440 }, spacing: { after: 60 } } },
+        { id: "TOC3", name: "toc 3", basedOn: "Normal", next: "Normal", run: { font: profile.font, size: sizeHalfPt, color: "000000" }, paragraph: { indent: { left: 880 }, spacing: { after: 60 } } },
       ],
       characterStyles: [{ id: "Hyperlink", name: "Hyperlink", run: { color: "000000", underline: { type: "none" } } }],
     },
@@ -821,6 +845,11 @@ export function buildDocxDocument(markdown: string, options: ExportOptions = {})
       config: [
         { reference: "bullets", levels: [{ level: 0, format: LevelFormat.BULLET, text: "•", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
         { reference: "numbered", levels: [{ level: 0, format: LevelFormat.DECIMAL, text: "%1.", alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: 720, hanging: 360 } } } }] },
+        { reference: "chapter-headings", levels: [
+          { level: 0, format: LevelFormat.UPPER_ROMAN, text: "BAB %1", suffix: LevelSuffix.SPACE, alignment: AlignmentType.LEFT, style: { style: "Heading1", run: { ...base, bold: true }, paragraph: { indent: { left: 0, hanging: 0 } } } },
+          { level: 1, format: LevelFormat.DECIMAL, text: "%1.%2", suffix: LevelSuffix.SPACE, isLegalNumberingStyle: true, alignment: AlignmentType.LEFT, style: { style: "Heading2", run: { ...base, bold: true }, paragraph: { indent: { left: 0, hanging: 0 } } } },
+          { level: 2, format: LevelFormat.DECIMAL, text: "%1.%2.%3", suffix: LevelSuffix.SPACE, isLegalNumberingStyle: true, alignment: AlignmentType.LEFT, style: { style: "Heading3", run: { ...base, bold: true }, paragraph: { indent: { left: 0, hanging: 0 } } } },
+        ] },
       ],
     },
     // Nomor halaman di daftar isi/gambar/tabel (PAGEREF) diisi Word saat file dibuka.

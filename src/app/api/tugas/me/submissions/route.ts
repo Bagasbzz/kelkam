@@ -17,6 +17,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { ApiRequestError, publicErrorResponse } from "@/lib/server/request-guards";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
+import { assertCourseAccess } from "@/lib/server/tugas/access";
 
 export async function GET(req: Request) {
   try {
@@ -27,9 +28,12 @@ export async function GET(req: Request) {
 
     const url = new URL(req.url);
     const courseId = url.searchParams.get("courseId");
+    const token = url.searchParams.get("token");
     if (!courseId) {
       return NextResponse.json({ success: false, error: "courseId wajib diisi." }, { status: 400 });
     }
+
+    await assertCourseAccess(courseId, auth.user, token);
 
     const tugases = await prisma.tugas.findMany({
       where: { courseId },

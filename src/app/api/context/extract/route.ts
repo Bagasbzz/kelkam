@@ -30,6 +30,7 @@ import { saveUpload } from "@/lib/storage/upload";
 import { extractTextFromBuffer, TEXT_EXTENSIONS } from "@/lib/server/extract-text";
 import { extractImageText, IMAGE_EXTENSIONS_RE, isSupportedImage } from "@/lib/server/extract-image";
 import { MAX_FILE_BYTES } from "@/lib/file-limits";
+import { runWithAiOwner } from "@/lib/server/ai-budget";
 
 export const maxDuration = 90;
 export const runtime = "nodejs";
@@ -92,7 +93,7 @@ export async function POST(req: Request) {
     // Sisa file tetap bisa dibaca utuh oleh agen lewat fileId (tool readMaterialFile).
     const isArchive = /\.zip$/i.test(name);
     const extracted = looksImage
-      ? await extractImageText(buffer, name)
+      ? await runWithAiOwner(auth.user.id, "context-vision", () => extractImageText(buffer, name))
       : await extractTextFromBuffer(buffer, name, isArchive ? { maxChars: 110_000, maxCharsPerZipFile: 6_000 } : {});
 
     if (!extracted.content.trim()) {

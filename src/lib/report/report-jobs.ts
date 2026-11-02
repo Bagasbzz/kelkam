@@ -46,6 +46,7 @@ import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
+import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
 
 // ---------------------------------------------------------------------------
 // Jenis step. Disimpan lewat prefix `sectionId` supaya tidak perlu kolom baru:
@@ -140,9 +141,11 @@ export interface ReportJobSummary {
 /** Step "running" tanpa heartbeat lebih lama dari ini dianggap mati → retry. Heartbeat diperbarui tiap potongan teks. */
 export const STALE_STEP_MS = 120_000;
 /** Maks percobaan per step sebelum pakai fallback. */
-const MAX_STEP_ATTEMPTS = 4;
+const MAX_STEP_ATTEMPTS = 2;
 /** Maks section yang diproses. */
-const MAX_STEPS = 80;
+const MAX_STEPS = 10;
+const MAX_TOTAL_STEPS = 30;
+const MAX_TOTAL_ATTEMPTS = 40;
 /** Entri log terakhir yang disimpan. */
 const LOG_LIMIT = 120;
 /** Job lebih tua dari ini tidak dilanjutkan oleh tick. */
@@ -152,10 +155,11 @@ const globalForJobs = globalThis as typeof globalThis & { __reportJobLocks?: Map
 /** jobId → epoch ms saat lock diambil. */
 const jobLocks = globalForJobs.__reportJobLocks || new Map<string, number>();
 globalForJobs.__reportJobLocks = jobLocks;
+const controllers = new Map<string, AbortController>();
 
 /** Lock lebih tua dari ini dianggap milik proses yang hang → boleh diambil alih. */
 const LOCK_STALE_MS = CHAPTER_STEP_BUDGET_MS + 60_000;
-/** Batas keras satu step; lebih dari ini lock dilepas walau promise lama masih jalan. */
+/** Abort transport at the deadline; retain the local lock until work settles. */
 const STEP_HARD_TIMEOUT_MS = CHAPTER_STEP_BUDGET_MS + 30_000;
 
 function acquireLock(id: string, now = Date.now()) {
@@ -169,10 +173,12 @@ function releaseLock(id: string, token: number) {
   if (jobLocks.get(id) === token) jobLocks.delete(id);
 }
 
-async function withHardTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  let t: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error(label)), ms); });
-  try { return await Promise.race([p, timeout]); } finally { if (t) clearTimeout(t); }
+async function executeStep(row: JobRow, ownerId: string): Promise<ReportJob> {
+  const controller = new AbortController();
+  controllers.set(row.id, controller);
+  const timer = setTimeout(() => controller.abort(new Error("Batas waktu langkah laporan tercapai.")), STEP_HARD_TIMEOUT_MS);
+  try { return await runWithAiOwner(ownerId, "report-step", () => runNextStep(row, ownerId, controller), controller.signal); }
+  finally { clearTimeout(timer); if (controllers.get(row.id) === controller) controllers.delete(row.id); }
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +214,7 @@ function isJobFinished(status: string) {
   return status === "done" || status === "failed" || status === "cancelled";
 }
 
-function hasLiveStep(row: JobRow, now = Date.now()) {
+function hasLiveStep(row: { steps: Array<{ status: string; updatedAt: Date }> }, now = Date.now()) {
   return row.steps.some((step) => step.status === "running" && now - step.updatedAt.getTime() < STALE_STEP_MS);
 }
 
@@ -275,9 +281,9 @@ async function appendLog(jobId: string, current: ReportJobEvent[], level: Report
   const event: ReportJobEvent = { t: new Date().toISOString(), level, msg: sanitizePublicErrorText(msg).slice(0, 400) };
   current.push(event);
   if (current.length > LOG_LIMIT) current.splice(0, current.length - LOG_LIMIT);
-  await prisma.reportJob.update({
-    where: { id: jobId },
-    data: { ...extra, log: current as unknown as Prisma.InputJsonValue, heartbeatAt: new Date() },
+  await prisma.reportJob.updateMany({
+    where: { id: jobId, status: { in: ["queued", "running"] } },
+    data: { ...extra, log: current as unknown as Prisma.InputJsonValue, heartbeatAt: new Date() } as Prisma.ReportJobUpdateManyMutationInput,
   });
   return event;
 }
@@ -336,17 +342,32 @@ export async function findActiveReportJob(ownerId: string, mode?: ReportMode) {
 // Public API, mutations
 // ---------------------------------------------------------------------------
 
+async function expireAbandonedJobs(tx: Prisma.TransactionClient) {
+  const now = Date.now();
+  await tx.reportJob.updateMany({
+    where: {
+      status: { in: ["queued", "running"] },
+      createdAt: { lt: new Date(now - JOB_TTL_MS) },
+      steps: { none: { status: "running", updatedAt: { gte: new Date(now - STALE_STEP_MS) } } },
+    },
+    data: { status: "failed", stage: "Kedaluwarsa", error: "Job kedaluwarsa. Buat laporan baru untuk melanjutkan." },
+  });
+}
+
 /**
  * Buat job + steps dari outline. Tidak memanggil AI di sini, step pertama
  * dijalankan oleh polling status (atau panggil advanceReportJob setelah ini).
  */
 export async function startReportJob(project: unknown, ownerId: string, mode: ReportMode = "lengkap") {
-  const safeProject = sanitizeForPersistence(project);
+  let safeProject = sanitizeForPersistence(project);
   const compact = compactProject(safeProject);
+  const deterministic = compact.intent.outputMode === "citations_only";
+  if (!deterministic && isRecord(safeProject) && Array.isArray(safeProject.outline) && safeProject.outline.length > MAX_STEPS) throw new Error("Maksimal 10 bagian outline per laporan.");
   // Daftar pustaka dirakit otomatis dari sitasi (assembleReport); jangan jadi step AI (hasilnya dobel/ngarang).
   const isBibliography = (title: string) => /^(daftar\s+pustaka|referensi|references|bibliography)$/i.test(title.trim());
   const outline = compact.outline.filter((section) => !isBibliography(section.title)).slice(0, MAX_STEPS);
-  if (!outline.length) throw new Error("Outline kosong.");
+  if (!outline.length && !deterministic) throw new Error("Outline kosong.");
+  safeProject = { ...(isRecord(safeProject) ? safeProject : {}), intent: compact.intent, outline };
 
   const id = `report_${crypto.randomUUID()}`;
   const projectId = await resolveProjectId(safeProject, ownerId);
@@ -370,20 +391,7 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
   }
   // Ilustrasi (gambar AI) dijalankan paralel di background; tidak memblokir bab.
   const illustrations = compact.figures.filter((figure) => figure.prompt && !figure.done);
-  if (illustrations.length) {
-    const sessionId = isRecord(safeProject) && typeof safeProject.reportSessionId === "string" ? safeProject.reportSessionId : undefined;
-    let started = 0;
-    for (const figure of illustrations) {
-      try {
-        await startImageJob({ ownerId, prompt: `${figure.prompt}\n\nStyle: clean technical illustration for an academic report, white background, flat vector look, high contrast, minimal text, no watermark.`, title: figure.title, sessionId });
-        started += 1;
-      } catch (error) {
-        log.push({ t: new Date().toISOString(), level: "warn", msg: sanitizePublicErrorText(`Ilustrasi "${figure.title}" tidak dimulai: ${toPublicErrorMessage(error, "gagal")}`) });
-      }
-    }
-    if (started) log.push({ t: new Date().toISOString(), level: "info", msg: `${started} ilustrasi dibuat di background (±2 menit/gambar)` });
-  }
-  const withAudit = mode === "lengkap";
+  const withAudit = mode === "lengkap" && !deterministic;
 
   type StepSeed = { sectionId: string | null; title: string };
   const seeds: StepSeed[] = [
@@ -398,15 +406,22 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
   }
   log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit` : "tanpa audit (mode ringkas)"}` });
 
-  const row = await prisma.reportJob.create({
+  if (seeds.length > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 30 langkah dan 3 ilustrasi.");
+  const row = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
+    await expireAbandonedJobs(tx);
+    const active = { status: { in: ["queued", "running"] } };
+    if (await tx.reportJob.count({ where: { ...active, ownerId } }) >= 2 || await tx.reportJob.count({ where: active }) >= 10) throw new Error("Antrean laporan penuh. Selesaikan atau batalkan job aktif terlebih dahulu.");
+    return tx.reportJob.create({
     data: {
       id,
       ownerId,
       projectId,
       title,
-      status: "queued",
-      progress: 2,
-      stage: `Menyiapkan ${seeds.length} langkah laporan`,
+      status: deterministic ? "done" : "queued",
+      progress: deterministic ? 100 : 2,
+      stage: deterministic ? "Sitasi terpilih selesai dirakit tanpa penulisan AI" : `Menyiapkan ${seeds.length} langkah laporan`,
+      ...(deterministic ? { result: assembleReport(safeProject, []), source: "deterministic" } : {}),
       mode,
       totalSteps: seeds.length,
       payload: safeProject as object,
@@ -423,6 +438,17 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
     },
     include: { steps: { orderBy: { index: "asc" } } },
   });
+  });
+
+  // Admission must succeed before creating any paid child work.
+  const sessionId = isRecord(safeProject) && typeof safeProject.reportSessionId === "string" ? safeProject.reportSessionId : undefined;
+  for (const figure of illustrations) {
+    try {
+      await startImageJob({ ownerId, prompt: `${figure.prompt}\n\nStyle: clean technical illustration for an academic report, white background, flat vector look, high contrast, minimal text, no watermark.`, title: figure.title, sessionId });
+    } catch (error) {
+      await appendLog(id, log, "warn", `Ilustrasi "${figure.title}" tidak dimulai: ${toPublicErrorMessage(error, "gagal")}`);
+    }
+  }
 
   return toPublic(row);
 }
@@ -438,6 +464,7 @@ export async function cancelReportJob(id: string, ownerId: string) {
     stage: "Dibatalkan",
     error: "Dibatalkan oleh pengguna.",
   });
+  controllers.get(id)?.abort(new Error("Job dibatalkan oleh pengguna."));
   const fresh = await readJob(id, ownerId);
   return fresh ? toPublic(fresh) : null;
 }
@@ -449,12 +476,23 @@ export async function cancelReportJob(id: string, ownerId: string) {
 export async function retryReportJob(id: string, ownerId: string, opts: { redoFallback?: boolean } = {}) {
   const row = await readJob(id, ownerId);
   if (!row) return null;
+  if (row.createdAt.getTime() < Date.now() - JOB_TTL_MS) throw new AiBudgetError("Job kedaluwarsa. Buat laporan baru untuk melanjutkan.");
+  if (row.steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) throw new AiBudgetError("Batas percobaan laporan tercapai.");
+  if (["failed", "cancelled", "done"].includes(row.status)) {
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
+      await expireAbandonedJobs(tx);
+      const active = { status: { in: ["queued", "running"] } };
+      if (await tx.reportJob.count({ where: { ...active, ownerId, id: { not: id } } }) >= 2 || await tx.reportJob.count({ where: { ...active, id: { not: id } } }) >= 10) throw new Error("Antrean laporan penuh.");
+      await tx.reportJob.updateMany({ where: { id, ownerId, status: row.status }, data: { status: "queued" } });
+    });
+  }
   const log = parseLog(row.log);
 
   const resetStatuses = opts.redoFallback ? ["failed", "fallback"] : ["failed"];
   const reset = await prisma.reportJobStep.updateMany({
-    where: { jobId: id, status: { in: resetStatuses } },
-    data: { status: "queued", attempts: 0, error: null },
+    where: { jobId: id, status: { in: resetStatuses }, attempts: { lt: MAX_STEP_ATTEMPTS } },
+    data: { status: "queued", error: null },
   });
 
   const stillTodo = await prisma.reportJobStep.count({ where: { jobId: id, status: { in: ["queued", "running", "failed"] } } });
@@ -482,7 +520,7 @@ export async function advanceReportJob(id: string, ownerId: string): Promise<Rep
   if (!acquireLock(id, token)) return toPublic(row);
 
   // Jalankan di background: request poll tidak menunggu, jadi tidak kena batas proxy.
-  void withHardTimeout(runNextStep(row, ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
+  void executeStep(row, ownerId)
     .catch((error) => console.error(`advance job ${id}:`, sanitizePublicErrorText(error instanceof Error ? error.message : String(error))))
     .finally(() => releaseLock(id, token));
 
@@ -516,7 +554,7 @@ export async function tickReportJobs(limit = 2) {
     const token = Date.now();
     if (!acquireLock(row.id, token)) continue;
     // Tick juga tidak menunggu: hanya memicu step di background.
-    void withHardTimeout(runNextStep(row, row.ownerId), STEP_HARD_TIMEOUT_MS, "Langkah melebihi batas waktu server")
+    void executeStep(row, row.ownerId)
       .catch((error) => console.error(`tick job ${row.id}:`, sanitizePublicErrorText(error instanceof Error ? error.message : String(error))))
       .finally(() => releaseLock(row.id, token));
     processed.push({ id: row.id, status: row.status, stage: row.stage });
@@ -528,22 +566,30 @@ export async function tickReportJobs(limit = 2) {
 // Step runner
 // ---------------------------------------------------------------------------
 
-async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
+async function runNextStep(row: JobRow, ownerId: string, controller: AbortController): Promise<ReportJob> {
   const now = Date.now();
   const steps = row.steps;
   const log = parseLog(row.log);
 
   // Step "running" milik proses lain yang masih hidup → tunggu.
   if (hasLiveStep(row, now)) return toPublic(row);
+  if (row.totalSteps > MAX_TOTAL_STEPS || steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) {
+    await appendLog(row.id, log, "error", "Batas langkah atau percobaan laporan tercapai.", { status: "failed", error: "Batas pemrosesan laporan tercapai." });
+    return toPublic((await readJob(row.id, ownerId))!);
+  }
 
   // Kandidat: queued, running-stale (retry), atau failed yang masih punya attempt.
   const next = steps.find((step) =>
-    step.status === "queued"
-    || step.status === "running"
-    || (step.status === "failed" && step.attempts < MAX_STEP_ATTEMPTS),
+    ["queued", "running", "failed"].includes(step.status) && step.attempts < MAX_STEP_ATTEMPTS,
   );
 
-  if (!next) return finalizeJob(row, ownerId, log);
+  if (!next) {
+    if (steps.some((step) => !isStepFinished(step.status))) {
+      await appendLog(row.id, log, "error", "Batas percobaan langkah tercapai.", { status: "failed", error: "Batas percobaan langkah tercapai." });
+      return toPublic((await readJob(row.id, ownerId))!);
+    }
+    return finalizeJob(row, ownerId, log);
+  }
 
   const kind = stepKind(next.sectionId);
   const project = row.payload as unknown;
@@ -571,12 +617,17 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   }
 
   const verb = kind === "diagram" ? "Membuat" : kind === "audit" ? "Mengaudit" : "Menulis";
-  await prisma.$transaction([
-    prisma.reportJobStep.update({
-      where: { id: next.id },
-      data: { status: "running", attempts: { increment: 1 }, error: null, startedAt: new Date(), finishedAt: null },
-    }),
-    prisma.reportJob.update({
+  const claimTime = new Date();
+  const claimed = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM report_jobs WHERE id = ${row.id} FOR UPDATE`;
+    const current = await tx.reportJob.findFirst({ where: { id: row.id, ownerId, status: { in: ["queued", "running"] } }, include: { steps: true } });
+    if (!current || hasLiveStep(current) || current.steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) return false;
+    const claim = await tx.reportJobStep.updateMany({
+      where: { id: next.id, status: next.status, attempts: next.attempts, updatedAt: next.updatedAt },
+      data: { status: "running", attempts: { increment: 1 }, error: null, startedAt: claimTime, finishedAt: null },
+    });
+    if (claim.count !== 1) return false;
+    await tx.reportJob.update({
       where: { id: row.id },
       data: {
         status: "running",
@@ -584,8 +635,10 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
         progress: progressFor(doneBefore, row.totalSteps),
         heartbeatAt: new Date(),
       },
-    }),
-  ]);
+    });
+    return true;
+  });
+  if (!claimed) return toPublic((await readJob(row.id, ownerId))!);
   await appendLog(row.id, log, "info", `Mulai langkah ${next.index + 1}/${row.totalSteps}: ${next.title}${attemptNo > 1 ? ` (percobaan ${attemptNo})` : ""}`);
 
   // Event dari generator dibuffer lalu ditulis berurutan agar hemat query,
@@ -599,8 +652,8 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   let latestPartial = "";
   const savePartial = async (text: string) => {
     await prisma.$transaction([
-      prisma.reportJobStep.update({ where: { id: next.id }, data: { output: text } }),
-      prisma.reportJob.update({ where: { id: row.id }, data: { heartbeatAt: new Date(), stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps}) · ${countWords(text)} kata` } }),
+      prisma.reportJobStep.updateMany({ where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } }, data: { output: text } }),
+      prisma.reportJob.updateMany({ where: { id: row.id, status: "running" }, data: { heartbeatAt: new Date(), stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps}) · ${countWords(text)} kata` } }),
     ]);
   };
   const onPartial = (text: string) => {
@@ -626,17 +679,37 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
   };
 
   const stepStarted = Date.now();
+  const heartbeat = setInterval(() => {
+    void (async () => {
+      const current = await prisma.reportJob.findFirst({ where: { id: row.id, ownerId, status: { in: ["queued", "running"] } }, select: { id: true } });
+      if (!current) { controller.abort(new Error("Job tidak aktif.")); return; }
+      const lease = await prisma.reportJobStep.updateMany({ where: { id: next.id, status: "running", attempts: attemptNo, startedAt: claimTime }, data: { updatedAt: new Date() } });
+      if (!lease.count) controller.abort(new Error("Klaim langkah berubah."));
+    })().catch(() => controller.abort(new Error("Heartbeat laporan gagal.")));
+  }, 15_000);
   try {
-    if (kind === "diagram") {
-      await runDiagramStep(row, next, project, onEvent);
+    controller.signal.throwIfAborted();
+    const staleDiagram = kind === "diagram" && !compact.diagrams.some((diagram) => diagram.id === (next.sectionId || "").slice(DIAGRAM_PREFIX.length) && !diagram.approved);
+    const staleChapter = kind === "chapter" && outlineIndex < 0;
+    const auditTarget = kind === "audit" ? row.steps.find((step) => step.index === Number((next.sectionId || "").slice(AUDIT_PREFIX.length))) : undefined;
+    const staleAudit = kind === "audit" && !compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === auditTarget?.sectionId);
+    if (compact.intent.outputMode === "citations_only" || staleDiagram || staleChapter || staleAudit) {
+      await prisma.reportJobStep.updateMany({
+        where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
+        data: { status: "done", output: "", summary: "Dilewati sesuai kontrak mode/scope/visual", finishedAt: new Date() },
+      });
+      onEvent("Langkah lama dilewati sesuai kontrak pengguna, tanpa panggilan AI.");
+    } else if (kind === "diagram") {
+      await runDiagramStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, project, onEvent);
     } else if (kind === "audit") {
-      await runAuditStep(row, next, steps, project, mode, onEvent);
+      await runAuditStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, steps, project, mode, onEvent);
     } else {
       const chapter = await generateChapter(project, chapterInput);
+      controller.signal.throwIfAborted();
       await pendingWrite;
       const seconds = Math.round((Date.now() - stepStarted) / 1000);
-      await prisma.reportJobStep.update({
-        where: { id: next.id },
+      await prisma.reportJobStep.updateMany({
+        where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
         data: {
           status: chapter.source === "ai" ? "done" : "fallback",
           output: chapter.content,
@@ -657,6 +730,12 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
     await pendingWrite;
   } catch (error) {
     await pendingWrite;
+    const state = await readJob(row.id, ownerId);
+    if (state && isJobFinished(state.status)) return toPublic(state);
+    if (error instanceof AiBudgetError) {
+      await appendLog(row.id, log, "error", error.message, { status: "failed", error: error.message });
+      return toPublic((await readJob(row.id, ownerId))!);
+    }
     const message = toPublicErrorMessage(error, "Langkah laporan gagal. Coba lagi.");
     console.error(`report step ${row.id}#${next.index} failed (attempt ${attemptNo}):`, sanitizePublicErrorText(error instanceof Error ? error.message : "unknown").slice(0, 300));
     // Teks parsial terbaik yang kita punya untuk dilanjutkan percobaan berikutnya.
@@ -666,8 +745,8 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
 
     if (kind !== "chapter") {
       // Diagram/audit tidak boleh menggagalkan laporan: tandai fallback, lanjut.
-      await prisma.reportJobStep.update({
-        where: { id: next.id },
+      await prisma.reportJobStep.updateMany({
+        where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
         data: { status: "fallback", error: message, finishedAt: new Date() },
       });
       await appendLog(row.id, log, "warn", `${next.title} gagal (${message}) → dilewati`);
@@ -676,22 +755,23 @@ async function runNextStep(row: JobRow, ownerId: string): Promise<ReportJob> {
       const usable = partial && countWords(partial) >= 250;
       const fallback = fallbackChapter(chapterInput, project);
       const content = usable ? `${partial.trimEnd()}\n\n[LANJUTAN ${next.title.toUpperCase()}: bagian ini belum selesai, gunakan fitur revisi untuk melengkapi]` : fallback.content;
-      await prisma.reportJobStep.update({
-        where: { id: next.id },
+      await prisma.reportJobStep.updateMany({
+        where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
         data: { status: "fallback", output: content, summary: usable ? countWords(partial) + " kata (belum lengkap)" : fallback.summary, error: message, finishedAt: new Date() },
       });
       await appendLog(row.id, log, "error", `Bab "${next.title}" gagal ${MAX_STEP_ATTEMPTS}x (${message}) → ${usable ? "memakai teks yang sudah ada" : "placeholder"}, bisa dilengkapi lewat revisi`);
     } else {
-      await prisma.reportJobStep.update({
-        where: { id: next.id },
+      await prisma.reportJobStep.updateMany({
+        where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
         data: { status: "failed", error: message, output: partial },
       });
       await appendLog(row.id, log, "warn", `Bab "${next.title}" terhenti (${message})${partial ? `, ${countWords(partial)} kata tersimpan` : ""} → akan dilanjutkan`);
     }
-  }
+  } finally { clearInterval(heartbeat); }
 
   const fresh = await readJob(row.id, ownerId);
   if (!fresh) throw new Error("Job hilang saat diproses.");
+  if (isJobFinished(fresh.status)) return toPublic(fresh);
 
   const remaining = fresh.steps.some((step) => !isStepFinished(step.status));
   if (!remaining) return finalizeJob(fresh, ownerId, parseLog(fresh.log));
@@ -780,24 +860,24 @@ async function runDiagramStep(
   const persistFailure = async (error: string) => {
     const message = toPublicErrorMessage(error, "Diagram gagal dibuat.");
     const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, status: "failed", error: message } : diagram));
-    await prisma.reportJob.update({
-      where: { id: row.id },
+    await prisma.reportJob.updateMany({
+      where: { id: row.id, status: "running", steps: { some: { id: step.id, status: "running", attempts: step.attempts, startedAt: step.startedAt } } },
       data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
     });
-    await prisma.reportJobStep.update({
-      where: { id: step.id },
+    await prisma.reportJobStep.updateMany({
+      where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
       data: { status: "fallback", error: message, finishedAt: new Date() },
     });
     emit(`Diagram "${target.title}" tidak jadi dibuat: ${message} → bab menjelaskan secara naratif tanpa gambar`);
   };
   const persistArtifact = async (artifact: ReportDiagramArtifact, summary: string, output: Record<string, unknown>, doneMsg: string) => {
     const updatedDiagrams = diagrams.map((diagram) => (diagram.id === diagramId ? { ...diagram, ...artifact } : diagram));
-    await prisma.reportJob.update({
-      where: { id: row.id },
+    await prisma.reportJob.updateMany({
+      where: { id: row.id, status: "running", steps: { some: { id: step.id, status: "running", attempts: step.attempts, startedAt: step.startedAt } } },
       data: { payload: { ...(row.payload as Record<string, unknown>), diagrams: updatedDiagrams } as Prisma.InputJsonValue },
     });
-    await prisma.reportJobStep.update({
-      where: { id: step.id },
+    await prisma.reportJobStep.updateMany({
+      where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
       data: { status: "done", output: JSON.stringify(output), summary: summary.slice(0, 400), finishedAt: new Date() },
     });
     emit(doneMsg);
@@ -897,8 +977,8 @@ async function runAuditStep(
     mode,
     onEvent: emit,
   });
-  await prisma.reportJobStep.update({
-    where: { id: step.id },
+  await prisma.reportJobStep.updateMany({
+    where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
     data: {
       status: result.changed ? "done" : "fallback",
       output: result.changed ? result.content : null,
@@ -913,6 +993,7 @@ async function runAuditStep(
 /** Keep recoverable markers intact; report missing/pending assets through logs. */
 async function annotateMissingFigures(markdown: string, payload: unknown, ownerId: string) {
   const compact = compactProject(payload);
+  if (compact.intent.diagrams === "omit" || compact.intent.outputMode === "citations_only") return { result: markdown.replace(/\[Gambar:[^\]]+\]/gi, ""), missing: [], pending: [], insertedTitles: [] };
   const available = new Set<string>();
   for (const diagram of payloadDiagrams(payload)) {
     if (typeof diagram.svg === "string" && diagram.svg.trim()) available.add(normalizeFigureKey(String(diagram.title || "")));
@@ -931,7 +1012,7 @@ async function annotateMissingFigures(markdown: string, payload: unknown, ownerI
     for (const job of jobs) {
       const key = normalizeFigureKey(job.title || "");
       if (!key) continue;
-      jobAssets.push({ title: job.title });
+      if (compact.intent.diagrams === "include" || job.status === "done") jobAssets.push({ title: job.title });
       if (job.status === "done" && job.fileId) available.add(key);
       else if (job.status === "queued" || job.status === "running") pending.set(key, job.title);
     }
@@ -949,6 +1030,7 @@ async function annotateMissingFigures(markdown: string, payload: unknown, ownerI
 }
 
 async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]): Promise<ReportJob> {
+  const compact = compactProject(row.payload);
   // Bab final = output audit (bila ada & berhasil) atau output bab.
   const auditByTarget = new Map<number, string>();
   for (const step of row.steps) {
@@ -957,13 +1039,13 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
     }
   }
   const chapterSteps = row.steps
-    .filter((step) => stepKind(step.sectionId) === "chapter")
+    .filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId))
     .sort((a, b) => a.index - b.index);
   const chapters = chapterSteps
     .filter((step) => isStepFinished(step.status) && step.output)
     .map((step) => auditByTarget.get(step.index) ?? (step.output as string));
 
-  if (!chapters.length) {
+  if (!chapters.length && compact.intent.outputMode !== "citations_only") {
     await appendLog(row.id, log, "error", "Tidak ada bagian yang berhasil ditulis", {
       status: "failed",
       progress: 100,

@@ -10,7 +10,8 @@
     "migrate": "node scripts/migrate.js",
     "studio:test": "node --import tsx scripts/studio-engine.test.ts",
     "uml:test": "node --import tsx scripts/uml-quality.test.ts",
-    "security:check": "node scripts/check-security-baseline.mjs"
+    "security:check": "node scripts/check-security-baseline.mjs",
+    "test": "tsx --test scripts/*.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.0.1",
@@ -47,7 +48,7 @@
     "jszip": "^3.10.1",
     "lucide-react": "^0.577.0",
     "mammoth": "^1.12.0",
-    "next": "16.2.12",
+    "next": "16.4.3",
     "openai": "^6.29.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
@@ -56,7 +57,7 @@
     "react-dom": "19.2.3",
     "tippy.js": "^6.3.7",
     "uuid": "^13.0.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -68,7 +69,7 @@
     "@types/uuid": "^10.0.0",
     "dotenv": "^16.4.5",
     "eslint": "^9",
-    "eslint-config-next": "16.2.12",
+    "eslint-config-next": "16.4.3",
     "pg": "^8.13.1",
     "prisma": "^6.0.1",
     "tailwindcss": "^4",

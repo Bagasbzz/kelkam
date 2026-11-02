@@ -15,6 +15,21 @@ const EVIDENCE_HOSTS = new Set([
   "www.scimagojr.com",
 ]);
 
+export function normalizeJournalDoi(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 2048) return undefined;
+  let doi = value.trim();
+  if (/^https?:\/\//i.test(doi)) {
+    try {
+      const url = new URL(doi);
+      if (!["doi.org", "dx.doi.org"].includes(url.hostname) || url.username || url.password || url.port || url.search || url.hash) return undefined;
+      doi = decodeURIComponent(url.pathname.slice(1));
+    } catch {
+      return undefined;
+    }
+  }
+  return doi.length <= 300 && /^10\.\d{4,9}\/[^\s\u0000-\u001f\u007f\\<>"\u2028\u2029]+$/i.test(doi) ? doi.toLowerCase() : undefined;
+}
+
 export function normalizeJournalIssns(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.flatMap((item) => {

@@ -104,11 +104,12 @@ const nextConfig: NextConfig = {
    *    itu tidak ada → "Setting up fake worker failed" → SEMUA PDF gagal dibaca.
    *  - @napi-rs/canvas: binary native (render halaman PDF ke gambar).
    */
-  serverExternalPackages: ["@resvg/resvg-wasm", "pdf-parse", "pdfjs-dist", "@napi-rs/canvas"],
+  serverExternalPackages: ["@resvg/resvg-wasm", "pdf-parse", "pdfjs-dist", "@napi-rs/canvas", "mammoth"],
   /** File yang dibaca via fs / dynamic import (bukan import statis) harus ikut ditrace ke standalone. */
   outputFileTracingIncludes: {
     "/**": [
       "./node_modules/@resvg/resvg-wasm/**",
+      "./node_modules/mammoth/**",
       "./node_modules/dejavu-fonts-ttf/ttf/DejaVuSans*.ttf",
       "./node_modules/dejavu-fonts-ttf/package.json",
       // Worker pdfjs di-import dinamis (webpackIgnore) → tidak terdeteksi tracer.

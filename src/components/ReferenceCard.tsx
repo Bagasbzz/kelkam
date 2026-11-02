@@ -64,12 +64,6 @@ export default function ReferenceCard({
         body: JSON.stringify({
           projectId,
           referenceId: paper.doi || paper.id,
-          title: paper.title,
-          authors: paper.authors || [],
-          year: paper.year || null,
-          venue: paper.venue || null,
-          abstract: paper.abstract || null,
-          url: paper.url || null,
         }),
       });
       const j = await resp.json().catch(() => ({ success: false }));
@@ -135,6 +129,7 @@ export default function ReferenceCard({
         onVerificationChange={onVerificationChange ? (value) => onVerificationChange(paper.id, value) : undefined}
       />
 
+      <p className="mb-2 text-xs text-slate-500">Simpan referensi ke proyek sebelum mengekstrak evidence.</p>
       <div className="flex flex-wrap items-center justify-end gap-3">
         <div className="flex flex-wrap gap-2 items-center">
           <button onClick={handleReject} className="px-3 py-1 border rounded text-sm text-red-600">

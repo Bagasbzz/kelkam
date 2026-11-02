@@ -6,6 +6,13 @@ on:
       - main
   workflow_dispatch: # Memungkinan trigger manual dari tab Actions di GitHub
 
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Build & Deploy via SSH
@@ -27,6 +34,15 @@ jobs:
 
       - name: ⚙️ Generate Prisma Client
         run: npx prisma generate
+        env:
+          DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/dummy"
+
+      - name: Security And Regression Checks
+        run: |
+          npm run security:check
+          npm audit --omit=dev --audit-level=high
+          npx tsc --noEmit --pretty false --incremental false
+          npm test
         env:
           DATABASE_URL: "postgresql://dummy:dummy@localhost:5432/dummy"
 
@@ -83,7 +99,8 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           port: ${{ secrets.SSH_PORT || 22 }}
           script: |
-            cd ${{ secrets.SSH_DIR }}
+            set -eu
+            cd '${{ secrets.SSH_DIR }}'
             
             # Extract file bundle tanpa menimpa file .env atau folder uploads
             tar -xzf deploy.tar.gz

@@ -6,7 +6,7 @@
  *         Urutan (position) dan status TIDAK berubah; hanya isi yang diganti dan
  *         `updatedAt` diisi supaya UI bisa menampilkan "Diubah <waktu>".
  *
- *   body: { classId, nim, name, note?, fileUploadId? }
+ *   body: { token, classId, nim, name, note?, fileUploadId? }
  *   POST  201 { success, submission, position, total }
  *   PATCH 200 { success, submission, position, total }
  *   400 : input tidak valid / (POST) sudah pernah mengumpulkan
@@ -24,12 +24,15 @@ import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import {
   ApiRequestError,
   publicErrorResponse,
+  readJsonBody,
 } from "@/lib/server/request-guards";
 import {
   assertClassCompatible,
   assertFileUploadOwnedBy,
   getTugasOrThrow,
+  assertCourseAccess,
 } from "@/lib/server/tugas/access";
+import { resolveSubmissionIdentity } from "@/lib/server/tugas/submission-identity";
 import { assignPositionWithRetry, isPrismaUniqueViolation } from "@/lib/server/tugas/position";
 import { serializeSubmission, submissionInclude } from "@/lib/server/tugas/serialize";
 
@@ -37,6 +40,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const SubmitSchema = z.object({
+  token: z.string().trim().min(1).max(32),
   classId: z.string().min(1, "Pilih kelas dulu."),
   nim: z.string().trim().min(3, "NIM terlalu pendek.").max(40, "NIM tidak valid."),
   name: z.string().trim().min(1, "Isi nama dulu.").max(120, "Nama tidak valid."),
@@ -49,9 +53,9 @@ type ParsedInput = z.infer<typeof SubmitSchema>;
 async function readInput(req: Request): Promise<ParsedInput | NextResponse> {
   let body: unknown;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ success: false, error: "Data tidak terbaca." }, { status: 400 });
+    body = await readJsonBody(req, 64 * 1024);
+  } catch (error) {
+    return publicErrorResponse(error, "Data tidak terbaca.");
   }
   const parsed = SubmitSchema.safeParse(body);
   if (!parsed.success) {
@@ -80,11 +84,12 @@ export async function POST(
 
   const input = await readInput(req);
   if (input instanceof NextResponse) return input;
-  const { classId, nim, name, note, fileUploadId } = input;
+  const { classId, note, fileUploadId, token } = input;
 
   try {
     const { id: tugasId } = await context.params;
     const tugas = await getTugasOrThrow(tugasId);
+    await assertCourseAccess(tugas.courseId, auth.user, token);
 
     await assertClassCompatible(classId, tugas.courseId, tugas.classId);
     if (fileUploadId) {
@@ -106,6 +111,7 @@ export async function POST(
     const status = isLate ? "LATE" : "SUBMITTED";
 
     const submission = await prisma.$transaction(async (tx) => {
+      const identity = await resolveSubmissionIdentity(tx, tugas.courseId, auth.user.id, input);
       await tx.$queryRaw`SELECT 1 FROM pg_advisory_xact_lock(hashtext(${tugasId}))`;
       const { position } = await assignPositionWithRetry(tx, tugasId);
       return tx.tugasSubmission.create({
@@ -113,8 +119,7 @@ export async function POST(
           tugasId,
           userId: auth.user.id,
           classId,
-          nim,
-          name,
+          ...identity,
           note: note?.trim() || null,
           fileUploadId: fileUploadId ?? null,
           position,
@@ -169,11 +174,12 @@ export async function PATCH(
 
   const input = await readInput(req);
   if (input instanceof NextResponse) return input;
-  const { classId, nim, name, note, fileUploadId } = input;
+  const { classId, note, fileUploadId, token } = input;
 
   try {
     const { id: tugasId } = await context.params;
     const tugas = await getTugasOrThrow(tugasId);
+    await assertCourseAccess(tugas.courseId, auth.user, token);
 
     const existing = await prisma.tugasSubmission.findUnique({
       where: { tugasId_userId: { tugasId, userId: auth.user.id } },
@@ -198,17 +204,19 @@ export async function PATCH(
       await assertFileUploadOwnedBy(fileUploadId, auth.user.id);
     }
 
-    const submission = await prisma.tugasSubmission.update({
-      where: { id: existing.id },
-      data: {
-        classId,
-        nim,
-        name,
-        note: note?.trim() || null,
-        fileUploadId: fileUploadId ?? null,
-        updatedAt: new Date(),
-      },
-      include: submissionInclude,
+    const submission = await prisma.$transaction(async (tx) => {
+      const identity = await resolveSubmissionIdentity(tx, tugas.courseId, auth.user.id, input);
+      return tx.tugasSubmission.update({
+        where: { id: existing.id },
+        data: {
+          classId,
+          ...identity,
+          note: note?.trim() || null,
+          fileUploadId: fileUploadId ?? null,
+          updatedAt: new Date(),
+        },
+        include: submissionInclude,
+      });
     });
 
     const total = await prisma.tugasSubmission.count({ where: { tugasId } });

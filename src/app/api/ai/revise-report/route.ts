@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { aiClient, AI_MODEL, AI_MODEL_FAST, assertAiConfigured, stripDashes, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL_REVIEW, AI_MODEL_FAST, assertAiConfigured, stripDashes, stripThinking } from "@/lib/ai/client";
+import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
 import { toPublicErrorMessage } from "@/lib/errors";
@@ -192,10 +193,10 @@ Aturan ketat:
     };
 
     // Gunakan AI_MODEL_FAST untuk tugas revisi ringan/formatting agar instan
-    const isLightTask = task === "format" || task === "table" || task === "bibliography";
-    const modelToUse = isLightTask ? AI_MODEL_FAST : AI_MODEL;
+    const isLightTask = revisionMode === "format" || revisionMode === "table" || revisionMode === "bibliography";
+    const modelToUse = !isLightTask && revisionMode === "expand" ? AI_MODEL_REVIEW : AI_MODEL_FAST;
 
-    const response = await aiClient.chat.completions.create({
+    const response = await runWithAiOwner(auth.user.id, "revise-report", () => aiClient.chat.completions.create({
       model: modelToUse,
       messages: [
         { role: "system", content: systemPrompt },
@@ -203,7 +204,7 @@ Aturan ketat:
       ],
       temperature: 0.18,
       max_tokens: 3600,
-    }, { timeout: 35000 });
+    }, { timeout: 35000, signal: req.signal }), req.signal);
 
     const data = stripDashes(stripThinking(response.choices[0]?.message.content));
     if (!data) {
@@ -212,6 +213,7 @@ Aturan ketat:
 
     return NextResponse.json({ success: true, data });
   } catch (error) {
+    if (error instanceof AiBudgetError) return NextResponse.json({ success: false, error: error.message }, { status: 429 });
     console.error("API /api/ai/revise-report Error:", error);
     const isTimeout = error instanceof Error && /timeout|timed out|aborted/i.test(error.message);
     if (isTimeout) {

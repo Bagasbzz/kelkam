@@ -17,6 +17,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { AiBudgetError } from "@/lib/server/ai-budget";
 
 // ---------------------------------------------------------------------------
 // Custom Error Class
@@ -137,25 +138,42 @@ export function enforceRateLimit(
  * Parse body JSON dari request, dengan 2 lapis size limit (anti DoS).
  *
  * 1. Cek Content-Length header (kalau ada) → reject kalau > maxBytes.
- * 2. Baca semua text → encode ke bytes → cek lagi (anti client yang kirim
- *    Content-Length bohong).
+ * 2. Hitung byte selama stream dibaca dan hentikan sebelum alokasi berlebih.
  *
  * @throws ApiRequestError(413) kalau payload terlalu besar
  * @throws ApiRequestError(400) kalau JSON tidak valid
  */
 export async function readJsonBody<T>(req: Request, maxBytes: number): Promise<T> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("Invalid JSON body limit.");
   const contentLength = Number(req.headers.get("content-length") || 0);
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     throw new ApiRequestError(413, "Payload terlalu besar.");
   }
 
-  const raw = await req.text();
-  if (new TextEncoder().encode(raw).byteLength > maxBytes) {
-    throw new ApiRequestError(413, "Payload terlalu besar.");
+  const reader = req.body?.getReader();
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let total = 0;
+  if (reader) {
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new ApiRequestError(413, "Payload terlalu besar.");
+        }
+        parts.push(decoder.decode(value, { stream: true }));
+      }
+      parts.push(decoder.decode());
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   try {
-    return JSON.parse(raw || "{}") as T;
+    return JSON.parse(parts.join("") || "{}") as T;
   } catch {
     throw new ApiRequestError(400, "Payload JSON tidak valid.");
   }
@@ -177,9 +195,9 @@ export async function readJsonBody<T>(req: Request, maxBytes: number): Promise<T
  *   }
  */
 export function publicErrorResponse(error: unknown, fallback: string) {
-  if (error instanceof ApiRequestError) {
+  if (error instanceof ApiRequestError || error instanceof AiBudgetError) {
     return NextResponse.json(
-      { success: false, error: error.publicMessage },
+      { success: false, error: error instanceof ApiRequestError ? error.publicMessage : error.message },
       { status: error.status },
     );
   }

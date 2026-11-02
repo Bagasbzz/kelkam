@@ -41,7 +41,7 @@ export default function SubmissionHistory({ courseId, token }: Props) {
     if (!user) return;
     let cancelled = false;
     setLoading(true);
-    fetchMyCourseHistory(courseId)
+    fetchMyCourseHistory(courseId, token)
       .then((d) => {
         if (cancelled) return;
         setSubmitted(d.submitted);
@@ -55,7 +55,7 @@ export default function SubmissionHistory({ courseId, token }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [courseId, user]);
+  }, [courseId, user, token]);
 
   if (!user) return null;
 

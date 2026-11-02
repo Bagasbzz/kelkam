@@ -1,7 +1,7 @@
 /**
  * POST /api/tugas/courses/[courseId]/enroll
  * -----------------------------------------------------------------------------
- * User enroll ke course (opsional, submit endpoint TIDAK cek enrollment row).
+ * User enroll ke course dengan token akses (tracking, bukan bukti otorisasi).
  * Idempotent: kalau udah enrolled, return existing row.
  *
  *   200 : { success, enrollmentId, alreadyEnrolled }
@@ -11,10 +11,14 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
-import { ApiRequestError, publicErrorResponse } from "@/lib/server/request-guards";
+import { ApiRequestError, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
+import { assertCourseAccess } from "@/lib/server/tugas/access";
+import { z } from "zod";
+
+const BodySchema = z.object({ token: z.string().trim().min(1).max(32) });
 
 export async function POST(
-  _req: Request,
+  req: Request,
   context: { params: Promise<{ courseId: string }> },
 ) {
   const auth = await authenticateRequestFromCookie();
@@ -24,11 +28,9 @@ export async function POST(
 
   try {
     const { courseId } = await context.params;
-
-    const course = await prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) {
-      throw new ApiRequestError(404, "Course tidak ditemukan.");
-    }
+    const parsed = BodySchema.safeParse(await readJsonBody(req, 1024));
+    if (!parsed.success) throw new ApiRequestError(400, "Token course wajib diisi.");
+    await assertCourseAccess(courseId, auth.user, parsed.data.token);
 
     // Upsert enrollment (idempotent).
     const existing = await prisma.courseEnrollment.findUnique({

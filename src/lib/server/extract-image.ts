@@ -15,7 +15,7 @@
  */
 
 import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
-import { aiClient, AI_MODEL, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL_REVIEW, assertAiConfigured, stripThinking } from "@/lib/ai/client";
 import { ApiRequestError } from "@/lib/server/request-guards";
 import { DEFAULT_MAX_CHARS, sanitizeText, type ExtractResult } from "@/lib/server/extract-text";
 import { detectImageMime } from "@/lib/security/file-types";
@@ -71,7 +71,7 @@ export async function extractImageText(buffer: Buffer, fileName: string, maxChar
     // Butuh model vision; AI_MODEL_FAST (deepseek) tidak menerima gambar.
     const completion = await aiClient.chat.completions.create(
       {
-        model: AI_MODEL,
+        model: AI_MODEL_REVIEW,
         messages: [{ role: "system", content: SYSTEM_PROMPT }, userMessage],
         temperature: 0.1,
         max_tokens: 3_000,

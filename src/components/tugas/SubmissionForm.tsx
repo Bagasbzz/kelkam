@@ -32,6 +32,7 @@ import { MAX_FILE_BYTES, formatFileSize } from "@/lib/file-limits";
 
 interface SubmissionFormProps {
   tugasId: string;
+  token: string;
   /** Batas waktu tugas (ISO). Dipakai untuk memutuskan boleh ubah atau tidak. */
   deadline: string;
   /** Daftar kelas untuk dipilih. */
@@ -159,6 +160,7 @@ async function readFileIntoMemory(f: File): Promise<File> {
 
 export default function SubmissionForm({
   tugasId,
+  token,
   deadline,
   classes,
   lockedClassId,
@@ -203,7 +205,7 @@ export default function SubmissionForm({
     let cancelled = false;
     (async () => {
       try {
-        const data = await fetchMySubmission(tugasId);
+        const data = await fetchMySubmission(tugasId, token);
         if (cancelled) return;
         setExisting(data.submission);
         setCount(data.count);
@@ -214,7 +216,7 @@ export default function SubmissionForm({
     return () => {
       cancelled = true;
     };
-  }, [user, tugasId]);
+  }, [user, tugasId, token]);
 
   if (!user) {
     return (
@@ -379,7 +381,7 @@ export default function SubmissionForm({
     payload: { classId: string; nim: string; name: string; note?: string; fileUploadId?: string },
     isEdit: boolean,
   ): Promise<SubmitOutcome> {
-    const send = () => (isEdit ? updateMySubmission(tugasId, payload) : submitTugas(tugasId, payload));
+    const send = () => (isEdit ? updateMySubmission(tugasId, { ...payload, token }) : submitTugas(tugasId, { ...payload, token }));
 
     try {
       return await send();
@@ -413,13 +415,13 @@ export default function SubmissionForm({
     fileUploadId?: string;
   }): Promise<SubmitOutcome | null> {
     try {
-      const recovered = await fetchMySubmission(tugasId);
+      const recovered = await fetchMySubmission(tugasId, token);
       const s = recovered.submission;
       const matches =
         !!s &&
         s.classId === payload.classId &&
-        s.nim === payload.nim &&
-        s.name === payload.name &&
+        s.nim.replace(/\s+/g, "").toUpperCase() === payload.nim.replace(/\s+/g, "").toUpperCase() &&
+        s.name.trim().replace(/\s+/g, " ").toLocaleLowerCase("id-ID") === payload.name.trim().replace(/\s+/g, " ").toLocaleLowerCase("id-ID") &&
         s.note === (payload.note ?? null) &&
         (s.fileUpload?.id ?? null) === (payload.fileUploadId ?? null);
       if (!matches || !s) return null;

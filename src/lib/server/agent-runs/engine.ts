@@ -26,9 +26,10 @@ import type OpenAI from "openai";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
-import { aiClient, stripDashes, stripThinking, AI_MODEL, AI_MODEL_FAST } from "@/lib/ai/client";
+import { aiClient, stripDashes, stripThinking, AI_MODEL_FAST } from "@/lib/ai/client";
 import { detectInjection, injectionWarning } from "@/lib/ai/guard";
 import { sanitizePublicErrorText, toPublicAssistantMessage, toPublicErrorMessage } from "@/lib/errors";
+import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
 
 export type AgentKind = "laporan" | "tugas";
 export type AgentRunStatus = "queued" | "running" | "paused" | "waiting_user" | "done" | "failed" | "cancelled";
@@ -122,7 +123,9 @@ const MAX_EMPTY_REPLIES = 3;
 const CONTEXT_SOFT_LIMIT_CHARS = 260_000;
 const COMPACT_KEEP_LAST = 8;
 const COMPACTED_RESULT_CHARS = 1_500;
-export const DEFAULT_MAX_STEPS = 60;
+export const DEFAULT_MAX_STEPS = 20;
+const MAX_TOOLS_PER_RUN = 40;
+const MAX_TOOLS_PER_STEP = 4;
 /** Run lebih tua dari ini tidak dilanjutkan oleh cron. */
 const RUN_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -147,8 +150,8 @@ function rateLimitWaitMs(err: unknown): number | null {
 }
 
 /** Model alternatif saat model aktif kena rate limit (limit biasanya per model). */
-function alternateModel(current: string) {
-  return current === AI_MODEL_FAST ? AI_MODEL : AI_MODEL_FAST;
+function alternateModel() {
+  return AI_MODEL_FAST;
 }
 
 // ---------------------------------------------------------------------------
@@ -179,12 +182,6 @@ function sanitizeToolErrorContext(content: string): string {
   } catch {
     return sanitizePublicErrorText(content);
   }
-}
-
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let t: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error("AI timeout")), ms); });
-  try { return await Promise.race([p, timeout]); } finally { if (t) clearTimeout(t); }
 }
 
 function toPublic(row: Row): AgentRunPublic {
@@ -321,6 +318,33 @@ function compactMessages(messages: Msg[], force = false): Msg[] {
   });
 }
 
+/** A missing checkpoint cannot prove whether a side effect happened. Never replay it. */
+function reconcileInterruptedTools(messages: Msg[]): boolean {
+  let changed = false;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message.role !== "assistant" || !message.tool_calls?.length) continue;
+    let end = i + 1;
+    const completed = new Set<string>();
+    while (end < messages.length && messages[end].role === "tool") {
+      const result = messages[end];
+      if (result.role === "tool") completed.add(result.tool_call_id);
+      end++;
+    }
+    const missing: Msg[] = message.tool_calls.filter((call) => !completed.has(call.id)).map((call) => ({
+      role: "tool",
+      tool_call_id: call.id,
+      content: JSON.stringify({ error: "Tool execution was interrupted; its outcome is unknown. Side effects may already have occurred. Do not repeat this action automatically; verify the actual state or ask the user first.", interrupted: true, outcome: "unknown" }),
+    }));
+    if (missing.length) {
+      messages.splice(end, 0, ...missing);
+      changed = true;
+    }
+    i = end + missing.length - 1;
+  }
+  return changed;
+}
+
 /** Deskripsi default pemanggilan tool bila driver tidak menyediakan, tanpa nama/argumen teknis. */
 function defaultDescribe() {
   return "Mengumpulkan data…";
@@ -367,14 +391,25 @@ export async function createAgentRun(input: {
   meta?: Record<string, unknown>;
   maxSteps?: number;
 }): Promise<AgentRunPublic> {
-  const row = await prisma.agentRun.create({
+  const row = await prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-agent-admission'))`;
+    const now = Date.now();
+    const active = {
+      status: { in: ["queued", "running", "paused"] },
+      OR: [
+        { createdAt: { gte: new Date(now - RUN_TTL_MS) } },
+        { status: "running", lockToken: { not: null }, heartbeatAt: { gte: new Date(now - LOCK_STALE_MS) } },
+      ],
+    };
+    if (await tx.agentRun.count({ where: { ...active, ownerId: input.ownerId } }) >= 3 || await tx.agentRun.count({ where: active }) >= 20) throw new AiBudgetError("Terlalu banyak run aktif. Selesaikan atau batalkan run sebelumnya.");
+    return tx.agentRun.create({
     data: {
       ownerId: input.ownerId,
       kind: input.kind,
       sessionId: input.sessionId,
       model: input.model,
       status: "queued",
-      maxSteps: Math.min(200, Math.max(1, input.maxSteps ?? DEFAULT_MAX_STEPS)),
+      maxSteps: Math.min(DEFAULT_MAX_STEPS, Math.max(1, Number.isSafeInteger(input.maxSteps) ? input.maxSteps! : DEFAULT_MAX_STEPS)),
       messages: input.messages as unknown as Prisma.InputJsonValue,
       meta: (input.meta ?? {}) as Prisma.InputJsonValue,
       events: [{ t: nowIso(), text: "Permintaan diterima, menyiapkan konteks…" }] as unknown as Prisma.InputJsonValue,
@@ -382,6 +417,7 @@ export async function createAgentRun(input: {
       attachments: [],
       heartbeatAt: new Date(),
     },
+  });
   });
   return toPublic(row);
 }
@@ -415,8 +451,8 @@ export async function controlAgentRun(runId: string, ownerId: string, action: "p
   if (action === "resume") {
     if (row.status === "paused") {
       const events = [...pub.events, { t: nowIso(), text: "Dilanjutkan oleh user" }].slice(-EVENT_LIMIT);
-      const updated = await prisma.agentRun.update({ where: { id: runId }, data: { status: "queued", control: null, error: null, events: events as unknown as Prisma.InputJsonValue } });
-      return toPublic(updated);
+      await prisma.agentRun.updateMany({ where: { id: runId, lockToken: row.lockToken, status: row.status, finishedAt: null }, data: { status: "queued", control: null, error: null, events: events as unknown as Prisma.InputJsonValue } });
+      return getAgentRun(runId, ownerId);
     }
     return pub;
   }
@@ -425,21 +461,21 @@ export async function controlAgentRun(runId: string, ownerId: string, action: "p
 
   // Worker hidup → titip perintah, worker yang mengeksekusi di batas langkah.
   if (isRunLive(pub)) {
-    const updated = await prisma.agentRun.update({ where: { id: runId }, data: { control: action } });
-    return toPublic(updated);
+    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: row.lockToken, status: row.status, finishedAt: null }, data: { control: action } });
+    return getAgentRun(runId, ownerId);
   }
 
   // Tidak ada worker → eksekusi langsung.
   if (action === "pause") {
     const events = [...pub.events, { t: nowIso(), text: "Dijeda oleh user" }].slice(-EVENT_LIMIT);
-    const updated = await prisma.agentRun.update({ where: { id: runId }, data: { status: "paused", control: null, lockToken: null, events: events as unknown as Prisma.InputJsonValue } });
-    return toPublic(updated);
+    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: row.lockToken, status: row.status, finishedAt: null }, data: { status: "paused", control: null, lockToken: null, events: events as unknown as Prisma.InputJsonValue } });
+    return getAgentRun(runId, ownerId);
   }
   return finishRun(row.id, {
     status: "cancelled",
     reply: `Dihentikan oleh user. Aktivitas yang sudah dijalankan: ${pub.events.filter((e) => e.level === "tool").map((e) => e.text).slice(-8).join("; ") || "belum ada"}.`,
     events: [...pub.events, { t: nowIso(), text: "Dibatalkan oleh user", level: "warn" }],
-  });
+  }, row.lockToken);
 }
 
 // ---------------------------------------------------------------------------
@@ -464,9 +500,10 @@ async function acquireLock(runId: string): Promise<string | null> {
 async function finishRun(
   runId: string,
   patch: { status: AgentRunStatus; reply?: string | null; error?: string | null; events: AgentEvent[]; pendingQuestion?: PendingQuestion | null; messages?: Msg[]; toolsUsed?: string[]; attachments?: AgentAttachment[] },
+  expectedLockToken: string | null,
 ): Promise<AgentRunPublic> {
   const res = await prisma.agentRun.updateMany({
-    where: { id: runId, finishedAt: null },
+    where: { id: runId, finishedAt: null, lockToken: expectedLockToken },
     data: {
       status: patch.status,
       reply: patch.reply == null ? undefined : toPublicAssistantMessage(patch.reply),
@@ -501,7 +538,7 @@ async function finishRun(
 
 interface LoopOptions { budgetMs: number; emit?: (ev: AgentStreamEvent) => void }
 
-async function runLoop(runId: string, token: string, opts: LoopOptions): Promise<AgentRunPublic> {
+async function runLoop(runId: string, token: string, opts: LoopOptions, controller: AbortController): Promise<AgentRunPublic> {
   const startedAt = Date.now();
   const row0 = await prisma.agentRun.findUniqueOrThrow({ where: { id: runId } });
   const ref = toRef(row0);
@@ -515,6 +552,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   const events = (asArr(row0.events) as AgentEvent[]).map(toPublicEvent);
   const toolsUsed = asArr(row0.toolsUsed).map(String);
   const attachments = asArr(row0.attachments) as AgentAttachment[];
+  const pendingImages: ToolImage[] = [];
   let stepCount = row0.stepCount;
   let consecutiveErrors = 0;
   let emptyReplies = 0;
@@ -542,14 +580,18 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   };
 
   const heartbeat = setInterval(() => {
-    void prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { heartbeatAt: new Date() } }).catch(() => undefined);
+    void (async () => {
+      const current = await prisma.agentRun.findUnique({ where: { id: runId }, select: { lockToken: true, control: true } });
+      if (!current || current.lockToken !== token || current.control) { controller.abort(new Error("Run dihentikan atau klaim berubah.")); return; }
+      await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { heartbeatAt: new Date() } });
+    })().catch(() => controller.abort(new Error("Heartbeat run gagal.")));
   }, HEARTBEAT_INTERVAL_MS);
 
   const persistStep = async () =>
     prisma.agentRun.updateMany({
       where: { id: runId, lockToken: token },
       data: {
-        messages: messages as unknown as Prisma.InputJsonValue,
+        messages: (pendingImages.length ? [...messages, imagesToUserMessage(pendingImages.slice(0, MAX_TOOL_IMAGES))] : messages) as unknown as Prisma.InputJsonValue,
         events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue,
         toolsUsed: toolsUsed as unknown as Prisma.InputJsonValue,
         attachments: attachments as unknown as Prisma.InputJsonValue,
@@ -561,20 +603,25 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
   const release = async (status: AgentRunStatus, note: string) => {
     emit(note, "warn");
     await flushing;
+    reconcileInterruptedTools(messages);
+    if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.splice(0).slice(0, MAX_TOOL_IMAGES)));
     await prisma.agentRun.updateMany({
       where: { id: runId, lockToken: token },
-      data: { status, lockToken: null, control: null, events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue, heartbeatAt: new Date() },
+      data: { status, lockToken: null, control: null, messages: messages as unknown as Prisma.InputJsonValue, toolsUsed, attachments: attachments as unknown as Prisma.InputJsonValue, stepCount, events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue, heartbeatAt: new Date() },
     });
     return getAgentRun(runId, ref.ownerId) as Promise<AgentRunPublic>;
   };
 
   const finish = async (patch: Omit<Parameters<typeof finishRun>[1], "events" | "messages" | "toolsUsed" | "attachments">) => {
     await flushing;
-    return finishRun(runId, { ...patch, events, messages, toolsUsed, attachments });
+    reconcileInterruptedTools(messages);
+    if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.splice(0).slice(0, MAX_TOOL_IMAGES)));
+    return finishRun(runId, { ...patch, events, messages, toolsUsed, attachments }, token);
   };
 
   /** Paksa model menulis jawaban akhir dari data yang sudah terkumpul. */
   const forceFinalAnswer = async (reason: string) => {
+    if (stepCount >= Math.min(row0.maxSteps, DEFAULT_MAX_STEPS)) return "";
     emit("Menyusun jawaban akhir dari data yang sudah terkumpul…");
     const system = await driver.systemPrompt(ref).catch(() => "");
     const base: Msg[] = [
@@ -582,21 +629,26 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       ...compactMessages(messages, true),
       { role: "user", content: `[SISTEM] ${reason} Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool. Langsung tulis jawabannya tanpa berpikir panjang.` },
     ];
-    // Model cepat sering menghabiskan token untuk berpikir → kalau kosong, coba model utama.
-    for (const m of [model, alternateModel(model)]) {
+    // A final answer is one bounded attempt, not an implicit premium fallback.
+    for (const m of [AI_MODEL_FAST]) {
       try {
-        const r = await withTimeout(
-          aiClient.chat.completions.create({ model: m, messages: base, temperature: 0.2, max_tokens: FINAL_ANSWER_MAX_TOKENS }, { timeout: 80_000, maxRetries: 0 }),
-          82_000,
-        );
+        stepCount += 1;
+        const saved = await persistStep();
+        if (!saved.count) throw new Error("Klaim run berubah.");
+        controller.signal.throwIfAborted();
+        const r = await aiClient.chat.completions.create({ model: m, messages: base, temperature: 0.2, max_tokens: FINAL_ANSWER_MAX_TOKENS }, { timeout: Math.min(35_000, Math.max(1000, opts.budgetMs - (Date.now() - startedAt))), maxRetries: 0 });
         const text = stripDashes(stripThinking(r.choices[0]?.message?.content));
         if (text) return text;
-      } catch { /* coba model berikutnya */ }
+      } catch (error) { if (error instanceof AiBudgetError || controller.signal.aborted) throw error; }
     }
     return "";
   };
 
   try {
+    if (reconcileInterruptedTools(messages)) {
+      const saved = await persistStep();
+      if (!saved.count) throw new Error("Klaim run berubah.");
+    }
     for (;;) {
       // 1. Perintah user (pause/cancel) dicek di tiap batas langkah.
       const ctl = await prisma.agentRun.findUnique({ where: { id: runId }, select: { control: true, status: true, lockToken: true } });
@@ -607,7 +659,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       if (ctl.control === "pause") return release("paused", "Dijeda oleh user, ketik \"lanjut\" untuk meneruskan dari langkah terakhir.");
 
       // 2. Batas langkah → jawaban akhir.
-      if (stepCount >= row0.maxSteps) {
+      if (stepCount >= Math.min(row0.maxSteps, DEFAULT_MAX_STEPS) || toolsUsed.length >= MAX_TOOLS_PER_RUN) {
         const reply = (await forceFinalAnswer("Batas langkah tercapai.")) || `Batas ${row0.maxSteps} langkah tercapai. Ketik "lanjut" untuk meneruskan.`;
         return finish({ status: "done", reply });
       }
@@ -624,26 +676,29 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       try {
         const system = await driver.systemPrompt(ref);
         const timeout = Math.min(STEP_TIMEOUT_MS, remaining - 5_000);
-        completion = await withTimeout(
-          aiClient.chat.completions.create({
+        // Failed calls and retries consume persisted steps too, including restarts.
+        stepCount += 1;
+        const saved = await persistStep();
+        if (!saved.count) throw new Error("Klaim run berubah.");
+        controller.signal.throwIfAborted();
+        completion = await aiClient.chat.completions.create({
             model,
             messages: [{ role: "system", content: system }, ...messages],
             tools: driver.tools,
             tool_choice: isLast ? "none" : "auto",
             temperature: driver.temperature ?? 0.2,
             max_tokens: Math.max(driver.maxTokens ?? 1800, STEP_MIN_MAX_TOKENS),
-          }, { timeout, maxRetries: 0 }), // retry SDK tidur mengikuti retry-after → bisa makan seluruh segmen
-          timeout + 2_000,
-        );
+          }, { timeout, maxRetries: 0 });
         consecutiveErrors = 0;
       } catch (err) {
+        if (err instanceof AiBudgetError || controller.signal.aborted) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[agent-run ${runId}] AI error:`, sanitizePublicErrorText(msg).slice(0, 300));
         // Rate limit bukan kegagalan: ganti model, tunggu sesuai "reset after" bila masih muat di segmen.
         const waitMs = rateLimitWaitMs(err);
         if (waitMs !== null) {
           availableAt.set(model, Date.now() + waitMs);
-          const next = alternateModel(model);
+          const next = alternateModel();
           const nextWait = Math.max(0, (availableAt.get(next) ?? 0) - Date.now());
           if (nextWait === 0) {
             emit(`Kuota AI penuh (reset ±${Math.ceil(waitMs / 1000)}s), beralih ke jalur cadangan…`, "warn");
@@ -688,7 +743,6 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           emit("Jawaban belum lengkap, melanjutkan pekerjaan…", "warn");
           if (reply) messages.push({ role: "assistant", content: reply });
           messages.push({ role: "user", content: "[SISTEM] Respons sebelumnya kosong atau terpotong. Lanjutkan pekerjaan: panggil tool berikutnya yang dibutuhkan, atau bila data sudah cukup tulis kesimpulan ringkas langsung tanpa berpikir panjang." });
-          stepCount += 1;
           await persistStep();
           continue;
         }
@@ -702,9 +756,14 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       // 6. Eksekusi tool.
       messages.push({ role: "assistant", content: stripThinking(msg.content), tool_calls: calls });
       let pending: PendingQuestion | null = null;
-      const pendingImages: ToolImage[] = [];
       for (const call of calls) {
         if (call.type !== "function") continue;
+        controller.signal.throwIfAborted();
+        if (calls.indexOf(call) >= MAX_TOOLS_PER_STEP || toolsUsed.length >= MAX_TOOLS_PER_RUN) {
+          messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: "Batas pemanggilan tool tercapai." }) });
+          await persistStep();
+          continue;
+        }
         const name = call.function.name;
         let args: Record<string, unknown> = {};
         try {
@@ -712,6 +771,10 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
           args = asObj(parsedArgs);
         } catch { args = {}; }
         toolsUsed.push(name);
+        // Reserve tool count before side effects; a process crash must not reset it.
+        const saved = await persistStep();
+        if (!saved.count) throw new Error("Klaim run berubah.");
+        controller.signal.throwIfAborted();
 
         if (driver.askUserTool && name === driver.askUserTool) {
           pending = {
@@ -719,6 +782,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
             options: Array.isArray(args.options) ? args.options.map(String).slice(0, 6) : undefined,
           };
           messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ ok: true, note: "Pertanyaan diteruskan ke user." }) });
+          await persistStep();
           continue;
         }
 
@@ -729,11 +793,13 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         if (argError) {
           console.warn(`[agent-run ${runId}] argumen tool ${name.slice(0, 60)} ditolak: ${argError}`);
           messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: `Argumen ditolak: ${argError}` }) });
+          await persistStep();
           continue;
         }
         try {
           result = await driver.runTool(name, args, { run: ref, emit: (text) => emit(text), attachments, toolsUsed, messages });
         } catch (err) {
+          if (err instanceof AiBudgetError || controller.signal.aborted) throw err;
           const message = toPublicErrorMessage(err, "Tool gagal.");
           console.warn(`[agent-run ${runId}] tool ${name} gagal:`, sanitizePublicErrorText(err instanceof Error ? err.message : "Tool gagal.").slice(0, 300));
           result = { error: message };
@@ -744,11 +810,12 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
         const split = splitToolImages(result);
         pendingImages.push(...split.images);
         messages.push({ role: "tool", tool_call_id: call.id, content: clipToolResult(split.result) });
+        const checkpoint = await persistStep();
+        if (!checkpoint.count) throw new Error("Klaim run berubah.");
       }
       // Gambar harus di pesan user (bukan tool) agar model vision bisa melihatnya.
-      if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.slice(0, MAX_TOOL_IMAGES)));
+      if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.splice(0).slice(0, MAX_TOOL_IMAGES)));
 
-      stepCount += 1;
       await persistStep();
 
       if (pending) {
@@ -757,11 +824,20 @@ async function runLoop(runId: string, token: string, opts: LoopOptions): Promise
       }
     }
   } catch (err) {
+    if (err instanceof AiBudgetError) return finish({ status: "failed", error: err.message });
+    if (controller.signal.aborted) {
+      const current = await prisma.agentRun.findUnique({ where: { id: runId }, select: { control: true, lockToken: true } });
+      if (!current || current.lockToken !== token) return (await getAgentRun(runId, ref.ownerId)) as AgentRunPublic;
+      if (current.control === "cancel") return finish({ status: "cancelled", reply: "Dibatalkan oleh pengguna." });
+      return release(current.control === "pause" ? "paused" : "queued", "Run dihentikan pada batas waktu atau kontrol pengguna.");
+    }
     console.error(`[agent-run ${runId}] loop error:`, sanitizePublicErrorText(err instanceof Error ? err.message : String(err)));
     const message = toPublicErrorMessage(err, "Terjadi kesalahan tak terduga.");
     emit(`${message}, run disimpan, bisa dilanjutkan.`, "error");
     await flushing;
-    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { status: "queued", lockToken: null, error: message.slice(0, 300), events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue } });
+    reconcileInterruptedTools(messages);
+    if (pendingImages.length) messages.push(imagesToUserMessage(pendingImages.splice(0).slice(0, MAX_TOOL_IMAGES)));
+    await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { status: "queued", lockToken: null, error: message.slice(0, 300), messages: messages as unknown as Prisma.InputJsonValue, toolsUsed, attachments: attachments as unknown as Prisma.InputJsonValue, stepCount, events: events.slice(-EVENT_LIMIT) as unknown as Prisma.InputJsonValue } });
     return (await getAgentRun(runId, ref.ownerId)) as AgentRunPublic;
   } finally {
     clearInterval(heartbeat);
@@ -800,7 +876,12 @@ export async function serveAgentRun(runId: string, ownerId: string, opts: LoopOp
     if (remaining < MIN_STEP_BUDGET_MS) return run;
 
     const token = await acquireLock(runId);
-    if (token) return runLoop(runId, token, { budgetMs: remaining, emit: opts.emit });
+    if (token) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(new Error("Batas waktu segmen run tercapai.")), remaining);
+      try { return await runWithAiOwner(ownerId, `agent:${run.kind}`, () => runLoop(runId, token, { budgetMs: remaining, emit: opts.emit }, controller), controller.signal); }
+      finally { clearTimeout(timer); }
+    }
 
     const after = await attachLoop(runId, ownerId, { budgetMs: Math.min(remaining, 60_000), emit: opts.emit });
     if (!after) return last;

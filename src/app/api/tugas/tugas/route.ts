@@ -11,7 +11,7 @@
  *   GET  200 : { success, tugases: TugasSummary[] }
  *   400 : input tidak valid
  *   401 : belum login
- *   403 : POST butuh course admin; GET butuh course admin ATAU enrolled
+ *   403 : POST butuh course admin; GET butuh course admin ATAU token course
  */
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -24,7 +24,7 @@ import {
   ApiRequestError,
   publicErrorResponse,
 } from "@/lib/server/request-guards";
-import { assertClassBelongsToCourse } from "@/lib/server/tugas/access";
+import { assertClassBelongsToCourse, assertCourseAccess } from "@/lib/server/tugas/access";
 import { guessPertemuan } from "@/lib/server/tugas/pertemuan";
 import {
   attachmentInclude,
@@ -135,37 +135,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const course = await prisma.course.findUnique({ where: { id: courseId } });
-    if (!course) {
-      return NextResponse.json(
-        { success: false, error: "Course tidak ditemukan." },
-        { status: 404 },
-      );
-    }
-
-    // Cek akses: course admin ATAU enrolled.
-    const [adminRow, enrollmentRow] = await Promise.all([
-      auth.user.role === "ADMIN"
-        ? Promise.resolve(true)
-        : prisma.courseAdmin
-            .findUnique({
-              where: { courseId_userId: { courseId, userId: auth.user.id } },
-              select: { id: true },
-            })
-            .then(Boolean),
-      prisma.courseEnrollment.findUnique({
-        where: { courseId_userId: { courseId, userId: auth.user.id } },
-        select: { id: true },
-      }),
-    ]);
-
-    const hasAccess = adminRow || enrollmentRow || auth.user.role === "ADMIN";
-    if (!hasAccess) {
-      return NextResponse.json(
-        { success: false, error: "Kamu belum terdaftar di course ini." },
-        { status: 403 },
-      );
-    }
+    await assertCourseAccess(courseId, auth.user, url.searchParams.get("token"));
 
     const tugases = await prisma.tugas.findMany({
       where: { courseId },

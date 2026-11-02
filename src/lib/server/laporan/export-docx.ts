@@ -11,6 +11,7 @@ import { listImageJobs } from "@/lib/server/image-jobs";
 import { readUpload, saveUpload } from "@/lib/storage/upload";
 import { buildDocxDocument, docxFileName, DOCX_PRESETS, parseFormatRules, presetForDocumentType } from "@/utils/markdown-docx-exporter";
 import { svgToPngServer } from "./svg-raster";
+import { normalizeReportIntent, type ReportIntent } from "@/lib/report/report-intent";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -24,8 +25,9 @@ export interface SessionDocxInput {
   brief: {
     documentType?: string; course?: string; institution?: string; formatRules?: string;
     studentName?: string; studentId?: string; lecturer?: string; program?: string; faculty?: string;
+    intent?: ReportIntent;
   };
-  diagrams: { title: string; svg?: string; caption?: string; purpose?: string; sectionId?: string }[];
+  diagrams: { title: string; status?: "planned" | "approved" | "failed"; svg?: string; caption?: string; purpose?: string; sectionId?: string }[];
   /** Gambar dari bahan user (PNG tersimpan sebagai FileUpload milik owner). */
   figures?: { title: string; fileId?: string; caption?: string; sectionId?: string }[];
 }
@@ -43,10 +45,15 @@ export interface SessionDocxResult {
 }
 
 export async function exportSessionDocx(input: SessionDocxInput): Promise<SessionDocxResult> {
+  const intent = normalizeReportIntent(input.brief.intent);
+  const scoped = intent.outputMode !== "full_report" || intent.explicit.scope;
+  const omitAssets = intent.diagrams === "omit" || intent.outputMode === "citations_only";
+  const diagrams = omitAssets ? [] : input.diagrams;
+  const figures = omitAssets ? [] : input.figures || [];
   const images: Record<string, Uint8Array> = Object.create(null);
   const [user, imageJobs] = await Promise.all([
     prisma.user.findUnique({ where: { id: input.ownerId }, select: { name: true } }),
-    listImageJobs(input.ownerId, { sessionId: input.sessionId, limit: 50 }).catch((error) => {
+    (omitAssets ? Promise.resolve([]) : listImageJobs(input.ownerId, { sessionId: input.sessionId, limit: 50 })).catch((error) => {
       console.warn("[laporan] gagal memuat ilustrasi saat ekspor:", error);
       return [];
     }),
@@ -59,27 +66,38 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
     const bytes = await readUpload(job.fileId!, input.ownerId).catch(() => null);
     if (bytes) images[key] = new Uint8Array(bytes);
   }
-  for (const f of (input.figures || []).filter((f) => f.fileId && f.title)) {
+  const uploaded = new Set<string>();
+  for (const f of figures.filter((f) => f.fileId && f.title)) {
+    const key = normalizeFigureKey(f.title);
+    if (uploaded.has(key)) continue;
     const bytes = await readUpload(f.fileId!, input.ownerId).catch(() => null);
-    if (bytes) images[normalizeFigureKey(f.title)] = new Uint8Array(bytes);
+    if (bytes) { images[key] = new Uint8Array(bytes); uploaded.add(key); }
   }
   // Rasterisasi berurutan: WASM single-thread, hindari lonjakan memori.
-  for (const diagram of input.diagrams) {
-    if (!diagram.svg || !diagram.title) continue;
+  const rasterized = new Set<string>();
+  for (const diagram of diagrams) {
+    const key = normalizeFigureKey(diagram.title);
+    if (!diagram.svg || !key || diagram.status !== "approved" || rasterized.has(key)) continue;
     try {
-      images[normalizeFigureKey(diagram.title)] = await svgToPngServer(diagram.svg);
+      images[key] = await svgToPngServer(diagram.svg);
+      rasterized.add(key);
     } catch (error) {
       console.warn("[laporan] rasterisasi diagram gagal:", diagram.title, error instanceof Error ? error.message : error);
     }
   }
 
   const assets: FigureAsset[] = [
-    ...input.diagrams.map((diagram) => ({ ...diagram, caption: diagram.caption || diagram.purpose })),
-    ...(input.figures || []),
+    ...diagrams.map((diagram) => ({ ...diagram, caption: diagram.caption || diagram.purpose })),
+    ...figures,
     ...imageJobs.filter((job) => job.title).map((job) => ({ title: job.title })),
   ].map((asset) => ({ ...asset, available: Boolean(images[normalizeFigureKey(asset.title)]) }));
   const figureTitles = assets.map((asset) => asset.title);
-  const { markdown: draft, insertedTitles } = reconcileFigurePlaceholders(input.draft, assets, input.outline);
+  const lines = input.draft.replace(/\r/g, "").split("\n");
+  if (omitAssets) {
+    for (const figure of figurePlaceholders(input.draft)) lines[figure.line] = figure.trailing;
+  }
+  const sourceDraft = omitAssets ? lines.join("\n") : input.draft;
+  const { markdown: draft, insertedTitles } = reconcileFigurePlaceholders(sourceDraft, assets, input.outline);
   const pending = new Map(imageJobs.filter((job) => (job.status === "queued" || job.status === "running") && job.title && !images[normalizeFigureKey(job.title)])
     .map((job) => [normalizeFigureKey(job.title), job.title]));
   const missing = new Map(figurePlaceholders(draft, figureTitles)
@@ -99,14 +117,15 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
 
   const subtitle = input.brief.documentType ? `${input.brief.documentType}${input.brief.course ? ` ${input.brief.course}` : ""}` : undefined;
   // Preset dari jenis dokumen, lalu ditimpa ketentuan format kampus yang ditulis user.
-  const preset = DOCX_PRESETS[input.preset ?? presetForDocumentType(input.brief.documentType)].profile;
+  const preset = DOCX_PRESETS[input.preset ?? (scoped ? "ringkas" : presetForDocumentType(input.brief.documentType))].profile;
   const rules = parseFormatRules(input.brief.formatRules);
   const doc = buildDocxDocument(draft, {
     profile: {
       ...preset,
       ...rules,
       margin: { ...preset.margin, ...rules.margin },
-      cover: {
+      ...(scoped ? { includeToc: false } : {}),
+      cover: scoped ? null : {
         title: input.title,
         subtitle,
         author: input.brief.studentName || user?.name || undefined,
@@ -120,6 +139,8 @@ export async function exportSessionDocx(input: SessionDocxInput): Promise<Sessio
     },
     images,
     figureTitles,
+    outputMode: intent.outputMode,
+    numberChapters: !scoped,
   });
   const buffer = await Packer.toBuffer(doc);
   const name = docxFileName(input.title);

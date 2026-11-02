@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { ChatCompletionUserMessageParam } from "openai/resources/chat/completions";
-import { aiClient, AI_MODEL, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { aiClient, AI_MODEL_REVIEW, assertAiConfigured, stripThinking } from "@/lib/ai/client";
+import { runWithAiOwner } from "@/lib/server/ai-budget";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 import { guardAiRequest } from "@/lib/server/ai-access";
 import { ROUTE_BUDGET_MS, errorToResult, runUmlPipeline } from "@/lib/uml/pipeline";
@@ -79,8 +80,8 @@ export async function POST(req: Request) {
     };
 
     // Butuh model vision; AI_MODEL_FAST (deepseek) tidak menerima gambar.
-    const analysis = await aiClient.chat.completions.create({
-      model: AI_MODEL,
+    const analysis = await runWithAiOwner(gate.user.id, "uml-vision", () => aiClient.chat.completions.create({
+      model: AI_MODEL_REVIEW,
       messages: [
         {
           role: "system",
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
       ],
       temperature: 0.1,
       max_tokens: 900,
-    }, { timeout: 25000 });
+    }, { timeout: 25000 }));
 
     const extracted = extractJson(stripThinking(analysis.choices[0].message.content) || "{}");
     const reconstructionPrompt = (typeof extracted.reconstructionPrompt === "string" ? extracted.reconstructionPrompt : "").slice(0, 6_000) || prompt;
@@ -100,14 +101,14 @@ export async function POST(req: Request) {
     const summary = typeof extracted.summary === "string" ? extracted.summary.slice(0, 500) : "";
 
     // Panggil pipeline langsung (dulu lewat fetch HTTP internal tanpa cookie → gagal auth & bypass rate limit).
-    const result = await runUmlPipeline({
+    const result = await runWithAiOwner(gate.user.id, "uml-from-image", () => runUmlPipeline({
       prompt: reconstructionPrompt,
       diagramType,
       reportContext: {
         purpose: "rekonstruksi dari gambar UML referensi",
         topic: summary || file.name.slice(0, 120),
       },
-    }, () => {}, ROUTE_BUDGET_MS - 30_000).catch(errorToResult);
+    }, () => {}, ROUTE_BUDGET_MS - 30_000)).catch(errorToResult);
 
     const data = result.payload as { success?: boolean; clarification?: string; error?: string; data?: unknown; spec?: unknown; validation?: unknown; diagramType?: unknown };
     if (result.status >= 400 || !data?.success) {
