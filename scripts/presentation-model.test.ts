@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ART_STYLES, createStarterDeck, deckSchema, inspectDeck, LAYOUT_IDS, slideSchema, THEME_IDS, THEMES, validateDeck, VISUAL_MOTIFS } from "../src/lib/presentation/model";
-import { layoutSlide, renderSlideSvg, SLIDE_HEIGHT, SLIDE_WIDTH } from "../src/lib/presentation/layout";
+import { ART_STYLES, createStarterDeck, deckSchema, EDIT_TARGETS, inspectDeck, LAYOUT_IDS, PALETTE_IDS, slideSchema, THEME_IDS, THEMES, validateDeck, VISUAL_MOTIFS, type SlideEditTarget } from "../src/lib/presentation/model";
+import { adjustSlideElement, constrainBounds, layoutSlide, renderSlideSvg, SLIDE_HEIGHT, SLIDE_WIDTH } from "../src/lib/presentation/layout";
+import { DESIGN_PRESETS, PALETTES } from "../src/lib/presentation/presets";
 
 test("starter decks are distinct Indonesian narratives covering every native layout", () => {
   const decks = THEME_IDS.map(createStarterDeck);
@@ -18,6 +19,15 @@ test("starter decks are distinct Indonesian narratives covering every native lay
     assert.ok(deck.slides.every((slide) => slide.visual));
     assert.match(THEMES[deck.theme].accent, /^[A-F0-9]{6}$/);
   }
+});
+
+test("moving an object preserves temporarily blank draft text until full save validation", () => {
+  const draft = { ...createStarterDeck("editorial").slides[0], title: "", body: [""] };
+  const updated = adjustSlideElement(draft, "art", { x: 3, y: 1, w: 2, h: 2 });
+  assert.equal(updated.title, "");
+  assert.deepEqual(updated.body, [""]);
+  assert.equal(updated.adjustments?.[0].target, "art");
+  assert.equal(slideSchema.safeParse(updated).success, false, "persistence must still reject unfinished text");
 });
 
 test("optional art contract preserves older decks and rejects raw resources or unbounded fields", () => {
@@ -205,4 +215,126 @@ test("SVG preview escapes user text and contains neither remote resources nor ex
   assert.ok(svg.includes("&lt;script&gt;"));
   assert.ok(svg.includes("&amp;"));
   assert.doesNotMatch(svg, /<script|<image|<foreignObject|<iframe|onload=/);
+});
+
+test("optional palettes and strict finite geometry preserve legacy decks and reject invalid persisted edits", () => {
+  const deck = createStarterDeck("editorial");
+  assert.ok(!("palette" in deck) && !("adjustments" in deck.slides[0]));
+  assert.ok(validateDeck(JSON.parse(JSON.stringify(deck))).success);
+  for (const palette of PALETTE_IDS) assert.ok(validateDeck({ ...deck, palette }).success);
+  for (const palette of ["remote", "", null, {}, "https://example.com"]) assert.equal(validateDeck({ ...deck, palette }).success, false);
+  const slide = deck.slides[0];
+  const adjustment = { target: "title", x: 0, y: 0, w: SLIDE_WIDTH, h: SLIDE_HEIGHT };
+  assert.ok(slideSchema.safeParse({ ...slide, adjustments: [adjustment] }).success);
+  assert.ok(slideSchema.safeParse({ ...slide, adjustments: EDIT_TARGETS.map((target) => ({ ...adjustment, target, w: 0.5, h: 0.3 })) }).success);
+  for (const bad of [
+    { ...adjustment, target: "decoration" }, { ...adjustment, url: "https://example.com" },
+    { ...adjustment, x: -0.01 }, { ...adjustment, y: -0.01 }, { ...adjustment, w: 0.49 }, { ...adjustment, h: 0.29 },
+    { ...adjustment, w: SLIDE_WIDTH + 0.01 }, { ...adjustment, h: SLIDE_HEIGHT + 0.01 },
+    { ...adjustment, x: 0.01 }, { ...adjustment, y: 0.01 },
+    ...["x", "y", "w", "h"].flatMap((key) => [NaN, Infinity, -Infinity, "1", null].map((value) => ({ ...adjustment, [key]: value }))),
+  ]) assert.equal(slideSchema.safeParse({ ...slide, adjustments: [bad] }).success, false, JSON.stringify(bad));
+  assert.equal(slideSchema.safeParse({ ...slide, adjustments: [adjustment, adjustment] }).success, false);
+  assert.equal(slideSchema.safeParse({ ...slide, adjustments: Array(11).fill(adjustment) }).success, false);
+});
+
+test("geometry helpers clamp, replace unique targets, validate and never mutate persisted input", () => {
+  const slide = createStarterDeck("playful").slides[0];
+  const before = JSON.stringify(slide);
+  const moved = adjustSlideElement(slide, "title", { x: 100, y: -5, w: 5, h: 0 });
+  assert.equal(JSON.stringify(slide), before);
+  assert.deepEqual(moved.adjustments, [{ target: "title", x: SLIDE_WIDTH - 5, y: 0, w: 5, h: 0.3 }]);
+  const second = adjustSlideElement(moved, "title", { x: 1, y: 2, w: 6, h: 2 });
+  assert.deepEqual(second.adjustments, [{ target: "title", x: 1, y: 2, w: 6, h: 2 }]);
+  assert.equal(adjustSlideElement(second, "body-0", { x: 1, y: 4, w: 3, h: 1 }).adjustments?.length, 2);
+  assert.deepEqual(constrainBounds({ x: -3, y: 20, w: 20, h: 20 }), { x: 0, y: 0, w: SLIDE_WIDTH, h: SLIDE_HEIGHT });
+  for (const value of [NaN, Infinity, -Infinity]) assert.throws(() => constrainBounds({ x: value, y: 0, w: 1, h: 1 }), RangeError);
+  assert.throws(() => adjustSlideElement(slide, 'title" onload="x' as SlideEditTarget, { x: 0, y: 0, w: 1, h: 1 }));
+  for (let i = 0; i < 500; i++) {
+    const bounds = constrainBounds({ x: i / 7, y: i / 13, w: i / 31, h: i / 43 });
+    assert.ok(slideSchema.safeParse({ ...slide, adjustments: [{ target: "title", ...bounds }] }).success);
+  }
+});
+
+test("every layout assigns body keys by slot even for identical content and dense fallback", () => {
+  const base = createStarterDeck("playful").slides[0];
+  for (const layout of LAYOUT_IDS) for (const repeated of ["Sama", "W".repeat(220)]) for (const count of [2, 4]) {
+    const slide = { ...base, layout, title: repeated.slice(0, 120), eyebrow: repeated.slice(0, 60), body: Array(count).fill(repeated), art: { fileId: "owned", role: "hero" as const, alt: "Art" } };
+    const scene = layoutSlide(slide, "playful");
+    const editable = scene.elements.filter((element) => element.editKey);
+    assert.deepEqual(editable.map((element) => element.editKey).sort(), ["title", "eyebrow", "art", ...Array.from({ length: count }, (_, i) => `body-${i}`)].sort());
+    for (let i = 0; i < count; i++) {
+      const changed = layoutSlide(adjustSlideElement(slide, `body-${i}` as SlideEditTarget, { x: i + 1, y: 1, w: 1, h: 1 }), "playful");
+      changed.elements.forEach((element, index) => {
+        if (element.editKey === `body-${i}`) assert.equal(element.x, i + 1);
+        else assert.deepEqual(element, scene.elements[index]);
+      });
+    }
+  }
+});
+
+test("adjustments refit complete text to authoritative boxes and rerun readability QA", () => {
+  const base = createStarterDeck("product").slides[0];
+  const slide = { ...base, title: "Judul monumental yang tetap utuh ketika dipindahkan", body: ["Kalimat isi yang tetap dapat diedit dan dibungkus ulang."] };
+  let adjusted = adjustSlideElement(slide, "title", { x: 0.5, y: 0.5, w: 0.5, h: 0.3 });
+  adjusted = adjustSlideElement(adjusted, "body-0", { x: 2, y: 2, w: 2, h: 0.3 });
+  const scene = layoutSlide(adjusted, "product");
+  assert.deepEqual(scene, layoutSlide(adjusted, "product"));
+  assert.ok(scene.issues.some((issue) => issue.code === "small-text"));
+  for (const element of scene.elements) {
+    if (element.type !== "text" || !["title", "body-0"].includes(element.editKey ?? "")) continue;
+    assert.equal(element.lines.join("").replace(/\s/g, ""), element.text.replace(/\s/g, ""));
+    const leading = element.fontFace === "Impact" ? 1.35 : 1.17;
+    assert.ok(element.lines.length * element.fontSize / 72 * element.lineHeight * leading <= element.h - 0.04 + 0.001);
+  }
+  const title = scene.elements.find((element) => element.editKey === "title")!;
+  assert.equal(title.h, 0.3);
+  const larger = layoutSlide(adjustSlideElement(adjusted, "title", { x: 0.5, y: 0.5, w: 12, h: 3 }), "product").elements.find((element) => element.editKey === "title")!;
+  assert.ok(larger.type === "text" && title.type === "text" && larger.fontSize > title.fontSize);
+});
+
+test("art adjustments move the image alone while generated mats and decorations stay fixed", () => {
+  const base = createStarterDeck("editorial").slides[0];
+  for (const role of ["hero", "background", "cutout"] as const) {
+    const slide = { ...base, art: { fileId: "owned", role, alt: "Art" } };
+    const original = layoutSlide(slide, "editorial");
+    const adjusted = layoutSlide(adjustSlideElement(slide, "art", { x: 1, y: 2, w: 3, h: 4 }), "editorial");
+    original.elements.forEach((element, index) => {
+      if (element.type === "image") assert.deepEqual(adjusted.elements[index], { ...element, x: 1, y: 2, w: 3, h: 4 });
+      else assert.deepEqual(adjusted.elements[index], element);
+    });
+    const svg = renderSlideSvg(adjusted);
+    assert.match(svg, /<svg data-edit-key="art" x="96" y="192" width="288" height="384"/);
+    assert.match(svg, /<text data-edit-key="title"/);
+    assert.doesNotMatch(svg, /<(?:rect|line|polygon|ellipse)[^>]*data-edit-key=/);
+    const malicious = { ...adjusted, elements: adjusted.elements.map((element) => ({ ...element, editKey: 'title" onload="x' as SlideEditTarget })) };
+    assert.doesNotMatch(renderSlideSvg(malicious), /data-edit-key|onload=/);
+  }
+});
+
+test("ten client-safe design presets render distinct native scenes and all palettes change core tokens", () => {
+  assert.equal(DESIGN_PRESETS.length, 10);
+  assert.equal(new Set(DESIGN_PRESETS.map((preset) => preset.id)).size, 10);
+  const signatures = new Set<string>();
+  for (const preset of DESIGN_PRESETS) {
+    assert.ok(preset.label && preset.description && preset.artDirection.concept);
+    const deck = createStarterDeck(preset.theme);
+    assert.ok(validateDeck({ ...deck, palette: preset.palette, artDirection: preset.artDirection }).success);
+    const slide = { ...deck.slides[0], title: "Gagasan yang sama", eyebrow: "PRATINJAU", body: ["Isi yang sama"], visual: undefined };
+    const scene = layoutSlide(slide, preset.theme, 0, 1, preset.artDirection, preset.palette);
+    signatures.add(renderSlideSvg(scene));
+    assert.ok(scene.elements.every((element) => element.type !== "image"));
+    for (const element of scene.elements) if (element.type === "text") assert.ok(["Arial", "Arial Black", "Impact", "Georgia"].includes(element.fontFace));
+  }
+  assert.equal(signatures.size, 10);
+  const deck = createStarterDeck("editorial");
+  const original = layoutSlide(deck.slides[0], deck.theme, 0, 1, deck.artDirection);
+  assert.deepEqual(original, layoutSlide(deck.slides[0], deck.theme, 0, 1, deck.artDirection, "original"));
+  for (const palette of PALETTE_IDS.filter((id) => id !== "original")) {
+    const scene = layoutSlide(deck.slides[0], deck.theme, 0, 1, deck.artDirection, palette);
+    assert.equal(scene.background, PALETTES[palette].background);
+    const heading = scene.elements.find((element) => element.editKey === "title");
+    assert.ok(heading?.type === "text" && heading.color === PALETTES[palette].foreground);
+    scene.elements.forEach((element, i) => assert.deepEqual({ x: element.x, y: element.y, w: element.w, h: element.h }, { x: original.elements[i].x, y: original.elements[i].y, w: original.elements[i].w, h: original.elements[i].h }));
+  }
 });

@@ -56,7 +56,7 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
   pptx.title = deck.title;
   pptx.company = "KeluhKampus";
   pptx.theme = { headFontFace: palette.headingFont, bodyFontFace: palette.bodyFont };
-  const scenes = deck.slides.map((slide, index) => layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection));
+  const scenes = deck.slides.map((slide, index) => layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette));
 
   deck.slides.forEach((slide, index) => {
     const page = pptx.addSlide();
@@ -117,7 +117,7 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
     if (motion !== "none") {
       const transition = `<p:transition spd="med" advClick="1">${motion === "push" ? '<p:push dir="l"/>' : "<p:fade/>"}</p:transition>`;
       // Reveal is a real automatic heading entrance, not Morph or whole-slide raster animation.
-      const heading = scenes[index].elements.findIndex((element) => element.type === "text" && element.text === deck.slides[index].title);
+      const heading = scenes[index].elements.findIndex((element) => element.type === "text" && element.editKey === "title");
       const target = new RegExp(`<p:cNvPr id="(\\d+)" name="studio-${heading}"`).exec(xml)?.[1];
       const timing = motion === "reveal" && target ? entranceXml(target) : "";
       xml = xml.replace("</p:sld>", `${transition}${timing}</p:sld>`);

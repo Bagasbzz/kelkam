@@ -18,9 +18,26 @@ const generation = (extra = {}): RunOperation => ({ operation: "generate", baseR
 const revision = (deck: PresentationDeck, preserve: "content" | "design" | "none"): RunOperation => ({ operation: "revise", baseRevision: 1, slideId: deck.slides[1].id, instruction: "Ringkas slide dan gunakan layout cards.", preserve });
 const clone = <T>(value: T): T => structuredClone(value);
 
+test("generation retains the user's selected palette and art direction when model omits or replaces them", () => {
+  const current = state().deck;
+  current.palette = "forest";
+  current.artDirection = { style: "minimal", concept: "Ruang tenang untuk bahan riset" };
+  const output = structuredClone(current);
+  delete output.palette; delete output.artDirection;
+  const result = enforceAiDeck(current, output, { operation: "generate", baseRevision: 1, prompt: "Susun bahan" });
+  assert.equal(result.palette, "forest");
+  assert.deepEqual(result.artDirection, current.artDirection);
+  output.palette = "cobalt";
+  output.artDirection = { style: "kinetic", concept: "Bukan pilihan pengguna" };
+  assert.deepEqual(enforceAiDeck(current, output, { operation: "generate", baseRevision: 1, prompt: "Susun bahan" }).artDirection, current.artDirection);
+});
+
 test("input bounded, strict and generation capped at twelve", () => {
   assert.equal(generateSchema.safeParse({ baseRevision: 1, prompt: "Rancangan", slideCount: 12 }).success, true);
-  for (const extra of [{ slideCount: 13 }, { baseRevision: 0 }, { materialText: "x".repeat(40001) }, { audience: "x".repeat(201) }, { minutes: 181 }, { prompt: "x".repeat(4001) }, { provider: "external" }]) {
+  for (const motion of ["none", "fade", "push", "reveal"]) {
+    assert.equal(generateSchema.safeParse({ baseRevision: 1, prompt: "Rancangan", motion }).success, true);
+  }
+  for (const extra of [{ slideCount: 13 }, { baseRevision: 0 }, { materialText: "x".repeat(40001) }, { audience: "x".repeat(201) }, { minutes: 181 }, { prompt: "x".repeat(4001) }, { motion: "auto" }, { motion: null }, { provider: "external" }]) {
     assert.equal(generateSchema.safeParse({ baseRevision: 1, prompt: "Rancangan", ...extra }).success, false);
   }
   assert.equal(reviseSchema.safeParse({ baseRevision: 1, slideId: randomUUID(), instruction: "Ringkas", preserve: "all" }).success, false);
@@ -74,6 +91,65 @@ test("generation rejects oversized slides, duplicate identities, assets and inve
   output.slides[0].source = "Catatan wawancara pengguna";
   assert.equal(enforceAiDeck(current, output, generation({ materialText: "Sumber: Catatan wawancara pengguna" })).slides[0].source, output.slides[0].source);
   assert.throws(() => enforceAiDeck(current, output, generation({ slideCount: 2 })), PresentationError);
+});
+
+test("generation enforces explicit motion on every unlocked slide without changing locked or absent preferences", () => {
+  const current = state().deck;
+  current.slides[1].locked = true;
+  const output = clone(current);
+  delete output.slides[0].visual;
+  output.slides[2].id = randomUUID();
+  for (const motion of ["none", "fade", "push", "reveal"] as const) {
+    const generated = enforceAiDeck(current, output, generation({ motion }));
+    assert.deepEqual(generated.slides[1], current.slides[1]);
+    assert.deepEqual(generated.slides[0].visual, { motif: "none", background: "solid", motion });
+    generated.slides.forEach((slide) => {
+      if (!slide.locked) assert.equal(slide.visual?.motion, motion);
+    });
+    assert.deepEqual(generated.slides[2].visual, { ...output.slides[2].visual, motion });
+  }
+  const automatic = enforceAiDeck(current, output, generation());
+  assert.equal(Object.hasOwn(automatic.slides[0], "visual"), false);
+  assert.deepEqual(automatic.slides[2].visual, output.slides[2].visual);
+  assert.deepEqual(output.slides[1], current.slides[1], "model proposal must not mutate the locked slide");
+});
+
+test("palette stays user-authoritative during revisions and generation with or without locks, including absent palette", () => {
+  const current = state().deck;
+  for (const palette of [undefined, "ocean"] as const) {
+    if (palette) current.palette = palette;
+    else delete current.palette;
+    for (const preserve of ["content", "design", "none"] as const) {
+      const output = clone(current);
+      output.palette = "sunset";
+      assert.throws(() => enforceAiDeck(current, output, revision(current, preserve)), PresentationError);
+      delete output.palette;
+      if (palette) assert.throws(() => enforceAiDeck(current, output, revision(current, preserve)), PresentationError);
+      assert.deepEqual(enforceAiDeck(current, current, revision(current, preserve)), current);
+    }
+    current.slides[1].locked = true;
+    const output = clone(current);
+    output.palette = "forest";
+    assert.throws(() => enforceAiDeck(current, output, generation()), (error) => error instanceof PresentationError && error.status === 409);
+    current.slides[1].locked = false;
+    assert.equal(enforceAiDeck(current, output, generation()).palette, palette, "generation must retain the user's chosen palette even without locks");
+  }
+});
+
+test("preserve design freezes manual geometry including empty and absent adjustments", () => {
+  const current = state().deck;
+  const geometry = [{ target: "title" as const, x: 1, y: 1, w: 4, h: 1 }];
+  for (const adjustments of [undefined, [], geometry]) {
+    if (adjustments) current.slides[1].adjustments = adjustments;
+    else delete current.slides[1].adjustments;
+    const output = clone(current);
+    output.slides[1].adjustments = [{ target: "art", x: 7, y: 2, w: 3, h: 3 }];
+    const preserved = enforceAiDeck(current, output, revision(current, "design"));
+    assert.deepEqual(preserved.slides[1], current.slides[1]);
+    assert.equal(Object.hasOwn(preserved.slides[1], "adjustments"), adjustments !== undefined);
+    delete output.slides[1].adjustments;
+    assert.deepEqual(enforceAiDeck(current, output, revision(current, "design")).slides[1], current.slides[1]);
+  }
 });
 
 test("preserve modes are enforced by server rather than by model promises", () => {
@@ -158,6 +234,38 @@ test("art references require owned PNG/JPEG and existing deck or completed proje
   await assert.rejects(validatePresentationArt("owner-a", deck.id, many, many, db), /24 MB/);
   many.slides = many.slides.slice(0, 6);
   await validatePresentationArt("owner-a", deck.id, many, many, db);
+});
+
+test("manual art selection accepts owned uploaded images but never foreign, unsupported or unbounded assets", async () => {
+  const current = state().deck;
+  const deck = clone(current);
+  deck.slides[0].art = { fileId: "uploaded-image", role: "cutout", alt: "User supplied image" };
+  let owned = true;
+  let mime = "image/png";
+  let size = 1000;
+  let jobLookups = 0;
+  const db = {
+    fileUpload: { findFirst: async (args: unknown) => {
+      assert.deepEqual(args, { where: { id: "uploaded-image", ownerId: "owner-a" }, select: { mime: true, size: true } });
+      return owned ? { mime, size } : null;
+    } },
+    imageJob: { findFirst: async () => { jobLookups++; return null; } },
+  } as unknown as Parameters<typeof validatePresentationArt>[4];
+  await validatePresentationArt("owner-a", deck.id, deck, current, db, "manual");
+  mime = "image/jpeg";
+  await validatePresentationArt("owner-a", deck.id, deck, current, db, "manual");
+  assert.equal(jobLookups, 0, "manual user selection does not require a generated image job");
+  await assert.rejects(validatePresentationArt("owner-a", deck.id, deck, current, db), /hasil gambar selesai/);
+  assert.equal(jobLookups, 1, "the same owned upload is not automatically authorized for AI");
+  owned = false;
+  await assert.rejects(validatePresentationArt("owner-a", deck.id, deck, current, db, "manual"), /tidak ditemukan/);
+  owned = true;
+  mime = "image/svg+xml";
+  await assert.rejects(validatePresentationArt("owner-a", deck.id, deck, current, db, "manual"), /PNG atau JPEG/);
+  mime = "image/png";
+  for (size of [0, MAX_ART_BYTES + 1]) {
+    await assert.rejects(validatePresentationArt("owner-a", deck.id, deck, current, db, "manual"), /4 MB/);
+  }
 });
 
 test("art job input is strict and bounded", () => {
@@ -565,7 +673,9 @@ test("repository rejects unauthorized manual and AI art before any deck/proposal
   };
   prisma.$transaction = ((callback: (db: Prisma.TransactionClient) => Promise<unknown>) => callback(tx as unknown as Prisma.TransactionClient)) as typeof originalTransaction;
   t.after(() => { prisma.$transaction = originalTransaction; });
-  await assert.rejects(savePresentation("owner-a", current.deck.id, 1, output), /hasil gambar selesai/);
+  owned = false;
+  await assert.rejects(savePresentation("owner-a", current.deck.id, 1, output), /tidak ditemukan/);
+  owned = true;
   await assert.rejects(commitRun("owner-a", current.deck.id, "run-a", output, "claim-a"), /hasil gambar selesai/);
   assert.equal(writes, 0);
   authorizedJob = true;
@@ -584,6 +694,46 @@ test("repository rejects unauthorized manual and AI art before any deck/proposal
   authorizedJob = false;
   await savePresentation("owner-a", current.deck.id, 2, current.deck);
   assert.equal(writes, 3, "existing owned deck art does not need a surviving completed job");
+});
+
+test("manual repository save attaches an owned upload without a job while preserving CAS and invalidating proposals", async (t) => {
+  let current = state();
+  current.proposal = { runId: "run-pending", baseRevision: 1, deck: clone(current.deck) };
+  const output = clone(current.deck);
+  output.palette = "lavender";
+  output.slides[0].art = { fileId: "manual-upload", role: "hero", alt: "Uploaded PNG" };
+  output.slides[0].adjustments = [{ target: "art", x: 7, y: 1, w: 5, h: 5 }];
+  let owned = true;
+  let writes = 0;
+  const originalTransaction = prisma.$transaction;
+  const tx = {
+    $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      assert.match(strings.join("?"), /FOR UPDATE/);
+      assert.deepEqual(values, [current.deck.id, "owner-a"]);
+      return [{ metadata: clone(current) }];
+    },
+    fileUpload: { findFirst: async (args: unknown) => {
+      assert.deepEqual(args, { where: { id: "manual-upload", ownerId: "owner-a" }, select: { mime: true, size: true } });
+      return owned ? { mime: "image/png", size: 1000 } : null;
+    } },
+    imageJob: { findFirst: async () => { throw new Error("Manual uploads do not require an image job"); } },
+    project: { updateMany: async (args: { data: { metadata: PresentationEnvelope } }) => {
+      current = clone(args.data.metadata); writes++; return { count: 1 };
+    } },
+  };
+  prisma.$transaction = ((callback: (db: Prisma.TransactionClient) => Promise<unknown>) => callback(tx as unknown as Prisma.TransactionClient)) as typeof originalTransaction;
+  t.after(() => { prisma.$transaction = originalTransaction; });
+  await assert.rejects(savePresentation("owner-a", current.deck.id, 2, output), (error) => error instanceof PresentationError && error.status === 409);
+  owned = false;
+  await assert.rejects(savePresentation("owner-a", current.deck.id, 1, output), /tidak ditemukan/);
+  assert.equal(writes, 0);
+  assert.ok(current.proposal);
+  owned = true;
+  await savePresentation("owner-a", current.deck.id, 1, output);
+  assert.equal(writes, 1);
+  assert.equal(current.revision, 2);
+  assert.equal(current.proposal, undefined);
+  assert.deepEqual(current.deck, output);
 });
 
 test("driver exposes one bounded commit tool and wraps material and deck as untrusted data", async (t) => {
@@ -612,9 +762,16 @@ test("driver exposes one bounded commit tool and wraps material and deck as untr
   assert.match(prompt, /Proposal sudah disiapkan/);
   assert.match(prompt, /deck aktif tidak berubah/);
   assert.equal(presentasiAgentDriver.temperature, 0.6);
+  assert.equal(presentasiAgentDriver.maxTokens, 16000);
   assert.match(prompt, /storyboard/);
   assert.match(prompt, /owned-art/);
   assert.match(prompt, /tanpa API gambar/);
+  assert.match(prompt, /Slide.adjustments opsional/);
+  assert.match(prompt, /jangan membuat koordinat atau geometri piksel/);
+  assert.match(prompt, /URL gambar eksternal/);
+  const motionPrompt = await presentasiAgentDriver.systemPrompt({ id: "run-test", ownerId: "owner-a", kind: "presentasi", sessionId: current.deck.id, meta: generation({ motion: "none" }) });
+  assert.match(motionPrompt, /motion=none/);
+  assert.match(motionPrompt, /tanpa animasi/);
   assert.deepEqual(jobsLookup.mock.calls[0].arguments, [{ where: { ownerId: "owner-a", sessionId: current.deck.id }, orderBy: { createdAt: "desc" }, take: 50 }]);
   assert.doesNotMatch(prompt, /<<AKHIR_DATA>>/);
   assert.deepEqual(projectLookup.mock.calls[0].arguments, [{ where: { ownerId: "owner-a", projectId: current.deck.id }, select: { metadata: true } }]);

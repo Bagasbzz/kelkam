@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import JSZip from "jszip";
-import { createStarterDeck, THEME_IDS, THEMES } from "../src/lib/presentation/model";
+import { createStarterDeck, PALETTE_IDS, THEME_IDS, THEMES, type PresentationSlide } from "../src/lib/presentation/model";
 import { exportDeckPptx } from "../src/lib/presentation/export-pptx";
-import { layoutSlide } from "../src/lib/presentation/layout";
+import { adjustSlideElement, layoutSlide, renderSlideSvg } from "../src/lib/presentation/layout";
+import { DESIGN_PRESETS } from "../src/lib/presentation/presets";
 
 test("PPTX exporter validates input before generating a file", async () => {
   await assert.rejects(exportDeckPptx({ slides: [] }));
@@ -115,4 +116,85 @@ test("PPTX safely encodes special characters and preserves private notes as edit
   assert.match(notes, /Catatan &lt;aman&gt; &amp; bukan markup/);
   assert.match(notes, /Sumber A &amp; B/);
   assert.doesNotMatch(slide, /Catatan/);
+});
+
+test("adjusted title, duplicate body slots and images share exact native PPTX and SVG geometry", async () => {
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", "base64");
+  for (const role of ["hero", "background", "cutout"] as const) {
+    const deck = createStarterDeck("editorial");
+    deck.palette = "rose";
+    let slide: PresentationSlide = { ...deck.slides[1], title: "Judul yang bisa dipindahkan", body: ["Isi sama", "Isi sama"], visual: { ...deck.slides[1].visual!, motion: "reveal" }, art: { fileId: "owned", role, alt: "Gambar aman" } };
+    const titleBounds = { x: 1.1, y: 0.6, w: 8.1, h: 0.9 };
+    const bodyBounds = { x: 2.1, y: 3.4, w: 3.1, h: 0.5 };
+    const artBounds = { x: 9.1, y: 3.2, w: 2, h: 2 };
+    slide = adjustSlideElement(slide, "title", titleBounds);
+    slide = adjustSlideElement(slide, "body-1", bodyBounds);
+    slide = adjustSlideElement(slide, "art", artBounds);
+    deck.slides = [slide];
+    const scene = layoutSlide(slide, deck.theme, 0, 1, deck.artDirection, deck.palette);
+    const svg = renderSlideSvg(scene);
+    const zip = await JSZip.loadAsync(await exportDeckPptx(deck, { assets: { owned: { data: png, mime: "image/png" } } }));
+    const xml = await zip.file("ppt/slides/slide1.xml")!.async("string");
+    assert.ok(xml.includes(`<a:srgbClr val="${scene.background}"`));
+    for (const [index, element] of scene.elements.entries()) {
+      if (!["title", "body-0", "body-1", "art"].includes(element.editKey ?? "")) continue;
+      const tag = element.type === "image" ? "pic" : "sp";
+      const nodes = xml.match(new RegExp(`<p:${tag}>[\\s\\S]*?<\\/p:${tag}>`, "g")) ?? [];
+      const node = nodes.find((value) => value.includes(`name="studio-${index}"`));
+      assert.ok(node, `${role}/${element.editKey} remains native`);
+      assert.ok(node.includes(`<a:off x="${Math.round(element.x * 914400)}" y="${Math.round(element.y * 914400)}"/>`));
+      assert.ok(node.includes(`<a:ext cx="${Math.round(element.w * 914400)}" cy="${Math.round(element.h * 914400)}"/>`));
+      if (element.type === "text") {
+        for (const line of element.lines) assert.ok(node.includes(`<a:t>${line}</a:t>`));
+        assert.ok(node.includes(`sz="${Math.round(element.fontSize * 100)}"`));
+        assert.match(node, /lIns="0" tIns="0" rIns="0" bIns="0"/);
+        const textNode = (svg.match(/<text[\s\S]*?<\/text>/g) ?? []).find((value) => value.includes(`data-edit-key="${element.editKey}"`));
+        assert.ok(textNode?.includes(`x="${element.x * 96}" y="${element.y * 96 + element.fontSize * 96 / 72}"`));
+      } else assert.ok(svg.includes(`<svg data-edit-key="art" x="${element.x * 96}" y="${element.y * 96}" width="${element.w * 96}" height="${element.h * 96}"`));
+    }
+    const titleIndex = scene.elements.findIndex((element) => element.editKey === "title");
+    const titleId = new RegExp(`<p:cNvPr id="(\\d+)" name="studio-${titleIndex}"`).exec(xml)![1];
+    assert.ok(xml.includes(`<p:spTgt spid="${titleId}"`));
+    assert.match(xml, /<p:timing>/);
+    assert.match(xml, /<p:bldLst>/);
+    assert.equal(scene.elements.find((element) => element.editKey === "body-0")!.x, 1.5);
+    assert.equal(scene.elements.find((element) => element.editKey === "body-1")!.x, bodyBounds.x);
+  }
+});
+
+test("PPTX rejects unsafe persisted geometry before resolving assets", async () => {
+  const deck = createStarterDeck("product");
+  const slide = { ...deck.slides[0], art: { fileId: "missing", role: "hero", alt: "Art" } };
+  const bounds = { target: "title", x: 0, y: 0, w: 1, h: 1 };
+  for (const adjustments of [
+    [{ ...bounds, x: NaN }], [{ ...bounds, h: Infinity }], [{ ...bounds, w: -1 }],
+    [{ ...bounds, x: 13 }], [{ ...bounds, y: 7 }], [bounds, bounds], [{ ...bounds, target: "remote" }],
+  ]) await assert.rejects(exportDeckPptx({ ...deck, slides: [{ ...slide, adjustments }] }), (error: Error) => !error.message.includes("Aset gambar"));
+});
+
+test("every palette and authored preset exports native distinct colors and system fonts offline", async () => {
+  const signatures = new Set<string>();
+  for (const preset of DESIGN_PRESETS) {
+    const deck = createStarterDeck(preset.theme);
+    deck.artDirection = preset.artDirection;
+    deck.palette = preset.palette;
+    deck.slides = [{ ...deck.slides[0], title: "Pratinjau desain", body: ["Gagasan utama"], visual: undefined }];
+    const scene = layoutSlide(deck.slides[0], deck.theme, 0, 1, deck.artDirection, deck.palette);
+    const zip = await JSZip.loadAsync(await exportDeckPptx(deck));
+    const xml = await zip.file("ppt/slides/slide1.xml")!.async("string");
+    assert.ok(xml.includes(`<a:srgbClr val="${scene.background}"`));
+    assert.match(xml, /<a:t>Pratinjau/);
+    assert.doesNotMatch(xml, /<p:pic>|<a:blip/);
+    signatures.add(xml);
+  }
+  assert.equal(signatures.size, 10);
+  const deck = createStarterDeck("playful");
+  deck.slides = PALETTE_IDS.map((palette) => ({ ...deck.slides[0], id: crypto.randomUUID(), title: palette }));
+  for (const palette of PALETTE_IDS) {
+    const single = { ...deck, palette, slides: [deck.slides[0]] };
+    const zip = await JSZip.loadAsync(await exportDeckPptx(single));
+    const xml = await zip.file("ppt/slides/slide1.xml")!.async("string");
+    const scene = layoutSlide(single.slides[0], single.theme, 0, 1, single.artDirection, palette);
+    assert.ok(xml.includes(`<a:srgbClr val="${scene.background}"`));
+  }
 });

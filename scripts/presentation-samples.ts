@@ -24,7 +24,7 @@ async function main() {
     const slides = [];
     const cards = [];
     for (const [index, slide] of deck.slides.entries()) {
-      const scene = layoutSlide(slide, theme, index, deck.slides.length, deck.artDirection);
+      const scene = layoutSlide(slide, theme, index, deck.slides.length, deck.artDirection, deck.palette);
       const file = `slide-${index + 1}.svg`;
       await writeFile(path.join(directory, file), renderSlideSvg(scene));
       const xml = await zip.file(`ppt/slides/slide${index + 1}.xml`)!.async("string");

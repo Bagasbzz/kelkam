@@ -60,7 +60,7 @@ export async function savePresentation(ownerId: string, projectId: string, baseR
   return prisma.$transaction(async (tx) => {
     const state = await lockedProject(tx, ownerId, projectId);
     assertRevision(state, baseRevision);
-    await validatePresentationArt(ownerId, projectId, deck, state.deck, tx);
+    await validatePresentationArt(ownerId, projectId, deck, state.deck, tx, "manual");
     return writeProject(tx, ownerId, nextEnvelope(state, deck));
   });
 }

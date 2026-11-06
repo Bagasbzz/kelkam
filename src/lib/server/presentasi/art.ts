@@ -21,8 +21,8 @@ export const artJobSchema = z.object({
 type ArtDatabase = Pick<Prisma.TransactionClient, "fileUpload" | "imageJob">;
 const artIds = (deck: PresentationDeck) => [...new Set(deck.slides.flatMap((slide) => slide.art ? [slide.art.fileId] : []))];
 
-/** Both manual saves and model proposals cross the same owned-asset boundary. */
-export async function validatePresentationArt(ownerId: string, projectId: string, deck: PresentationDeck, existing: PresentationDeck, db: ArtDatabase = prisma) {
+/** Manual selection permits owned uploads; AI may only reuse explicitly scoped assets. */
+export async function validatePresentationArt(ownerId: string, projectId: string, deck: PresentationDeck, existing: PresentationDeck, db: ArtDatabase = prisma, mode: "generated" | "manual" = "generated") {
   const ids = artIds(deck);
   if (ids.length > MAX_ART_ASSETS) throw new PresentationError(413, "Maksimum delapan aset gambar per presentasi.");
   const existingIds = new Set(artIds(existing));
@@ -34,7 +34,7 @@ export async function validatePresentationArt(ownerId: string, projectId: string
     if (file.size < 1 || file.size > MAX_ART_BYTES) throw new PresentationError(413, "Setiap aset gambar maksimum 4 MB.");
     total += file.size;
     if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total aset gambar maksimum 24 MB.");
-    if (!existingIds.has(id)) {
+    if (mode === "generated" && !existingIds.has(id)) {
       const job = await db.imageJob.findFirst({ where: { ownerId, sessionId: projectId, status: "done", fileUploadId: id }, select: { id: true } });
       if (!job) throw new PresentationError(400, "Gunakan aset yang sudah ada atau hasil gambar selesai untuk presentasi ini.");
     }
@@ -52,7 +52,7 @@ export async function loadPresentationAssets(ownerId: string, deck: Presentation
     try {
       const header = inspectImage(bytes);
       if (header.mime !== "image/png" && header.mime !== "image/jpeg") throw new Error("Format gambar tidak valid.");
-    const png = await toPng(bytes, { maxWidth: 1600, maxBytesPassthrough: 0, preserveAlpha: true });
+      const png = await toPng(bytes, { maxWidth: 1600, maxBytesPassthrough: 0, preserveAlpha: true });
       if (png.width > 1600 || png.height > 4096 || png.bytes.length > MAX_ART_BYTES) throw new PresentationError(413, "Gambar hasil konversi melewati batas ekspor.");
       total += png.bytes.length;
       if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total gambar hasil konversi maksimum 24 MB.");

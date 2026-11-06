@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { deckSchema, type PresentationDeck, type PresentationSlide } from "@/lib/presentation/model";
+import { deckSchema, SLIDE_MOTIONS, type PresentationDeck, type PresentationSlide } from "@/lib/presentation/model";
 
 export const revisionSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER - 1);
 export const generateSchema = z.object({
@@ -9,6 +9,7 @@ export const generateSchema = z.object({
   audience: z.string().trim().max(200).optional(),
   minutes: z.number().int().min(1).max(180).optional(),
   slideCount: z.number().int().min(1).max(12).optional(),
+  motion: z.enum(SLIDE_MOTIONS).optional(),
 }).strict();
 export const reviseSchema = z.object({
   baseRevision: revisionSchema,
@@ -76,8 +77,8 @@ export function enforceAiDeck(current: PresentationDeck, output: unknown, operat
   const proposed = parsed.data;
   if (proposed.id !== current.id) throw new PresentationError(400, "AI tidak boleh mengganti ID presentasi.");
   if (operation.operation === "generate") {
-    if (current.slides.some((slide) => slide.locked) && !equal(proposed.artDirection, current.artDirection)) {
-      throw new PresentationError(409, "Arah seni tidak boleh berubah selama ada slide terkunci.");
+    if (current.slides.some((slide) => slide.locked) && (!equal(proposed.artDirection, current.artDirection) || proposed.palette !== current.palette)) {
+      throw new PresentationError(409, "Arah seni dan palet tidak boleh berubah selama ada slide terkunci.");
     }
     if (proposed.theme !== current.theme || proposed.slides.length > 12 || (operation.slideCount && proposed.slides.length !== operation.slideCount)) {
       throw new PresentationError(400, "Tema atau jumlah slide hasil AI tidak sesuai permintaan (maksimum 12).");
@@ -89,8 +90,14 @@ export function enforceAiDeck(current: PresentationDeck, output: unknown, operat
     proposed.slides = proposed.slides.map((slide) => {
       const original = current.slides.find((item) => item.id === slide.id);
       if (original?.locked) return original;
-      return { ...slide, locked: original?.locked ?? false, source: slide.source && (sources.includes(slide.source) || (original && equal(content(original), content(slide)))) ? slide.source : "" };
+      return {
+        ...slide, locked: original?.locked ?? false,
+        ...(operation.motion !== undefined ? { visual: { motif: "none" as const, background: "solid" as const, ...slide.visual, motion: operation.motion } } : {}),
+        source: slide.source && (sources.includes(slide.source) || (original && equal(content(original), content(slide)))) ? slide.source : "",
+      };
     });
+    proposed.artDirection = current.artDirection;
+    proposed.palette = current.palette;
     return proposed;
   }
 
@@ -98,7 +105,7 @@ export function enforceAiDeck(current: PresentationDeck, output: unknown, operat
   if (index < 0) throw new PresentationError(404, "Slide tidak ditemukan.");
   const original = current.slides[index];
   if (original.locked) throw new PresentationError(409, "Buka kunci slide sebelum meminta revisi AI.");
-  if (proposed.title !== current.title || proposed.theme !== current.theme || !equal(proposed.artDirection, current.artDirection) || proposed.slides.length !== current.slides.length) {
+  if (proposed.title !== current.title || proposed.theme !== current.theme || proposed.palette !== current.palette || !equal(proposed.artDirection, current.artDirection) || proposed.slides.length !== current.slides.length) {
     throw new PresentationError(400, "Revisi slide tidak boleh mengubah pengaturan atau jumlah slide.");
   }
   current.slides.forEach((slide, i) => {
@@ -114,6 +121,8 @@ export function enforceAiDeck(current: PresentationDeck, output: unknown, operat
     else delete revised.visual;
     if (original.art) revised.art = original.art;
     else delete revised.art;
+    if (original.adjustments) revised.adjustments = original.adjustments;
+    else delete revised.adjustments;
   }
   if (operation.preserve !== "content" && !equal(content(original), content(revised)) && !operation.instruction.includes(revised.source)) revised.source = "";
   return { ...current, slides: current.slides.map((slide, i) => i === index ? revised : slide) };

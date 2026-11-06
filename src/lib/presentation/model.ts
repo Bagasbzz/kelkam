@@ -6,8 +6,12 @@ export const ART_STYLES = ["geometric", "zine", "kinetic", "blueprint", "minimal
 export const VISUAL_MOTIFS = ["network", "campus", "botanical", "megaphone", "orbit", "none"] as const;
 export const VISUAL_BACKGROUNDS = ["solid", "halftone", "grid", "spotlight"] as const;
 export const SLIDE_MOTIONS = ["none", "fade", "push", "reveal"] as const;
+export const PALETTE_IDS = ["original", "ocean", "sunset", "lavender", "forest", "mono", "cobalt", "rose"] as const;
+export const EDIT_TARGETS = ["title", "eyebrow", "body-0", "body-1", "body-2", "body-3", "art"] as const;
 export type PresentationFont = "Arial" | "Arial Black" | "Impact" | "Georgia";
 export type PresentationTheme = (typeof THEME_IDS)[number];
+export type PresentationPalette = (typeof PALETTE_IDS)[number];
+export type SlideEditTarget = (typeof EDIT_TARGETS)[number];
 export type SlideLayout = (typeof LAYOUT_IDS)[number];
 
 export interface ThemeDefinition {
@@ -57,6 +61,23 @@ export const slideArtSchema = z.object({
   role: z.enum(["hero", "background", "cutout"]), alt: text(300),
 }).strict();
 
+export const slideAdjustmentSchema = z.object({
+  target: z.enum(EDIT_TARGETS),
+  x: z.number().finite().min(0).max(13.333), y: z.number().finite().min(0).max(7.5),
+  w: z.number().finite().min(0.5).max(13.333), h: z.number().finite().min(0.3).max(7.5),
+}).strict().superRefine((bounds, ctx) => {
+  if (bounds.x + bounds.w > 13.333) ctx.addIssue({ code: "custom", path: ["w"], message: "Elemen melewati lebar slide." });
+  if (bounds.y + bounds.h > 7.5) ctx.addIssue({ code: "custom", path: ["h"], message: "Elemen melewati tinggi slide." });
+});
+
+const slideAdjustmentsSchema = z.array(slideAdjustmentSchema).max(10).superRefine((adjustments, ctx) => {
+  const seen = new Set<SlideEditTarget>();
+  adjustments.forEach((adjustment, index) => {
+    if (seen.has(adjustment.target)) ctx.addIssue({ code: "custom", path: [index, "target"], message: "Target penyesuaian harus unik." });
+    seen.add(adjustment.target);
+  });
+});
+
 export const slideSchema = z.object({
   id: z.string().uuid(),
   title: text(120).min(1),
@@ -68,6 +89,7 @@ export const slideSchema = z.object({
   locked: z.boolean(),
   visual: slideVisualSchema.optional(),
   art: slideArtSchema.optional(),
+  adjustments: slideAdjustmentsSchema.optional(),
 }).strict();
 
 export const deckSchema = z.object({
@@ -76,6 +98,7 @@ export const deckSchema = z.object({
   theme: z.enum(THEME_IDS),
   slides: z.array(slideSchema).min(1).max(20),
   artDirection: artDirectionSchema.optional(),
+  palette: z.enum(PALETTE_IDS).optional(),
 }).strict().superRefine((deck, ctx) => {
   const seen = new Set<string>();
   deck.slides.forEach((slide, index) => {
@@ -91,6 +114,7 @@ export type PresentationDeck = z.infer<typeof deckSchema>;
 export type ArtDirection = z.infer<typeof artDirectionSchema>;
 export type SlideVisual = z.infer<typeof slideVisualSchema>;
 export type SlideArt = z.infer<typeof slideArtSchema>;
+export type SlideAdjustment = z.infer<typeof slideAdjustmentSchema>;
 
 export function validateDeck(input: unknown) {
   return deckSchema.safeParse(input);
