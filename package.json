@@ -53,11 +53,17 @@
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^2.4.5",
     "pdfjs-dist": "^4.7.76",
+    "pptxgenjs": "^4.0.1",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tippy.js": "^6.3.7",
     "uuid": "^13.0.0",
     "zod": "^4.6.7"
+  },
+  "overrides": {
+    "pptxgenjs": {
+      "image-size": "2.0.4"
+    }
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

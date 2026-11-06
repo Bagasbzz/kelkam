@@ -102,16 +102,38 @@ Di Setup Node.js App → app → **Environment Variables**:
 | `AUTH_COOKIE_NAME` | `keluhkampus_session` |
 | `AUTH_COOKIE_SECURE` | `true` |
 | `NEXT_PUBLIC_SITE_URL` | `https://keluhkampus.my.id` |
-| `AI_API_KEY` | OpenAI key |
-| `AI_BASE_URL` | `https://api.openai.com/v1` |
-| `AI_MODEL` | `gpt-5.5` |
-| `AI_MODEL_FAST` | `gpt-5-mini` |
-| `AI_MODEL_REVIEW` | `gpt-5.5` |
+| `AI_API_KEY` | key Mindaku baru yang sudah dirotasi, hanya di server |
+| `AI_BASE_URL` | `https://vip-api.mind-aku.my.id/v1` |
+| `AI_MODEL_FAST` | `deepseek-v4-pro` |
+| `AI_MODEL_REVIEW` | `claude-sonnet-5` |
+| `AI_MODEL_IMAGE` | `gpt-image-2` |
 | `AI_REPORT_TIMEOUT_MS` | `25000` |
 | `UPLOAD_DIR` | `/home/USERNAME/keluhkampus.my.id/uploads` |
 | `MATERIALS_DIR` | `/home/USERNAME/keluhkampus-data/course-materials` |
 | `MAX_UPLOAD_BYTES` | `12582912` |
 | `REFERENCE_CACHE_ADMIN_TOKEN` | random string (opsional) |
+
+Migrasi provider tidak memerlukan perubahan tiap route atau migrasi database. Semua
+panggilan chat dan gambar memakai `src/lib/ai/client.ts`. `AI_MODEL_FAST` adalah
+model utama; `AI_MODEL` lama hanya fallback konfigurasi review bila
+`AI_MODEL_REVIEW` tidak diisi. ID model API tidak memakai awalan `mindaku/`.
+
+Untuk pindah dari Premzone, ubah lima variabel AI di atas pada **Setup Node.js App**,
+simpan, lalu **Restart** aplikasi. Jika konfigurasi juga ada di `.env.local` server,
+selaraskan nilainya agar tidak ada dua konfigurasi berbeda; environment proses yang
+sudah terisi didahulukan oleh Next.js. Untuk pengembangan lokal, isi `.env.local`
+sendiri berdasarkan `.env.local.example`, kemudian restart dev server. Jangan
+memasukkan key ke source, frontend, `NEXT_PUBLIC_*`, atau Git. Rotasi key yang
+pernah dibagikan lewat chat/screenshot.
+
+Alamat dan ID di atas diperiksa dari dokumentasi publik
+[Mindaku Sample API](https://mindaku.com/sample-api) dan
+[Image Guide](https://mindaku.com/image-guide). Katalog publik bukan bukti bahwa
+grup key tertentu mendukung semua model. Sebelum digunakan luas, periksa akses
+model, satu percakapan biasa, tool calling laporan, vision, dan satu image job
+secara terkontrol. Panggilan live dapat berbayar; panduan ini tidak menjalankannya.
+Konfigurasi gambar aplikasi tetap dibatasi satu gambar `1024x1024`, kualitas `low`,
+melalui `/v1/images/generations`, bukan endpoint chat.
 
 ---
 
@@ -121,21 +143,18 @@ GitHub repo → **Settings** → **Secrets and variables** → **Actions** → *
 
 | Secret | Isi |
 |---|---|
-| `JKC_HOST` | `keluhkampus.my.id` |
-| `JKC_USER` | cPanel username |
-| `JKC_SSH_KEY` | `cat ~/.ssh/jkc_deploy` (private key, multi-line) |
-| `JKC_DEPLOY_DIR` | `/home/USERNAME/keluhkampus.my.id` |
-| `DATABASE_URL` | connection string |
-| `DIRECT_URL` | connection string |
-| `AUTH_JWT_SECRET` | sama dengan env var |
-| `NEXT_PUBLIC_SITE_URL` | `https://keluhkampus.my.id` |
-| `AI_API_KEY` | OpenAI key |
-| `AI_BASE_URL` | `https://api.openai.com/v1` |
-| `AI_MODEL` | `gpt-5.5` |
-| `AI_MODEL_FAST` | `gpt-5-mini` |
-| `AI_MODEL_REVIEW` | `gpt-5.5` |
-| `MATERIALS_DIR` | `/home/USERNAME/keluhkampus-data/course-materials` |
-| `REFERENCE_CACHE_ADMIN_TOKEN` | random (opsional) |
+| `SSH_HOST` | `keluhkampus.my.id` |
+| `SSH_USER` | cPanel username |
+| `SSH_PASSWORD` | password SSH, simpan sebagai secret |
+| `SSH_PORT` | port SSH (default `22`) |
+| `SSH_DIR` | `/home/USERNAME/keluhkampus.my.id` |
+
+Workflow `.github/workflows/deploy.yml` memakai environment GitHub `SSH_SERVER`
+dan nama secret SSH di atas. Workflow saat ini tidak membaca `AI_API_KEY`,
+`AI_BASE_URL`, atau model dari GitHub Secrets; menambahkan atau menggantinya di
+GitHub saja tidak mengubah provider produksi. Bundle deploy tidak menimpa `.env`
+server atau folder uploads. Kelola konfigurasi AI runtime di cPanel sebagaimana
+bagian 5; tidak perlu menyalin key AI ke GitHub untuk workflow ini.
 
 ---
 

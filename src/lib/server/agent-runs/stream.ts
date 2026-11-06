@@ -5,7 +5,7 @@
  * koneksi idle), event progres real-time, dan event `result` di akhir dengan
  * flag `continue`, klien otomatis menyambung ulang kalau run belum selesai.
  */
-import { serveAgentRun, runNeedsContinue, type AgentStreamEvent } from "@/lib/server/agent-runs/engine";
+import { getAgentRun, serveAgentRun, runNeedsContinue, type AgentStreamEvent } from "@/lib/server/agent-runs/engine";
 import { toPublicErrorMessage } from "@/lib/errors";
 
 /** Budget per segmen HTTP; di bawah batas 120 s hosting dengan sisa untuk jawaban. */
@@ -20,8 +20,12 @@ export function streamAgentRun(runId: string, ownerId: string, budgetMs = SEGMEN
         if (closed) return;
         try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)); } catch { closed = true; }
       };
-      const heartbeat = setInterval(() => write({ type: "status", phase: "heartbeat" }), 5_000);
+      let heartbeat: ReturnType<typeof setInterval> | undefined;
       try {
+        const initial = await getAgentRun(runId, ownerId);
+        if (!initial) throw new Error("Run tidak ditemukan.");
+        write({ type: "run", run: initial });
+        heartbeat = setInterval(() => write({ type: "status", phase: "heartbeat" }), 5_000);
         const run = await serveAgentRun(runId, ownerId, { budgetMs, emit: write });
         write({ type: "result", run, continue: runNeedsContinue(run) });
       } catch (err) {

@@ -59,6 +59,7 @@ const PROTECTED_API_PREFIXES = [
   "/api/template",
   "/api/report-jobs/",
   "/api/laporan/",
+  "/api/presentasi",
   "/api/context/extract",
   "/api/references/",
   "/api/research/",
@@ -92,6 +93,7 @@ function isPublicTokenEndpoint(pathname: string) {
 function isPollingEndpoint(pathname: string) {
   return /^\/api\/report-jobs\/status\/[^/]+$/.test(pathname)
     || /^\/api\/laporan\/sessions\/[^/]+\/run$/.test(pathname)
+    || /^\/api\/presentasi\/[^/]+(?:\/(?:run|art))?$/.test(pathname)
     || /^\/api\/tugas\/courses\/[^/]+\/assistant\/run$/.test(pathname)
     || /^\/api\/ai\/generate-image\/[^/]+$/.test(pathname);
 }
@@ -107,6 +109,7 @@ function isPollingEndpoint(pathname: string) {
 const PROTECTED_PAGE_PREFIXES = [
   "/studio",
   "/dashboard",
+  "/presentasi",
   "/research/new",
 ];
 
@@ -209,5 +212,5 @@ export const config = {
   // dengan batas `proxyClientMaxBodySize` dan memotong body di atas batas itu
   // secara diam-diam → file tersimpan rusak. Route tersebut melakukan auth
   // (requireAdmin) + rate limit sendiri.
-  matcher: ["/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*"],
+  matcher: ["/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*", "/presentasi/:path*"],
 };

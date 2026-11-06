@@ -173,7 +173,7 @@ export interface PngResult {
  * Ubah gambar apa pun yang didukung menjadi PNG dengan lebar maks `maxWidth`.
  * PNG yang sudah cukup kecil dikembalikan apa adanya (tanpa decode ulang).
  */
-export async function toPng(input: Buffer, options: { maxWidth?: number; maxBytesPassthrough?: number } = {}): Promise<PngResult> {
+export async function toPng(input: Buffer, options: { maxWidth?: number; maxBytesPassthrough?: number; preserveAlpha?: boolean } = {}): Promise<PngResult> {
   const header = inspectImage(input);
   const { mime } = header;
   if (options.maxWidth !== undefined && (!Number.isFinite(options.maxWidth) || options.maxWidth <= 0)) throw new Error("Batas lebar gambar tidak valid.");
@@ -194,9 +194,11 @@ export async function toPng(input: Buffer, options: { maxWidth?: number; maxByte
   const height = Math.max(1, Math.round(img.height * scale));
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext("2d");
-  // Latar putih: gambar transparan (logo/screenshot) tetap terbaca saat dicetak.
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, width, height);
+  // Printed documents keep a white matte; presentation cutouts retain their alpha.
+  if (!options.preserveAlpha) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+  }
   ctx.drawImage(img, 0, 0, width, height);
   return { bytes: await canvas.encode("png"), width, height };
 }

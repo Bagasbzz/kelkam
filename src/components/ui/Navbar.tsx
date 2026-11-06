@@ -65,6 +65,7 @@ const MORE_GROUPS: NavGroup[] = [
     label: "Buat",
     items: [
       { href: "/uml-builder", label: "Diagram", icon: IconFlow },
+      { href: "/presentasi", label: "Presentasi", icon: IconLayout },
       { href: "/template-generator", label: "Editor Dokumen", icon: IconLayout },
     ],
   },

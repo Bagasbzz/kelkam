@@ -1197,9 +1197,11 @@ MODE KERJA PANJANG: Anda berjalan sebagai proses tahan lama, boleh memanggil too
         sessionId: run.sessionId,
         role: "assistant",
         content,
-        toolCalls: run.toolsUsed.length || run.attachments.length
-          ? { tools: Array.from(new Set(run.toolsUsed)), events: toolEvents.slice(-20), runId: run.id, ...(run.attachments.length ? { attachments: run.attachments } : {}) } as unknown as object
-          : undefined,
+        toolCalls: {
+          tools: Array.from(new Set(run.toolsUsed)), events: toolEvents.slice(-20), runId: run.id, status: run.status,
+          ...(run.error ? { error: toPublicErrorMessage(run.error) } : {}),
+          ...(run.attachments.length ? { attachments: run.attachments } : {}),
+        } as unknown as object,
       },
     });
   },

@@ -14,7 +14,7 @@ export interface AgentEvent { t: string; text: string; level?: "info" | "warn" |
 export interface AgentAttachment { fileId: string; name: string; url: string; size: number }
 export interface AgentRunPublic {
   id: string;
-  kind: "laporan" | "tugas";
+  kind: "laporan" | "tugas" | "presentasi";
   sessionId: string;
   status: AgentRunStatus;
   stepCount: number;

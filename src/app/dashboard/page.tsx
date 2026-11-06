@@ -39,7 +39,7 @@ const MATERIAL_ACCEPT = [
 const getErrorMessage = (e: unknown) => baseErrorMessage(e, "Terjadi kesalahan.");
 
 interface SessionSummary { id: string; title: string | null; stage: string; jobId: string | null; updatedAt: string }
-interface ChatMessage { id: string; role: "user" | "assistant"; content: string; toolCalls?: { tools?: string[]; events?: string[] } | null }
+interface ChatMessage { id: string; role: "user" | "assistant"; content: string; toolCalls?: { tools?: string[]; events?: string[]; runId?: string; status?: AgentRunPublic["status"]; error?: string } | null }
 interface MaterialSummary { id: string; kind: string; title: string; fileName?: string; chars: number }
 interface PendingAttachment { id: string; file: File; preview: string | null }
 interface FigureJob { id: string; status: "queued" | "running" | "done" | "failed"; title: string; prompt: string; fileId: string | null; url: string | null; error: string | null; createdAt: string }
@@ -799,6 +799,13 @@ export default function LaporanPage() {
                   <div key={m.id} className="flex gap-3">
                     <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white"><Bot className="h-4 w-4" /></div>
                     <div className="min-w-0 flex-1 text-[15px] leading-relaxed text-slate-900">
+                      {(m.toolCalls?.status === "failed" || m.toolCalls?.status === "cancelled") && (
+                        <div role="status" className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                          <p className="font-semibold">{m.toolCalls.status === "failed" ? "Proses gagal, permintaan belum selesai" : "Proses dibatalkan, permintaan belum selesai"}</p>
+                          {m.toolCalls.error && <p>{getErrorMessage(m.toolCalls.error)}</p>}
+                          {m.toolCalls.tools?.length ? <p>Periksa langkah yang sudah tersimpan.</p> : null}
+                        </div>
+                      )}
                       <SimpleMarkdown text={toPublicAssistantMessage(m.content)} />
                       {m.toolCalls?.tools?.length ? <div className="mt-1 text-[13px] text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
                     </div>
