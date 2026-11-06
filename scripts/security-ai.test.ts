@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm, mkdir, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
 import { AiBudgetError, budgetLimit, createPostgresAiBudgetLock, estimateAiCharge, getAiOwnerContext, reserveAiBudget, runWithAiOwner, runWithAiBudgetLock, type AiBudgetLock, type BudgetLimits } from "../src/lib/server/ai-budget.ts";
@@ -104,22 +105,29 @@ test("atomic user AND global daily limits survive concurrent reservations and re
 test("multiple Node processes share one atomic global ledger", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "security-ai-process-"));
   try {
-    const helper = new URL("../src/lib/server/ai-budget.ts", import.meta.url).href;
+    const helper = fileURLToPath(new URL("../src/lib/server/ai-budget.ts", import.meta.url));
     // IPC coordinator models the DB transaction lock; no database/network or
     // persistent mkdir mutex is used by this cross-process accounting test.
     const lockCode = `async function lock(work){const granted=new Promise(resolve=>process.once('message',resolve));process.send('acquire');await granted;try{return await work()}finally{process.send('release')}}`;
-    const code = `import {reserveAiBudget} from ${JSON.stringify(helper)};${lockCode} try {await reserveAiBudget({ownerId:'worker',operation:'process-test'},${JSON.stringify(charge)},{...${JSON.stringify({ directory, limits: { ...limits, userUnits: 50, globalUnits: 50 } })},lock});process.exitCode=0;} catch {process.exitCode=2;} finally {process.disconnect();}`;
+    const code = `const {reserveAiBudget}=require(${JSON.stringify(helper)});${lockCode} (async()=>{try {await reserveAiBudget({ownerId:'worker',operation:'process-test'},${JSON.stringify(charge)},{...${JSON.stringify({ directory, limits: { ...limits, userUnits: 50, globalUnits: 50 } })},lock});process.exitCode=0;} catch {process.exitCode=2;} finally {process.disconnect();}})();`;
     const queue: Array<ReturnType<typeof spawn>> = [];
     let held: ReturnType<typeof spawn> | null = null;
     const grant = () => { if (!held && queue.length) { held = queue.shift()!; held.send("granted"); } };
     const exits = await Promise.all(Array.from({ length: 4 }, () => new Promise<number>((resolve, reject) => {
-      const child = spawn(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", code], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+      // Use the project's TS loader on Node 20 too, not Node 22+ type stripping.
+      const child = spawn(process.execPath, ["--import", "tsx", "--input-type=commonjs", "-e", code], { stdio: ["ignore", "ignore", "pipe", "ipc"] });
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
       child.on("message", (message) => {
         if (message === "acquire") { queue.push(child); grant(); }
         if (message === "release" && held === child) { held = null; grant(); }
       });
       child.on("error", reject);
-      child.on("exit", (exit) => { if (held === child) { held = null; grant(); } resolve(exit ?? -1); });
+      child.on("exit", (exit) => {
+        if (held === child) { held = null; grant(); }
+        if (exit !== 0 && exit !== 2) { reject(new Error(`Budget worker exited ${exit}: ${stderr}`)); return; }
+        resolve(exit);
+      });
     })));
     assert.equal(exits.filter((exit) => exit === 0).length, 2);
     assert.equal(exits.filter((exit) => exit === 2).length, 2);
