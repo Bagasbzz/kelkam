@@ -146,4 +146,33 @@ Terakhir diperbarui: 2026-11-07
 Keluhan pemilik: hasil PPT hanya mengisi teks ke template yang tersedia, dan templatenya masih dianggap jelek.
 Yang diinginkan: setiap generate menghasilkan desain khusus, yaitu ilustrasi/objek yang relevan dengan topik,
 warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta logo kampus bila ada.
-Pemilik sebelumnya sudah memberi contoh template Canva di chat Kilo Code. Status: sedang dianalisis.
+
+### Referensi pemilik (dari chat Kilo Code 2026-11-02 s/d 11-07)
+- Target kualitas: seperti **Gamma AI** dan template **Canva**, bukan template khas ChatGPT/Claude.
+  Tidak hanya untuk sidang; juga presentasi makalah di kelas dan materi sederhana.
+- Link Canva yang dikirim: https://www.canva.com/templates/EAFs0Ab5APE/ ,
+  https://www.canva.com/templates/EAHLHupW5w0/ , https://www.canva.com/templates/EAGp4cMIF34/
+- Screenshot contoh (5 Nov): (1) "Bisnis Presentasi" putih-biru: foto besar dalam bingkai heksagon/diagonal,
+  bidang biru tegas dan garis kuning; (2) "Desainer Grafis": latar hitam, judul raksasa hijau lime dengan foto
+  cutout orang menembus teks; (3) "Tugas Kelompok" putih-kuning: kolase cutout halftone (tangan, buku, puzzle),
+  tekstur kertas, blob kuning, label pil hitam; (4) hitam-merah: blok gradien abstrak, tipografi bersih.
+- Kesimpulan: yang membuat contoh itu bagus adalah **gambar/foto berukuran besar yang relevan**, **komposisi
+  berani** (bingkai bentuk, teks raksasa, kolase), dan **dekorasi** (blob, halftone, garis, kutipan, pil).
+  Renderer saat ini hanya punya 5 layout, motif garis sederhana, dan palet tetap, serta gambar baru muncul
+  jika pengguna membuatnya manual.
+
+### Usulan arah (menunggu persetujuan pemilik)
+1. Gambar AI menjadi bagian inti: setiap deck otomatis dibuatkan 3–6 gambar (foto ilustratif/cutout) sesuai
+   topik setelah slide tersusun; slide tampil dulu, gambar menyusul. Bisa dimatikan pengguna.
+2. Gaya per deck dibuat AI: warna utama/aksen/latar (dengan pengecekan kontras), pasangan font aman PPTX,
+   dan keluarga bentuk (geometris tegas, kolase halftone, gelap-gradien, minimal, organik).
+3. Pustaka komposisi baru ±15–20 layout ala Canva: foto dalam bingkai heksagon/diagonal/lingkaran, judul
+   raksasa + cutout, kolase, angka besar, perbandingan, kutipan, slide gambar laporan (gambar + keterangan
+   "Gambar x.y"), dll. Dekorasi ditempatkan dengan variasi terkendali (seed per deck) sehingga tiap generate berbeda.
+4. Gambar dari laporan dimasukkan rapi di layout khusus; logo kampus sebagai aset deck (unggah atau dari bahan),
+   tampil di sampul dan kecil di slide lain.
+5. Ekspor PPTX: bingkai bentuk dirender menjadi PNG agar sama dengan pratinjau; teks tetap bisa diedit.
+- Ditolak: AI menulis SVG/HTML bebas per slide (hasil tidak konsisten, lambat/kena batas waktu, sulit diekspor
+  ke PPTX yang bisa diedit, risiko keamanan).
+- Usulan urutan: (a) gaya per deck + layout & dekorasi baru + slide gambar laporan + logo,
+  (b) gambar AI otomatis, (c) kesamaan ekspor PPTX.
