@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import ts from "typescript";
-import { AiBudgetError, budgetLimit, createPostgresAiBudgetLock, estimateAiCharge, getAiOwnerContext, reserveAiBudget, runWithAiOwner, runWithAiBudgetLock, type AiBudgetLock, type BudgetLimits } from "../src/lib/server/ai-budget.ts";
+import { AiBudgetError, aiBudgetLimits, budgetLimit, createPostgresAiBudgetLock, estimateAiCharge, getAiOwnerContext, reserveAiBudget, runWithAiOwner, runWithAiBudgetLock, type AiBudgetLock, type BudgetLimits } from "../src/lib/server/ai-budget.ts";
 
 const limits: BudgetLimits = { userUnits: 100, globalUnits: 150, userCalls: 100, globalCalls: 100, userImages: 2, globalImages: 3 };
 const charge = { model: "offline", kind: "chat" as const, inputTokens: 10, outputTokens: 10, units: 25 };
@@ -56,6 +56,26 @@ test("configured GPT model IDs are honored without changing defaults or transpor
     assert.equal(exports.AI_MODEL_DEFAULT, model);
     assert.equal(exports.AI_MODEL, model);
     assert.equal(exports.AI_MODEL_REVIEW, "vision-model");
+  }
+});
+
+test("per-user AI caps stay off until explicitly enabled; the site-wide cap always applies", () => {
+  const keys = ["AI_USER_LIMITS_ENABLED", "AI_DAILY_UNITS_USER", "AI_DAILY_UNITS_GLOBAL", "AI_DAILY_CALLS_USER", "AI_DAILY_CALLS_GLOBAL", "AI_DAILY_IMAGES_USER", "AI_DAILY_IMAGES_GLOBAL"];
+  const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    for (const key of keys) delete process.env[key];
+    process.env.AI_DAILY_UNITS_USER = "10";
+    const open = aiBudgetLimits();
+    assert.equal(open.userUnits, open.globalUnits, "a stray per-user value has no effect while limits are off");
+    assert.equal(open.userCalls, open.globalCalls);
+    assert.equal(open.userImages, open.globalImages);
+    process.env.AI_USER_LIMITS_ENABLED = "true";
+    const limited = aiBudgetLimits();
+    assert.equal(limited.userUnits, 10);
+    assert.equal(limited.userCalls, 100);
+    assert.ok(limited.globalUnits > limited.userUnits);
+  } finally {
+    for (const key of keys) { if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key]; }
   }
 });
 

@@ -66,14 +66,23 @@ async function withPostgresAiBudgetLock<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Per-user caps are off until the owner decides to limit users (AI_USER_LIMITS_ENABLED=true);
+ * while off, a user may use up to the site-wide cap. The site-wide cap is the emergency brake
+ * on provider spend and always applies.
+ */
 export function aiBudgetLimits(): BudgetLimits {
+  const globalUnits = budgetLimit(process.env.AI_DAILY_UNITS_GLOBAL, 200_000_000);
+  const globalCalls = budgetLimit(process.env.AI_DAILY_CALLS_GLOBAL, 20_000);
+  const globalImages = budgetLimit(process.env.AI_DAILY_IMAGES_GLOBAL, 300);
+  const perUser = process.env.AI_USER_LIMITS_ENABLED === "true";
   return {
-    userUnits: budgetLimit(process.env.AI_DAILY_UNITS_USER, 600_000),
-    globalUnits: budgetLimit(process.env.AI_DAILY_UNITS_GLOBAL, 6_000_000),
-    userCalls: budgetLimit(process.env.AI_DAILY_CALLS_USER, 100),
-    globalCalls: budgetLimit(process.env.AI_DAILY_CALLS_GLOBAL, 1000),
-    userImages: budgetLimit(process.env.AI_DAILY_IMAGES_USER, 3),
-    globalImages: budgetLimit(process.env.AI_DAILY_IMAGES_GLOBAL, 30),
+    userUnits: perUser ? budgetLimit(process.env.AI_DAILY_UNITS_USER, 600_000) : globalUnits,
+    globalUnits,
+    userCalls: perUser ? budgetLimit(process.env.AI_DAILY_CALLS_USER, 100) : globalCalls,
+    globalCalls,
+    userImages: perUser ? budgetLimit(process.env.AI_DAILY_IMAGES_USER, 3) : globalImages,
+    globalImages,
   };
 }
 
