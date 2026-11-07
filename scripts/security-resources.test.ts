@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
+import ts from "typescript";
 import JSZip from "jszip";
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import { assertPublicUrl, isPrivateAddress, safeFetch, SafeFetchError } from "../src/lib/server/safe-fetch";
@@ -82,6 +86,22 @@ test("valid DOCX, PPTX, XLSX and plain ZIP retain extraction compatibility", asy
   assert.equal((await readZipEntry(zip, "empty.txt")).content, "");
   const nested = await archive({ "inner.zip": zip });
   assert.match((await readZipEntry(nested, "inner.zip::readme.txt")).content, /Plain archive content/);
+});
+
+test("DOCX worker resolves a filesystem dependency even when bundler require.resolve returns numeric IDs", async () => {
+  const source = await readFile(new URL("../src/lib/server/extract-text.ts", import.meta.url), "utf8");
+  const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } });
+  const nodeRequire = createRequire(import.meta.url);
+  const load = Object.assign((name: string) => {
+    if (name === "@/lib/server/request-guards") return nodeRequire("../src/lib/server/request-guards.ts");
+    if (name === "@/lib/security/redact-secrets") return nodeRequire("../src/lib/security/redact-secrets.ts");
+    if (name === "./bounded-archive") return nodeRequire("../src/lib/server/bounded-archive.ts");
+    return nodeRequire(name);
+  }, { resolve: () => 80930 });
+  const exported = {} as { extractDocx: typeof extractDocx };
+  runInNewContext(compiled.outputText, { exports: exported, require: load, process, Buffer, Uint8Array, setTimeout, clearTimeout });
+  const docx = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph("Production worker extraction")] }] }));
+  assert.match((await exported.extractDocx(docx)).content, /Production worker extraction/);
 });
 
 test("all Office parsers preflight oversized declared entries before inflating", async () => {

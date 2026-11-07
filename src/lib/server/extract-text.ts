@@ -15,6 +15,8 @@
  */
 
 import { Worker } from "node:worker_threads";
+import { createRequire } from "node:module";
+import path from "node:path";
 import { ApiRequestError } from "@/lib/server/request-guards";
 import { isSensitivePath, redactSensitiveText } from "@/lib/security/redact-secrets";
 import { loadBoundedArchive, readBoundedEntry, type ExpansionBudget } from "./bounded-archive";
@@ -281,7 +283,9 @@ export async function extractDocx(buffer: Buffer, maxChars = DEFAULT_MAX_CHARS):
     if (!entry.dir) checked.file(entry.name, await readBoundedEntry(entry, budget));
   }
   const safeBuffer = await checked.generateAsync({ type: "nodebuffer", compression: "STORE" });
-  const mammothPath = require.resolve("mammoth");
+  // A worker needs a real filename, not the module ID emitted by the bundler.
+  const runtimeRequire = createRequire(path.join(process.env.APPLICATION_NODE_MODULES || path.join(process.cwd(), "node_modules"), "package.json"));
+  const mammothPath = runtimeRequire.resolve("mammoth");
   const raw = await new Promise<string>((resolve, reject) => {
     const worker = new Worker(`
       const { parentPort, workerData } = require('node:worker_threads');
