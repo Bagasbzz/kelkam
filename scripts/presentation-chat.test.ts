@@ -129,3 +129,53 @@ test("chat prompt carries the consultation rules, density guide, templates and u
   assert.match(chatSystemPrompt({ state: { ...state, revision: 2 }, availableArt: [], proposalPending: false }), /PROYEK BERJALAN/);
   assert.match(prompt, /Tampilan: Coral Zine/, "a template picked in the chat is honoured");
 });
+
+test("chat writes the deck in small batches into the run draft, then finishes it as a reviewable proposal", async (t) => {
+  const { prisma } = await import("../src/lib/db/prisma.ts");
+  const { appendDraftSlides, finishDraftDeck, MAX_DRAFT_BATCH } = await import("../src/lib/server/presentasi/repository.ts");
+  let current = base();
+  const ownerId = "owner-a";
+  const runId = "run-chat";
+  let meta: Record<string, unknown> = { ...chat() };
+  let lockToken = "claim";
+  const tx = {
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      const sql = strings.join("?");
+      return sql.includes("FROM projects") ? [{ metadata: clone(current) }] : [{ meta: clone(meta), status: "running", control: null, lockToken }];
+    },
+    project: { updateMany: async (args: { data: { metadata: PresentationEnvelope } }) => { current = clone(args.data.metadata); return { count: 1 }; } },
+    agentRun: { updateMany: async (args: { data: { meta: Record<string, unknown> } }) => { meta = clone(args.data.meta); return { count: 1 }; } },
+  };
+  const saved = { transaction: prisma.$transaction, runFind: prisma.agentRun.findFirst, projectFind: prisma.project.findFirst };
+  prisma.$transaction = ((callback: (client: unknown) => Promise<unknown>) => callback(tx)) as typeof prisma.$transaction;
+  prisma.agentRun.findFirst = (async () => ({ meta: clone(meta) })) as unknown as typeof prisma.agentRun.findFirst;
+  prisma.project.findFirst = (async () => ({ metadata: clone(current) })) as unknown as typeof prisma.project.findFirst;
+  t.after(() => { prisma.$transaction = saved.transaction; prisma.agentRun.findFirst = saved.runFind; prisma.project.findFirst = saved.projectFind; });
+
+  const slide = (title: string) => ({ ...clone(current.deck.slides[1]), id: randomUUID(), title, locked: false });
+  const write = (input: Record<string, unknown>, claim = "claim") => appendDraftSlides(ownerId, current.deck.id, runId, claim, input);
+
+  await assert.rejects(write({ slides: [slide("A")] }, "stale"), (error) => error instanceof PresentationError && error.status === 409);
+  assert.match(JSON.stringify(await write({ slides: Array.from({ length: MAX_DRAFT_BATCH + 1 }, (_, i) => slide(`S${i}`)) })), /Maksimum 4 slide/);
+  assert.match(JSON.stringify(await write({ slides: [{ ...slide("Rusak"), extra: true }] })), /Slide baru ke-1 ditolak/);
+  assert.match(JSON.stringify(await write({ keepSlideIds: [randomUUID()] })), /tidak ada di deck/);
+
+  const first = [slide("Pembuka"), slide("Masalah"), slide("Tujuan")];
+  assert.deepEqual((await write({ title: "Smart Door Lock", slides: first }) as { totalSlides: number }).totalSlides, 3);
+  const kept = current.deck.slides[0];
+  const second = await write({ keepSlideIds: [kept.id], slides: [slide("Penutup")] }) as { totalSlides: number; urutan: string[] };
+  assert.equal(second.totalSlides, 5);
+  await write({ slides: [{ ...first[1], title: "Masalah utama" }] });
+  const draft = meta.draft as { title: string; slides: { id: string; title: string }[] };
+  assert.deepEqual(draft.slides.map((item) => item.title), ["Pembuka", "Masalah utama", "Tujuan", kept.title, "Penutup"], "same id replaces in place, keep copies verbatim");
+  assert.equal(current.proposal, undefined, "writing slides never stages a proposal");
+
+  const finished = await finishDraftDeck(ownerId, current.deck.id, runId, "claim", "");
+  assert.equal((finished as { success: boolean }).success, true);
+  const staged = (current as PresentationEnvelope).proposal;
+  assert.equal(staged?.deck.title, "Smart Door Lock");
+  assert.deepEqual(staged?.deck.slides.map((item) => item.title), ["Pembuka", "Masalah utama", "Tujuan", kept.title, "Penutup"]);
+  assert.equal(current.revision, 1, "the active deck is unchanged until the user accepts");
+  assert.match(JSON.stringify(await write({ slides: [slide("Terlambat")] })), /sudah disimpan/);
+  lockToken = "claim";
+});

@@ -133,3 +133,17 @@ Terakhir diperbarui: 2026-11-07
   rem global dinaikkan ke 200 juta unit / 20.000 panggilan / 300 gambar per hari (env `AI_DAILY_*_GLOBAL`
   tetap bisa menimpa). File: `src/lib/server/ai-budget.ts`, tes di `scripts/security-ai.test.ts`.
 - Rancangan fitur A–E disusun dan didiskusikan; keputusan dicatat di bagian 3.
+- Perbaikan chat Presentasi yang gagal "Layanan AI belum dapat menyelesaikan permintaan": langkah terakhir menulis
+  seluruh deck dalam satu jawaban melewati batas waktu ±90 detik per langkah server. Sekarang AI menulis slide
+  bertahap lewat tool `writeSlides` (maks. 4 slide per panggilan, draft disimpan di meta run sehingga aman saat
+  segmen server berganti), lalu `finishDeck` merakit deck. `commit_deck` ditolak pada chat. Langkah chat maks. 20.
+  Proyek baru tidak lagi mengirim slide contoh ke AI. File: `presentasi/repository.ts`, `chat.ts`, `assistant.ts`.
+- Permintaan pemilik berikutnya (belum dikerjakan): desain PPT harus unik per generate, bukan sekadar mengisi
+  teks ke template. Lihat bagian 8.
+
+## 8. Presentasi: desain unik per generate (permintaan 2026-11-07)
+
+Keluhan pemilik: hasil PPT hanya mengisi teks ke template yang tersedia, dan templatenya masih dianggap jelek.
+Yang diinginkan: setiap generate menghasilkan desain khusus, yaitu ilustrasi/objek yang relevan dengan topik,
+warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta logo kampus bila ada.
+Pemilik sebelumnya sudah memberi contoh template Canva di chat Kilo Code. Status: sedang dianalisis.

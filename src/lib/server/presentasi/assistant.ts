@@ -4,10 +4,10 @@ import { AI_MODEL_DEFAULT } from "@/lib/ai/client";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 import { deckSchema, slideSchema } from "@/lib/presentation/model";
 import { createAgentRun, type AgentDriver, type Msg } from "@/lib/server/agent-runs/engine";
-import { appendChatMessage, commitPresentationRun, getPresentation, parseRunOperation, readPresentationState, snapshotPresentation } from "./repository";
+import { appendChatMessage, commitPresentationRun, finishDraftDeck, getPresentation, parseRunOperation, readPresentationState, snapshotPresentation } from "./repository";
 import { PresentationError, type RunOperation } from "./state";
 import { listImageJobs } from "@/lib/server/image-jobs";
-import { ASK_USER_TOOL, CHAT_MAX_STEPS, CHAT_TOOLS, CHAT_TOOL_NAMES, chatSystemPrompt, chatToolLabel, evidenceFrom, runChatTool } from "./chat";
+import { ASK_USER_TOOL, CHAT_MAX_STEPS, CHAT_TOOLS, CHAT_TOOL_NAMES, chatSystemPrompt, FINISH_DECK_TOOL, chatToolLabel, evidenceFrom, runChatTool } from "./chat";
 
 const COMMIT_TOOL = {
   type: "function" as const,
@@ -69,16 +69,28 @@ export const presentasiAgentDriver: AgentDriver = {
       if (!CHAT_TOOL_NAMES.has(name)) throw new PresentationError(400, "Tool tidak tersedia.");
       const operation = parseRunOperation(ctx.run.meta);
       if (operation.operation !== "chat") return { error: "Tool ini hanya tersedia pada percakapan presentasi." };
+      if (name === FINISH_DECK_TOOL) {
+        if (!ctx.claimToken) throw new PresentationError(409, "Klaim worker diperlukan untuk menyimpan proposal.");
+        try {
+          const result = await finishDraftDeck(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id, ctx.claimToken, evidenceFrom(ctx.messages));
+          if (result.success) ctx.emit("Proposal presentasi siap ditinjau. Deck aktif belum diubah.");
+          return result;
+        } catch (error) {
+          if (error instanceof PresentationError) return { success: false, error: error.message };
+          throw error;
+        }
+      }
       return runChatTool(name, args, ctx, await readPresentationState(ctx.run.ownerId, ctx.run.sessionId));
     }
     if (!ctx.claimToken) throw new PresentationError(409, "Klaim worker diperlukan untuk menyimpan proposal.");
     const operation = parseRunOperation(ctx.run.meta);
+    // One reply holding a whole deck runs past the server step time limit; chat writes slides in batches.
+    if (operation.operation === "chat") return { success: false, error: "Pada percakapan, tulis slide dengan writeSlides lalu panggil finishDeck." };
     const schema = operation.operation === "revise" ? z.object({ slide: slideSchema }).strict() : z.object({ deck: deckSchema }).strict();
     const parsed = schema.safeParse(args);
     if (!parsed.success) return { success: false, error: "Format hasil ditolak. Periksa batas panjang teks dan field yang diwajibkan." };
     try {
-      const evidence = operation.operation === "chat" ? evidenceFrom(ctx.messages) : "";
-      const result = await commitPresentationRun(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id, "deck" in parsed.data ? parsed.data.deck : parsed.data.slide, ctx.claimToken, evidence);
+      const result = await commitPresentationRun(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id, "deck" in parsed.data ? parsed.data.deck : parsed.data.slide, ctx.claimToken);
       ctx.emit("Proposal presentasi siap ditinjau. Deck aktif belum diubah.");
       return result;
     } catch (error) {

@@ -1,8 +1,8 @@
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { createStarterDeck, slideSchema, type PresentationDeck, type PresentationTheme } from "@/lib/presentation/model";
-import { assertRevision, enforceAiDeck, generateSchema, reviseSchema, chatTurnSchema, nextEnvelope, PresentationError, projectPayload, readEnvelope, planInputSchema, MAX_CHAT_CONTENT, MAX_CHAT_MESSAGES, MAX_PRESENTATION_MATERIALS, type PresentationChatMessage, type PresentationEnvelope, type PresentationPlanInput, type RunOperation } from "./state";
+import { createStarterDeck, slideSchema, type PresentationDeck, type PresentationSlide, type PresentationTheme } from "@/lib/presentation/model";
+import { assertRevision, enforceAiDeck, generateSchema, reviseSchema, chatTurnSchema, nextEnvelope, PresentationError, projectPayload, readEnvelope, planInputSchema, MAX_CHAT_CONTENT, MAX_CHAT_MESSAGES, MAX_CHAT_SLIDES, MAX_PRESENTATION_MATERIALS, type PresentationChatMessage, type PresentationEnvelope, type PresentationPlanInput, type RunOperation } from "./state";
 import { validatePresentationArt } from "./art";
 import { DESIGN_PRESETS } from "@/lib/presentation/presets";
 
@@ -253,6 +253,85 @@ export async function readLinkedReport(ownerId: string, projectId: string, part:
   return { part, totalKarakter: draft.length, offset: start, isi: draft.slice(start, start + size), adaLanjutan: start + size < draft.length };
 }
 
+// ---------------------------------------------------------------------------
+// Chat deck draft. One model reply cannot write a whole deck inside one server step,
+// so the AI writes a few slides per step into the run, then finishes the deck.
+// ---------------------------------------------------------------------------
+
+export const MAX_DRAFT_BATCH = 4;
+const draftSchema = z.object({ title: z.string().trim().max(120).optional(), slides: z.array(slideSchema).max(MAX_CHAT_SLIDES) }).strict();
+export type DeckDraft = z.infer<typeof draftSchema>;
+
+export function readRunDraft(meta: unknown): DeckDraft {
+  const value = meta && typeof meta === "object" && !Array.isArray(meta) ? (meta as Record<string, unknown>).draft : undefined;
+  const parsed = draftSchema.safeParse(value);
+  return parsed.success ? parsed.data : { slides: [] };
+}
+
+/** Adds or replaces slides (by id) in the run's draft. Existing slides can be kept verbatim by id. */
+export async function appendDraftSlides(ownerId: string, projectId: string, runId: string, claimToken: string, input: { title?: unknown; slides?: unknown; keepSlideIds?: unknown; reset?: unknown }) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const runs = await tx.$queryRaw<Array<{ meta: unknown; status: string; control: string | null; lockToken: string | null }>>`
+      SELECT meta, status, control, lock_token AS "lockToken" FROM agent_runs
+      WHERE id = ${runId} AND owner_id = ${ownerId} AND kind = 'presentasi' AND session_id = ${projectId} FOR UPDATE
+    `;
+    const run = runs[0];
+    if (!run) throw new PresentationError(404, "Run tidak ditemukan.");
+    if (!claimToken || run.lockToken !== claimToken) throw new PresentationError(409, "Klaim worker sudah berubah. Draft worker lama ditolak.");
+    if (run.status !== "running" || run.control) throw new PresentationError(409, "Run telah dijeda atau dihentikan.");
+    const meta = z.record(z.string(), z.unknown()).parse(run.meta);
+    if (typeof meta.proposedRevision === "number" || typeof meta.committedRevision === "number") return { error: "Deck sudah disimpan pada percakapan ini. Jangan menulis slide lagi." };
+
+    const keepIds = Array.isArray(input.keepSlideIds) ? input.keepSlideIds.filter((id): id is string => typeof id === "string") : [];
+    const incoming = Array.isArray(input.slides) ? input.slides : [];
+    if (!keepIds.length && !incoming.length) return { error: "Kirim minimal satu slide di slides atau keepSlideIds." };
+    if (incoming.length > MAX_DRAFT_BATCH) return { error: `Maksimum ${MAX_DRAFT_BATCH} slide baru per panggilan. Pecah menjadi beberapa panggilan writeSlides.` };
+
+    const additions: PresentationSlide[] = [];
+    for (const id of keepIds) {
+      const existing = state.deck.slides.find((slide) => slide.id === id);
+      if (!existing) return { error: `Slide ${id} tidak ada di deck saat ini, jadi tidak bisa dipertahankan.` };
+      additions.push(existing);
+    }
+    for (const [index, raw] of incoming.entries()) {
+      const parsed = slideSchema.safeParse(raw);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return { error: `Slide baru ke-${index + 1} ditolak: ${issue?.path.join(".") || "slide"} ${issue?.message ?? "tidak valid"}. Perbaiki lalu kirim ulang slide itu.` };
+      }
+      const locked = state.deck.slides.find((slide) => slide.id === parsed.data.id && slide.locked);
+      additions.push(locked ?? parsed.data);
+    }
+
+    const draft = input.reset === true ? { slides: [] as PresentationSlide[] } : readRunDraft(meta);
+    const slides = [...draft.slides];
+    for (const slide of additions) {
+      const at = slides.findIndex((item) => item.id === slide.id);
+      if (at >= 0) slides[at] = slide; else slides.push(slide);
+    }
+    if (slides.length > MAX_CHAT_SLIDES) return { error: `Deck maksimum ${MAX_CHAT_SLIDES} slide. Kurangi jumlah slide.` };
+    const title = typeof input.title === "string" && input.title.trim() ? input.title.trim().slice(0, 120) : draft.title;
+    const next: DeckDraft = { ...(title ? { title } : {}), slides };
+    await tx.agentRun.updateMany({
+      where: { id: runId, ownerId, kind: "presentasi", sessionId: projectId, lockToken: claimToken },
+      data: { meta: { ...meta, draft: next } as Prisma.InputJsonValue },
+    });
+    return { success: true, totalSlides: slides.length, urutan: slides.map((slide, i) => `${i + 1}. ${slide.title}`) };
+  });
+}
+
+/** Turns the run's draft into the review proposal through the same fenced commit as commit_deck. */
+export async function finishDraftDeck(ownerId: string, projectId: string, runId: string, claimToken: string, evidenceText: string) {
+  const row = await prisma.agentRun.findFirst({ where: { id: runId, ownerId, kind: "presentasi", sessionId: projectId }, select: { meta: true } });
+  if (!row) throw new PresentationError(404, "Run tidak ditemukan.");
+  const draft = readRunDraft(row.meta);
+  if (!draft.slides.length) return { success: false, error: "Draft masih kosong. Tulis slide dengan writeSlides terlebih dahulu." };
+  const state = await readPresentationState(ownerId, projectId);
+  const deck = { ...state.deck, title: draft.title || state.deck.title, slides: draft.slides };
+  return commitPresentationRun(ownerId, projectId, runId, deck, claimToken, evidenceText);
+}
+
 export async function commitPresentationRun(ownerId: string, projectId: string, runId: string, output: unknown, claimToken: string, evidenceText = "") {
   return prisma.$transaction(async (tx) => {
     const state = await lockedProject(tx, ownerId, projectId);
@@ -291,9 +370,10 @@ export async function commitPresentationRun(ownerId: string, projectId: string, 
 }
 
 export function parseRunOperation(meta: Record<string, unknown>): RunOperation {
-  const { operation, committedRevision: _receipt, proposedRevision: _proposalReceipt, ...input } = meta;
+  const { operation, committedRevision: _receipt, proposedRevision: _proposalReceipt, draft: _draft, ...input } = meta;
   void _receipt;
   void _proposalReceipt;
+  void _draft;
   if (operation === "generate") return { operation, ...generateSchema.parse(input) };
   if (operation === "revise") return { operation, ...reviseSchema.parse(input) };
   if (operation === "chat") return { operation, ...chatTurnSchema.parse(input) };
