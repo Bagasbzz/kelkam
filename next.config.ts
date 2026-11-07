@@ -96,6 +96,9 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   /** Build sebagai standalone → .next/standalone/ siap di-deploy ke JKC. */
   output: "standalone",
+  env: {
+    APPLICATION_RELEASE: /^[a-f0-9]{40}$/.test(process.env.GITHUB_SHA || "") ? process.env.GITHUB_SHA! : "unknown",
+  },
   /**
    * Jangan dibundel, dimuat langsung dari node_modules saat runtime:
    *  - resvg (WASM) dimuat via fs.

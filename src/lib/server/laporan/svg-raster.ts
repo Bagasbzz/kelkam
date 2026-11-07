@@ -7,7 +7,7 @@ import path from "path";
 import { initWasm, Resvg } from "@resvg/resvg-wasm";
 
 // Path dibangun manual (bukan require.resolve) agar bundler tidak mencoba mem-bundle .wasm/.ttf.
-const NODE_MODULES = path.join(process.cwd(), "node_modules");
+const NODE_MODULES = process.env.APPLICATION_NODE_MODULES || path.join(process.cwd(), "node_modules");
 
 let ready: Promise<Uint8Array[]> | null = null;
 export const MAX_SVG_DIMENSION = 8192;

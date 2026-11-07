@@ -232,9 +232,11 @@ Setiap push ke `main` di GitHub akan otomatis:
 5. Copy `deploy/` bundle
 6. SCP ke JKC `DEPLOY_DIR`
 7. SSH: `touch tmp/restart.txt` (trigger Passenger restart)
-8. Health check `https://keluhkampus.my.id/`
+8. Verifikasi `https://keluhkampus.my.id/api/release` mengembalikan commit yang sama dengan workflow, bukan hanya HTTP 200. Pemeriksaan ini tidak memakai database atau provider AI.
 
 Lihat `.github/workflows/deploy.yml` untuk detail step.
+
+Startup cPanel tetap `server.js` pada application root. Untuk bundle CI, adapter ini memuat build dan dependensi dari `.next/standalone`, bukan sisa build `.next` di root. Konfigurasi runtime `.env`/`.env.local` tetap dimuat dari application root, tanpa mengganti nilai yang sudah disediakan Passenger. Direktori kerja upload/data tetap application root; font/WASM mengikuti dependensi release dan adapter prefix Apache tetap aktif. `SSH_DIR` harus sama dengan application root Passenger; workflow akan gagal jika domain masih melayani commit lain setelah restart.
 
 ---
 

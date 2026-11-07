@@ -39,15 +39,28 @@
 
 const { createServer } = require("http");
 const { parse } = require("url");
+const { existsSync, readFileSync } = require("fs");
+const path = require("path");
 
-// Chdir supaya Next.js resolve .next/standalone relative to this file.
+// Keep relative uploads/data paths anchored to the Passenger application root.
 process.chdir(__dirname);
 
-const next = require("next");
-
+const dev = process.env.NODE_ENV !== "production";
+const standaloneDir = path.join(__dirname, ".next", "standalone");
+const appDir = !dev && existsSync(standaloneDir) ? standaloneDir : __dirname;
+const { loadEnvConfig } = require(require.resolve("@next/env", { paths: [appDir] }));
+loadEnvConfig(__dirname, dev);
 const port = parseInt(process.env.PORT || "3000", 10);
 const hostname = process.env.HOSTNAME || "0.0.0.0";
-const dev = process.env.NODE_ENV !== "production";
+// Runtime assets follow the selected release; private data stays rooted at cwd.
+process.env.APPLICATION_NODE_MODULES = path.join(appDir, "node_modules");
+const manifestPath = path.join(appDir, ".next", "required-server-files.json");
+if (!dev && (appDir === standaloneDir || existsSync(manifestPath))) {
+  // Use the traced build's resolved config, not an obsolete root next.config file.
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = JSON.stringify(manifest.config);
+}
+const next = require(require.resolve("next", { paths: [appDir] }));
 
 // Path prefix yang ditambahin sama Apache .htaccess rewrite di root domain.
 // Main domain DocumentRoot = /public_html/, jadi request "/" di-rewrite ke
@@ -55,7 +68,7 @@ const dev = process.env.NODE_ENV !== "production";
 // sini supaya Next.js route matching (Next.js gak tau soal subfolder).
 const APP_PATH_PREFIX = "/keluhkampus.my.id";
 
-const app = next({ dev, dir: __dirname });
+const app = next({ dev, dir: appDir });
 const handle = app.getRequestHandler();
 
 app.prepare()
@@ -69,12 +82,10 @@ app.prepare()
       handle(req, res, parsedUrl);
     })
     .listen(port, hostname, () => {
-      // eslint-disable-next-line no-console
       console.log(`keluhkampus ready on http://${hostname}:${port}`);
     });
   })
   .catch((err) => {
-    // eslint-disable-next-line no-console
     console.error("Failed to start Next.js:", err);
     process.exit(1);
   });
