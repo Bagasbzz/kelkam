@@ -7,10 +7,10 @@ import { controlAgentRun, findActiveAgentRun, getAgentRun } from "@/lib/server/a
 import { streamAgentRun } from "@/lib/server/agent-runs/stream";
 import { exportDeckPptx } from "@/lib/presentation/export-pptx";
 import { deckSchema, THEME_IDS } from "@/lib/presentation/model";
-import { startPresentationRun } from "./assistant";
-import { createPresentation, deletePresentation, getPresentation, importReportText, listPresentations, resolvePresentationProposal, restorePresentation, savePresentation, snapshotPresentation } from "./repository";
-import { generateSchema, PresentationError, reviseSchema, revisionSchema } from "./state";
-import { artJobSchema, listPresentationArt, loadPresentationAssets, startPresentationArt } from "./art";
+import { startPresentationChatRun, startPresentationRun } from "./assistant";
+import { addPresentationMaterial, createPresentation, createPresentationFromReport, deletePresentation, getPresentation, importReportText, linkReportSession, listPresentations, removePresentationMaterial, resolvePresentationProposal, restorePresentation, savePresentation, snapshotPresentation } from "./repository";
+import { chatTurnSchema, generateSchema, PresentationError, reviseSchema, revisionSchema } from "./state";
+import { artJobSchema, listPresentationArt, loadPresentationAssets, planArtSchema, startPlannedArt, startPresentationArt } from "./art";
 
 const privateHeaders = { "Cache-Control": "private, no-store" };
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: privateHeaders });
@@ -21,8 +21,14 @@ const proposalSchema = baseSchema.extend({ runId: z.string().min(1).max(100), ac
 const importSchema = baseSchema.extend({ sessionId: z.string().min(1).max(100) });
 const patchSchema = baseSchema.extend({ deck: deckSchema });
 const createSchema = z.object({ theme: z.enum(THEME_IDS) }).strict();
+const fromReportSchema = z.object({ sessionId: z.string().min(1).max(100) }).strict();
+const materialPostSchema = z.object({
+  fileId: z.string().min(1).max(100), title: z.string().trim().max(200), fileName: z.string().trim().min(1).max(200), kind: z.string().trim().min(1).max(40),
+}).strict();
+const materialDeleteSchema = z.object({ materialId: z.string().min(1).max(40) }).strict();
+const linkSchema = z.object({ sessionId: z.string().min(1).max(100) }).strict();
 
-export type PresentationAction = "list" | "create" | "get" | "save" | "delete" | "restore" | "proposal" | "export" | "generate" | "revise" | "run-get" | "run-post" | "import-report" | "art-get" | "art-post";
+export type PresentationAction = "list" | "create" | "create-from-report" | "get" | "save" | "delete" | "restore" | "proposal" | "export" | "generate" | "revise" | "chat" | "materials-post" | "materials-delete" | "link-report" | "run-get" | "run-post" | "import-report" | "art-get" | "art-post";
 export type PresentationRouteContext = { params: Promise<{ projectId: string }> };
 
 async function body<T>(req: Request, schema: z.ZodType<T>, maxBytes = 256 * 1024): Promise<T> {
@@ -39,7 +45,7 @@ export async function presentationRequest(req: Request, action: PresentationActi
     if (!auth.ok) return json({ success: false, error: auth.error }, auth.status);
     const ownerId = auth.user.id;
     const polling = action === "run-get" || action === "run-post" || action === "art-get";
-    const expensive = action === "generate" || action === "revise" || action === "export" || action === "art-post";
+    const expensive = action === "generate" || action === "revise" || action === "chat" || action === "export" || action === "art-post";
     const rate = enforceRateLimit(`presentasi:${polling ? "run" : expensive ? "work" : "crud"}:${ownerId}`, {
       limit: polling ? 300 : expensive ? 20 : 180, windowMs: 10 * 60 * 1000,
     });
@@ -49,14 +55,19 @@ export async function presentationRequest(req: Request, action: PresentationActi
       const input = await body(req, createSchema, 1024);
       return json({ success: true, project: await createPresentation(ownerId, input.theme) }, 201);
     }
+    if (action === "create-from-report") {
+      const input = await body(req, fromReportSchema, 1024);
+      return json({ success: true, project: await createPresentationFromReport(ownerId, input.sessionId) }, 201);
+    }
     const projectId = z.string().uuid().safeParse((await context?.params)?.projectId);
     if (!projectId.success) throw new ApiRequestError(404, "Presentasi tidak ditemukan.");
     const id = projectId.data;
     if (action === "art-get") return json({ success: true, jobs: await listPresentationArt(ownerId, id) });
     if (action === "art-post") {
-      const input = await body(req, artJobSchema, 16 * 1024);
+      const input = await body(req, z.union([artJobSchema, planArtSchema]), 16 * 1024);
       const admission = enforceRateLimit(`generate-image:${ownerId}`, { limit: 10, windowMs: 10 * 60 * 1000 });
       if (admission) { admission.headers.set("Cache-Control", privateHeaders["Cache-Control"]); return admission; }
+      if ("planImage" in input) return json({ success: true, ...await startPlannedArt(ownerId, id, input) }, 202);
       return json({ success: true, job: await startPresentationArt(ownerId, id, input) }, 202);
     }
     if (action === "get") return json({ success: true, project: await getPresentation(ownerId, id) });
@@ -86,6 +97,25 @@ export async function presentationRequest(req: Request, action: PresentationActi
       return new Response(new Uint8Array(file), {
         headers: { ...privateHeaders, "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation", "Content-Disposition": `attachment; filename="${filename}.pptx"`, "X-Content-Type-Options": "nosniff" },
       });
+    }
+    if (action === "materials-post") {
+      const input = await body(req, materialPostSchema, 4 * 1024);
+      return json({ success: true, project: await addPresentationMaterial(ownerId, id, input) });
+    }
+    if (action === "materials-delete") {
+      const input = await body(req, materialDeleteSchema, 1024);
+      return json({ success: true, project: await removePresentationMaterial(ownerId, id, input.materialId) });
+    }
+    if (action === "link-report") {
+      const input = await body(req, linkSchema, 1024);
+      return json({ success: true, project: await linkReportSession(ownerId, id, input.sessionId) });
+    }
+    if (action === "chat") {
+      const input = await body(req, chatTurnSchema, 8 * 1024);
+      const run = await startPresentationChatRun(ownerId, id, input);
+      const response = streamAgentRun(run.id, ownerId);
+      response.headers.set("Cache-Control", "private, no-store, no-transform");
+      return response;
     }
     if (action === "generate" || action === "revise") {
       const operation = action === "generate"

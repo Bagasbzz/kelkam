@@ -475,6 +475,8 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
   const Canvas = () => null;
   const Player = () => null;
   const VisualControls = () => null;
+  const Chat = () => null;
+  const PlanPanel = () => null;
   const deck = deckFixture();
   const project = { id: "offline-project", revision: 1, deck, history: [] };
   const requests: string[] = [];
@@ -486,11 +488,12 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
     } },
     "@/lib/client/agent-run": { fetchActiveRun: async () => null, isRunLive: () => false },
     "@/lib/errors": { getErrorMessage: (error: Error) => error.message },
-    "./PresentationIntake": { default: () => null },
+    "./PresentationChat": { default: Chat },
+    "./PresentationPlanPanel": { default: PlanPanel },
     "./SlideCanvas": { default: Canvas, TARGET_LABELS: { title: "Judul", eyebrow: "Label", "body-0": "Teks 1", art: "Gambar" } },
     "./SlidePlayer": { default: Player },
     "./VisualControls": { default: VisualControls },
-  }, { window: { addEventListener() {}, removeEventListener() {}, confirm: () => true } });
+  }, { URLSearchParams, window: { addEventListener() {}, removeEventListener() {}, confirm: () => true, location: { search: "", pathname: "/presentasi" }, history: { replaceState() {} } } });
   const library = hooks.render(workspaceModule.default);
   assert.equal(typeof library.type, "function");
   hooks.render(library.type as Component, library.props);
@@ -504,6 +507,13 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
   assert.equal(typeof editor.type, "function");
   const render = () => hooks.render(editor.type as Component, editor.props);
   tree = render(); await flush(); tree = render();
+  // Chat AI is the default view, as in Laporan: conversation plus slide preview, no manual text editor.
+  assert.ok(elements(tree).some((element) => element.type === Chat), "chat is the first view");
+  assert.ok(elements(tree).some((element) => element.type === PlanPanel), "preview and plan panel sit beside the chat");
+  assert.equal(elements(tree).some((element) => element.type === Canvas), false);
+  assert.equal(elements(tree).some((element) => element.type === "textarea" && element.props.value === deck.slides[0].body[0]), false);
+  invoke(button(tree, "Edit slide"), "onClick");
+  tree = render();
   assert.equal(elements(tree).some((element) => element.type === VisualControls), false);
   const canvas = find(tree, (element) => element.type === Canvas, "editable canvas");
   assert.equal(canvas.props.disabled, false);
@@ -549,7 +559,8 @@ test("signed-out presentation uses the same plain heading and requires login wit
     "@/components/AuthProvider": { useAuth: () => ({ user: null, loading: false, openLoginModal: () => { opened++; } }), authenticatedFetch: () => assert.fail("Signed-out landing must not make requests") },
     "@/lib/client/agent-run": {},
     "@/lib/errors": {},
-    "./PresentationIntake": { default: () => null },
+    "./PresentationChat": { default: () => null },
+    "./PresentationPlanPanel": { default: () => null },
     "./SlideCanvas": { default: () => null, TARGET_LABELS: {} },
     "./SlidePlayer": { default: () => null },
     "./VisualControls": { default: () => null },

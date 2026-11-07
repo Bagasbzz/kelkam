@@ -49,16 +49,18 @@ test("home lists Presentasi in the existing tool grid with an editable PowerPoin
 });
 
 test("presentation interface follows site typography and indigo palette without changing slide artwork", async () => {
-  for (const name of ["presentation.module.css", "intake.module.css"]) {
-    const css = await readFile(new URL(`../src/components/presentation/${name}`, import.meta.url), "utf8");
-    assert.match(css, /#4f46e5/i);
-    assert.match(css, /font-family:\s*inherit/);
-    assert.doesNotMatch(css, /Georgia|#1e302c|#315c4b|#f5f6f1|#f4f5ef/i);
+  const css = await readFile(new URL("../src/components/presentation/presentation.module.css", import.meta.url), "utf8");
+  assert.match(css, /#4f46e5/i);
+  assert.match(css, /font-family:\s*inherit/);
+  assert.doesNotMatch(css, /Georgia|#1e302c|#315c4b|#f5f6f1|#f4f5ef/i);
+  // The chat reuses the Laporan conversation layout and plain, formal wording.
+  for (const name of ["PresentationChat.tsx", "PresentationPlanPanel.tsx"]) {
+    const source = await readFile(new URL(`../src/components/presentation/${name}`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /Bawa bahannya|Kita susun ceritanya|Sedikit obrolan|Siap jadi cerita|Pilih yang terasa seperti Anda/);
   }
-  const intake = await readFile(new URL("../src/components/presentation/PresentationIntake.tsx", import.meta.url), "utf8");
-  assert.match(intake, /Tambahkan bahan presentasi/);
-  assert.match(intake, /Tentukan kebutuhan presentasi/);
-  assert.doesNotMatch(intake, /Sedikit obrolan|Tenang juga menarik|Siap jadi cerita|Pilih yang terasa seperti Anda/);
+  const chat = await readFile(new URL("../src/components/presentation/PresentationChat.tsx", import.meta.url), "utf8");
+  assert.match(chat, /AgentRunProgress/);
+  assert.match(chat, /rounded-2xl rounded-br-md bg-slate-900/);
 });
 
 // Execute the actual component with isolated hooks and deferred transport. Imports

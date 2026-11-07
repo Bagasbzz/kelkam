@@ -7,7 +7,7 @@ import type { PresentationDeck } from "@/lib/presentation/model";
 import { readUpload } from "@/lib/storage/upload";
 import { inspectImage, toPng } from "@/lib/server/image-convert";
 import { listImageJobs, startImageJob } from "@/lib/server/image-jobs";
-import { snapshotPresentation, getPresentation } from "./repository";
+import { snapshotPresentation, getPresentation, readPresentationState, recordPlanImageJob } from "./repository";
 import { PresentationError, revisionSchema } from "./state";
 
 export const MAX_ART_ASSETS = 8;
@@ -17,12 +17,14 @@ export const artJobSchema = z.object({
   baseRevision: revisionSchema, slideId: z.string().uuid(),
   prompt: z.string().trim().min(8).max(2000), role: z.enum(["hero", "background", "cutout"]),
 }).strict();
+/** Approves one image the AI suggested in its plan; prompt and role come from the stored plan, not the client. */
+export const planArtSchema = z.object({ baseRevision: revisionSchema, planImage: z.number().int().min(0).max(7) }).strict();
 
 type ArtDatabase = Pick<Prisma.TransactionClient, "fileUpload" | "imageJob">;
 const artIds = (deck: PresentationDeck) => [...new Set(deck.slides.flatMap((slide) => slide.art ? [slide.art.fileId] : []))];
 
-/** Manual selection permits owned uploads; AI may only reuse explicitly scoped assets. */
-export async function validatePresentationArt(ownerId: string, projectId: string, deck: PresentationDeck, existing: PresentationDeck, db: ArtDatabase = prisma, mode: "generated" | "manual" = "generated") {
+/** Manual selection permits owned uploads; AI may only reuse explicitly scoped assets. `allowed` lists files the user already attached (report figures, image materials). */
+export async function validatePresentationArt(ownerId: string, projectId: string, deck: PresentationDeck, existing: PresentationDeck, db: ArtDatabase = prisma, mode: "generated" | "manual" = "generated", allowed: ReadonlySet<string> = new Set()) {
   const ids = artIds(deck);
   if (ids.length > MAX_ART_ASSETS) throw new PresentationError(413, "Maksimum delapan aset gambar per presentasi.");
   const existingIds = new Set(artIds(existing));
@@ -34,7 +36,7 @@ export async function validatePresentationArt(ownerId: string, projectId: string
     if (file.size < 1 || file.size > MAX_ART_BYTES) throw new PresentationError(413, "Setiap aset gambar maksimum 4 MB.");
     total += file.size;
     if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total aset gambar maksimum 24 MB.");
-    if (mode === "generated" && !existingIds.has(id)) {
+    if (mode === "generated" && !existingIds.has(id) && !allowed.has(id)) {
       const job = await db.imageJob.findFirst({ where: { ownerId, sessionId: projectId, status: "done", fileUploadId: id }, select: { id: true } });
       if (!job) throw new PresentationError(400, "Gunakan aset yang sudah ada atau hasil gambar selesai untuk presentasi ini.");
     }
@@ -92,4 +94,16 @@ export async function startPresentationArt(ownerId: string, projectId: string, i
     if (error instanceof Error && /sedang diproses|Antrean gambar penuh/.test(error.message)) throw new PresentationError(429, "Antrean gambar penuh. Tunggu gambar sebelumnya selesai sebelum mencoba lagi.");
     throw error;
   }
+}
+
+export async function startPlannedArt(ownerId: string, projectId: string, input: z.infer<typeof planArtSchema>) {
+  const state = await readPresentationState(ownerId, projectId);
+  const image = state.plan?.images?.[input.planImage];
+  if (!image) throw new PresentationError(404, "Usulan gambar tidak ditemukan. Muat ulang rencana.");
+  if (image.jobId) throw new PresentationError(409, "Gambar untuk usulan ini sudah dibuat.");
+  // Prefer the slide recorded earlier; otherwise the plan's slide number in the current deck.
+  const slide = state.deck.slides.find((item) => item.id === image.slideId) ?? state.deck.slides[image.slide - 1];
+  if (!slide) throw new PresentationError(409, "Slide untuk gambar ini belum ada. Gunakan hasil AI terlebih dahulu.");
+  const job = await startPresentationArt(ownerId, projectId, { baseRevision: input.baseRevision, slideId: slide.id, prompt: image.prompt, role: image.role });
+  return { job, project: await recordPlanImageJob(ownerId, projectId, input.planImage, slide.id, job.id) };
 }

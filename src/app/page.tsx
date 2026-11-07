@@ -66,7 +66,7 @@ const UTILITY_FEATURES: FeatureCard[] = [
     href: "/presentasi",
     title: "Presentasi",
     description:
-      "Buat slide dengan AI dari materi Anda. Pilih desain, edit hasilnya, dan unduh PowerPoint yang dapat diedit.",
+      "Susun slide bersama AI dari materi atau laporan Anda, edit hasilnya, lalu unduh PowerPoint yang dapat diedit.",
     icon: IconLayout,
     accent: "indigo",
     cta: "Buat presentasi",

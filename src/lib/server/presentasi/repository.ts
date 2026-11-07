@@ -2,10 +2,14 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
 import { createStarterDeck, slideSchema, type PresentationDeck, type PresentationTheme } from "@/lib/presentation/model";
-import { assertRevision, enforceAiDeck, generateSchema, reviseSchema, nextEnvelope, PresentationError, projectPayload, readEnvelope, type PresentationEnvelope, type RunOperation } from "./state";
+import { assertRevision, enforceAiDeck, generateSchema, reviseSchema, chatTurnSchema, nextEnvelope, PresentationError, projectPayload, readEnvelope, planInputSchema, MAX_CHAT_CONTENT, MAX_CHAT_MESSAGES, MAX_PRESENTATION_MATERIALS, type PresentationChatMessage, type PresentationEnvelope, type PresentationPlanInput, type RunOperation } from "./state";
 import { validatePresentationArt } from "./art";
+import { DESIGN_PRESETS } from "@/lib/presentation/presets";
 
 type Transaction = Prisma.TransactionClient;
+
+/** Files the user already attached; the AI may place these on slides without a paid image job. */
+const attachedArt = (state: PresentationEnvelope) => new Set([...(state.source?.figures ?? []).map((item) => item.fileId), ...(state.materials ?? []).map((item) => item.fileId)]);
 
 async function lockedProject(tx: Transaction, ownerId: string, projectId: string) {
   // Owner predicate belongs in the lock query, not only in an earlier lookup.
@@ -29,13 +33,15 @@ export async function listPresentations(ownerId: string) {
     where: { ownerId, metadata: { path: ["kind"], equals: "presentation" } },
     select: { projectId: true, metadata: true },
   });
-  return rows.map((row) => readEnvelope(row.metadata, row.projectId))
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  // One unreadable row must not hide the whole library.
+  const states = rows.flatMap((row) => { try { return [readEnvelope(row.metadata, row.projectId)]; } catch { return []; } });
+  return states.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map((state) => ({ id: state.deck.id, title: state.deck.title, revision: state.revision, updatedAt: state.updatedAt }));
 }
 
 export async function createPresentation(ownerId: string, theme: PresentationTheme) {
-  const deck = createStarterDeck(theme);
+  // Content comes from the chat; the starter slides only keep the deck valid until the first AI result.
+  const deck = { ...createStarterDeck(theme), title: "Presentasi baru" };
   const state: PresentationEnvelope = { kind: "presentation", schemaVersion: 1, revision: 1, updatedAt: new Date().toISOString(), deck, history: [] };
   await prisma.project.create({ data: { projectId: deck.id, ownerId, metadata: state as unknown as Prisma.InputJsonValue } });
   return projectPayload(state);
@@ -84,7 +90,7 @@ export async function resolvePresentationProposal(ownerId: string, projectId: st
     if (state.proposal.runId !== runId) throw new PresentationError(409, "Proposal sudah berubah. Muat ulang pratinjau sebelum melanjutkan.");
     if (action === "accept") {
       assertRevision(state, state.proposal.baseRevision);
-      await validatePresentationArt(ownerId, projectId, state.proposal.deck, state.deck, tx);
+      await validatePresentationArt(ownerId, projectId, state.proposal.deck, state.deck, tx, "generated", attachedArt(state));
       return writeProject(tx, ownerId, nextEnvelope(state, state.proposal.deck));
     }
     const { proposal, ...current } = state;
@@ -116,7 +122,138 @@ export async function importReportText(ownerId: string, projectId: string, baseR
   });
 }
 
-export async function commitPresentationRun(ownerId: string, projectId: string, runId: string, output: unknown, claimToken: string) {
+// ---------------------------------------------------------------------------
+// Conversation state. These writes keep `revision` untouched: it is the deck conflict token.
+// ---------------------------------------------------------------------------
+
+const nowIso = () => new Date().toISOString();
+function trimChat(messages: PresentationChatMessage[]) {
+  return messages.slice(-MAX_CHAT_MESSAGES).map((message) => ({ ...message, content: message.content.slice(0, MAX_CHAT_CONTENT) }));
+}
+
+export async function appendChatMessage(ownerId: string, projectId: string, message: Omit<PresentationChatMessage, "id" | "at"> & { id?: string }) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const messages = state.chat?.messages ?? [];
+    // A reconnect can deliver the same finished run twice; one run answers once.
+    if (message.runId && messages.some((item) => item.runId === message.runId && item.role === message.role)) return projectPayload(state);
+    const next = { ...message, id: message.id ?? crypto.randomUUID(), at: nowIso(), content: message.content.slice(0, MAX_CHAT_CONTENT) };
+    return writeProject(tx, ownerId, { ...state, chat: { messages: trimChat([...messages, next]) } });
+  });
+}
+
+export async function readPresentationState(ownerId: string, projectId: string) {
+  const row = await prisma.project.findFirst({ where: { ownerId, projectId }, select: { metadata: true } });
+  if (!row) throw new PresentationError(404, "Presentasi tidak ditemukan.");
+  return readEnvelope(row.metadata, projectId);
+}
+
+/** Saves the plan and the chosen look. A stale run cannot overwrite a newer plan. */
+export async function savePresentationPlan(ownerId: string, projectId: string, runId: string, claimToken: string, input: PresentationPlanInput) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const runs = await tx.$queryRaw<Array<{ status: string; control: string | null; lockToken: string | null }>>`
+      SELECT status, control, lock_token AS "lockToken" FROM agent_runs
+      WHERE id = ${runId} AND owner_id = ${ownerId} AND kind = 'presentasi' AND session_id = ${projectId} FOR UPDATE
+    `;
+    const run = runs[0];
+    if (!run) throw new PresentationError(404, "Run tidak ditemukan.");
+    if (!claimToken || run.lockToken !== claimToken) throw new PresentationError(409, "Klaim worker sudah berubah. Rencana worker lama ditolak.");
+    if (run.status !== "running" || run.control) throw new PresentationError(409, "Run telah dijeda atau dihentikan.");
+    const parsed = planInputSchema.parse(input);
+    // A re-plan keeps the link to images the user already approved for the same suggestion.
+    const images = parsed.images?.map((image) => {
+      const known = state.plan?.images?.find((item) => item.slide === image.slide && item.prompt === image.prompt && item.role === image.role);
+      return known?.jobId ? { ...image, slideId: known.slideId, jobId: known.jobId } : image;
+    });
+    await writeProject(tx, ownerId, { ...state, plan: { ...parsed, ...(images ? { images } : {}), updatedAt: nowIso() } });
+    return { success: true, slides: parsed.slides.length, density: parsed.density };
+  });
+}
+
+/** Registers uploaded files as readable materials. Ownership is checked against the upload row. */
+export async function addPresentationMaterial(ownerId: string, projectId: string, input: { fileId: string; title: string; fileName: string; kind: string }) {
+  const file = await prisma.fileUpload.findFirst({ where: { id: input.fileId, ownerId }, select: { id: true } });
+  if (!file) throw new PresentationError(404, "File bahan tidak ditemukan.");
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const materials = state.materials ?? [];
+    if (materials.some((item) => item.fileId === input.fileId)) return projectPayload(state);
+    if (materials.length >= MAX_PRESENTATION_MATERIALS) throw new PresentationError(413, `Maksimum ${MAX_PRESENTATION_MATERIALS} bahan per presentasi.`);
+    const id = `m${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+    return writeProject(tx, ownerId, { ...state, materials: [...materials, { id, fileId: input.fileId, title: input.title.slice(0, 200) || input.fileName.slice(0, 200), fileName: input.fileName.slice(0, 200), kind: input.kind.slice(0, 40) }] });
+  });
+}
+
+export async function removePresentationMaterial(ownerId: string, projectId: string, materialId: string) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    return writeProject(tx, ownerId, { ...state, materials: (state.materials ?? []).filter((item) => item.id !== materialId) });
+  });
+}
+
+/** Remembers which slide and job an approved image suggestion became, so the result can be placed later. */
+export async function recordPlanImageJob(ownerId: string, projectId: string, index: number, slideId: string, jobId: string) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const images = state.plan?.images;
+    if (!state.plan || !images?.[index]) return projectPayload(state);
+    const next = images.map((image, i) => i === index ? { ...image, slideId, jobId } : image);
+    return writeProject(tx, ownerId, { ...state, plan: { ...state.plan, images: next } });
+  });
+}
+
+async function buildReportSource(ownerId: string, sessionId: string) {
+  const report = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId }, select: { id: true, title: true, draft: true, plan: true } });
+  if (!report) throw new PresentationError(404, "Laporan tidak ditemukan.");
+  if (!report.draft?.trim()) throw new PresentationError(409, "Laporan belum mempunyai draft. Selesaikan laporan sebelum membuat presentasi.");
+  const plan = report.plan && typeof report.plan === "object" && !Array.isArray(report.plan) ? report.plan as { figures?: unknown } : {};
+  const candidates = (Array.isArray(plan.figures) ? plan.figures : []).flatMap((item) => {
+    const figure = item as { fileId?: unknown; title?: unknown };
+    return typeof figure.fileId === "string" && figure.fileId && figure.fileId.length <= 100 && !/[:/\\?#]/u.test(figure.fileId)
+      ? [{ fileId: figure.fileId, title: typeof figure.title === "string" ? figure.title.slice(0, 200) : "Gambar laporan" }] : [];
+  }).slice(0, 20);
+  const owned = candidates.length ? await prisma.fileUpload.findMany({ where: { ownerId, id: { in: candidates.map((item) => item.fileId) } }, select: { id: true } }) : [];
+  const ownedIds = new Set(owned.map((item) => item.id));
+  return { kind: "report" as const, sessionId: report.id, linkedAt: nowIso(), title: (report.title ?? "Laporan").slice(0, 200), draftChars: report.draft.length, figures: candidates.filter((item) => ownedIds.has(item.fileId)) };
+}
+
+/**
+ * Links a report session. The text itself is not copied: the AI reads it page by page at run time,
+ * so reports of any length stay usable. Only owned report sessions can be linked.
+ */
+export async function linkReportSession(ownerId: string, projectId: string, sessionId: string) {
+  const source = await buildReportSource(ownerId, sessionId);
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    return writeProject(tx, ownerId, { ...state, source });
+  });
+}
+
+/** One step for the "Buat presentasi" button in Laporan: validate the report first, so no orphan project is left. */
+export async function createPresentationFromReport(ownerId: string, sessionId: string) {
+  const source = await buildReportSource(ownerId, sessionId);
+  const starter = createStarterDeck("editorial");
+  const deck = { ...starter, title: source.title.trim().slice(0, 120) || starter.title };
+  const state: PresentationEnvelope = { kind: "presentation", schemaVersion: 1, revision: 1, updatedAt: nowIso(), deck, history: [], source };
+  await prisma.project.create({ data: { projectId: deck.id, ownerId, metadata: state as unknown as Prisma.InputJsonValue } });
+  return projectPayload(state);
+}
+
+/** Paged, bounded read of the linked report for the AI. Ownership is rechecked on every call. */
+export async function readLinkedReport(ownerId: string, projectId: string, part: "outline" | "draft", offset: number, limit: number) {
+  const state = await readPresentationState(ownerId, projectId);
+  if (!state.source) throw new PresentationError(404, "Presentasi ini belum tertaut ke laporan.");
+  const report = await prisma.reportSession.findFirst({ where: { id: state.source.sessionId, ownerId }, select: { draft: true, plan: true, brief: true } });
+  if (!report) throw new PresentationError(404, "Laporan sumber sudah dihapus.");
+  if (part === "outline") return { part, brief: report.brief ?? null, outline: (report.plan as { outline?: unknown } | null)?.outline ?? [], totalKarakterDraft: report.draft?.length ?? 0 };
+  const draft = report.draft ?? "";
+  const start = Math.max(0, Math.floor(offset));
+  const size = Math.min(Math.max(Math.floor(limit), 500), 10_000);
+  return { part, totalKarakter: draft.length, offset: start, isi: draft.slice(start, start + size), adaLanjutan: start + size < draft.length };
+}
+
+export async function commitPresentationRun(ownerId: string, projectId: string, runId: string, output: unknown, claimToken: string, evidenceText = "") {
   return prisma.$transaction(async (tx) => {
     const state = await lockedProject(tx, ownerId, projectId);
     const runs = await tx.$queryRaw<Array<{ meta: unknown; status: string; control: string | null; lockToken: string | null }>>`
@@ -137,8 +274,12 @@ export async function commitPresentationRun(ownerId: string, projectId: string, 
     const candidate = operation.operation === "revise"
       ? { ...state.deck, slides: state.deck.slides.map((slide) => slide.id === operation.slideId ? slideSchema.parse(output) : slide) }
       : output;
-    const deck = enforceAiDeck(state.deck, candidate, operation);
-    await validatePresentationArt(ownerId, projectId, deck, state.deck, tx);
+    let deck = enforceAiDeck(state.deck, candidate, operation, evidenceText);
+    // The template chosen in the plan is applied by the server, not left to model wording.
+    const preset = operation.operation === "chat" && state.plan?.templateId && !state.deck.slides.some((slide) => slide.locked)
+      ? DESIGN_PRESETS.find((item) => item.id === state.plan!.templateId) : undefined;
+    if (preset) deck = { ...deck, theme: preset.theme, palette: preset.palette, artDirection: preset.artDirection };
+    await validatePresentationArt(ownerId, projectId, deck, state.deck, tx, "generated", attachedArt(state));
     const proposedRevision = state.revision + 1;
     await writeProject(tx, ownerId, { ...state, proposal: { runId, baseRevision: state.revision, deck } });
     await tx.agentRun.updateMany({
@@ -155,5 +296,6 @@ export function parseRunOperation(meta: Record<string, unknown>): RunOperation {
   void _proposalReceipt;
   if (operation === "generate") return { operation, ...generateSchema.parse(input) };
   if (operation === "revise") return { operation, ...reviseSchema.parse(input) };
+  if (operation === "chat") return { operation, ...chatTurnSchema.parse(input) };
   throw new PresentationError(400, "Jenis operasi presentasi tidak valid.");
 }

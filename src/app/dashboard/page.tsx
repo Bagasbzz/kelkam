@@ -7,9 +7,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Bot, CheckCircle2, ChevronUp, Download, ExternalLink, FileText, Loader2, MessageSquarePlus, PanelLeft, PanelRightClose,
-  Paperclip, Play, Send, ShieldCheck, Trash2, Upload, ListChecks, BookOpen, Table2, Workflow, Image as ImageIcon, X,
+  Paperclip, Play, Presentation, Send, ShieldCheck, Trash2, Upload, ListChecks, BookOpen, Table2, Workflow, Image as ImageIcon, X,
 } from "lucide-react";
 import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
 import ReportJobProgress from "@/components/ReportJobProgress";
@@ -68,6 +69,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function LaporanPage() {
   const { user, loading: authLoading, openLoginModal } = useAuth();
+  const router = useRouter();
 
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -90,6 +92,7 @@ export default function LaporanPage() {
   const [fresh, setFresh] = useState<Tab | null>(null); // tab yang baru terisi → penanda di chip
   const [preset, setPreset] = useState<keyof typeof DOCX_PRESETS>("kampus4433");
   const [exporting, setExporting] = useState(false);
+  const [makingDeck, setMakingDeck] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const pendingRef = useRef<PendingAttachment[]>([]);
@@ -402,6 +405,25 @@ export default function LaporanPage() {
     } catch (e) {
       setError(getErrorMessage(e));
       await loadDetail(activeId).catch(() => { /* abaikan */ });
+    }
+  };
+
+  /** Tautkan sesi laporan ke proyek Presentasi baru; AI di sana membaca laporan lewat tool, bukan lewat salinan teks. */
+  const makePresentation = async () => {
+    if (!detail?.draft || makingDeck) return;
+    setMakingDeck(true);
+    try {
+      const res = await authenticatedFetch("/api/presentasi/from-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: detail.id }),
+      });
+      const data = (await res.json().catch(() => null)) as { success?: boolean; error?: string; project?: { id?: string } } | null;
+      if (!res.ok || !data?.success || !data.project?.id) throw new Error(data?.error || "Gagal membuat presentasi dari laporan.");
+      router.push(`/presentasi?proyek=${encodeURIComponent(data.project.id)}`);
+    } catch (e) {
+      setError(getErrorMessage(e));
+      setMakingDeck(false);
     }
   };
 
@@ -719,6 +741,7 @@ export default function LaporanPage() {
                         </select>
                         <Button onClick={exportDocx} variant="primary" size="sm" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
                       </div>
+                      <Button onClick={makePresentation} variant="outline" size="sm" disabled={makingDeck} className="w-full">{makingDeck ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Presentation className="h-3.5 w-3.5" />} Buat presentasi dari laporan ini</Button>
                       <div className="flex items-center gap-1 text-sm text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
                       <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-[15px] leading-relaxed text-slate-800">{detail.draft}</pre>
                       <p className="text-sm text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>

@@ -260,7 +260,9 @@ const TOOL_STRING_MAX = 20_000;
 /** Cek satu nilai terhadap skema ringan. Return pesan error atau null. */
 function checkValue(value: unknown, schema: JsonSchemaLite | undefined, path: string, depth = 0): string | null {
   if (!schema || value === undefined || value === null) return null;
-  if (depth > 5) return `${path}: struktur terlalu dalam`;
+  // Rekursi hanya mengikuti skema tool, jadi kedalaman sudah terbatas oleh skema.
+  // Deck presentasi (args.deck.slides[i].adjustments[j].target) membutuhkan kedalaman 6.
+  if (depth > 8) return `${path}: struktur terlalu dalam`;
   const types = Array.isArray(schema.type) ? schema.type : schema.type ? [schema.type] : [];
   if (schema.enum && !schema.enum.includes(value)) return `${path}: nilai di luar pilihan`;
   if (!types.length) return null;
