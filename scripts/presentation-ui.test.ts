@@ -32,6 +32,35 @@ const click = (element: Element) => (element.props.onClick as () => void | Promi
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
+test("home lists Presentasi in the existing tool grid with an editable PowerPoint description", async () => {
+  const source = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
+  const file = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
+  let presentasi: ts.ObjectLiteralExpression | undefined;
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "UTILITY_FEATURES" && node.initializer && ts.isArrayLiteralExpression(node.initializer)) {
+      presentasi = node.initializer.elements.find((item): item is ts.ObjectLiteralExpression => ts.isObjectLiteralExpression(item) && item.properties.some((property) => ts.isPropertyAssignment(property) && property.name.getText(file) === "href" && ts.isStringLiteral(property.initializer) && property.initializer.text === "/presentasi"));
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.ok(presentasi, "Presentasi must appear in the actual rendered tool data");
+  assert.match(presentasi.getText(file), /title: "Presentasi"/);
+  assert.match(presentasi.getText(file), /PowerPoint yang dapat diedit/);
+});
+
+test("presentation interface follows site typography and indigo palette without changing slide artwork", async () => {
+  for (const name of ["presentation.module.css", "intake.module.css"]) {
+    const css = await readFile(new URL(`../src/components/presentation/${name}`, import.meta.url), "utf8");
+    assert.match(css, /#4f46e5/i);
+    assert.match(css, /font-family:\s*inherit/);
+    assert.doesNotMatch(css, /Georgia|#1e302c|#315c4b|#f5f6f1|#f4f5ef/i);
+  }
+  const intake = await readFile(new URL("../src/components/presentation/PresentationIntake.tsx", import.meta.url), "utf8");
+  assert.match(intake, /Tambahkan bahan presentasi/);
+  assert.match(intake, /Tentukan kebutuhan presentasi/);
+  assert.doesNotMatch(intake, /Sedikit obrolan|Tenang juga menarik|Siap jadi cerita|Pilih yang terasa seperti Anda/);
+});
+
 // Execute the actual component with isolated hooks and deferred transport. Imports
 // are deny-by-default; neither the app auth module nor any server/provider loads.
 async function visualFixture() {
@@ -135,7 +164,7 @@ test("delayed initial art GET blocks attempted POST until listing completes and 
   fixture.requests[0].resolve(json({ success: true, jobs: [] }));
   await flush();
   tree = fixture.render();
-  const ready = button(tree, "Generate aset AI");
+  const ready = button(tree, "Buat gambar AI");
   assert.equal(ready.props.disabled, false);
   click(ready);
   assert.equal(fixture.requests.length, 2);
@@ -149,8 +178,8 @@ test("delayed initial art GET blocks attempted POST until listing completes and 
   await flush();
   tree = fixture.render();
   assert.match(content(tree), /Aset baru/);
-  assert.equal(button(tree, "Generate aset AI").props.disabled, true);
-  click(button(tree, "Generate aset AI"));
+  assert.equal(button(tree, "Buat gambar AI").props.disabled, true);
+  click(button(tree, "Buat gambar AI"));
   await flush();
   assert.equal(fixture.requests.length, 2, "An active job must also block the runtime generation handler");
   assert.equal(fixture.timers.size, 1, "The newly created job remains tracked for polling");
@@ -168,8 +197,8 @@ test("failed initial art listing blocks generation until an explicit successful 
       await flush();
       let tree = fixture.render();
       assert.match(content(tree), /Listing unavailable/);
-      assert.equal(button(tree, "Generate aset AI").props.disabled, true);
-      click(button(tree, "Generate aset AI"));
+      assert.equal(button(tree, "Buat gambar AI").props.disabled, true);
+      click(button(tree, "Buat gambar AI"));
       await flush();
       assert.equal(fixture.requests.length, 1);
       assert.equal(fixture.timers.size, 0, "A failed initial listing must not auto-retry");
@@ -179,20 +208,20 @@ test("failed initial art listing blocks generation until an explicit successful 
       fixture.requests[1].resolve(json({ success: false, error: "Still unavailable" }, 429));
       await failedRetry;
       tree = fixture.render();
-      assert.equal(button(tree, "Generate aset AI").props.disabled, true);
-      click(button(tree, "Generate aset AI"));
+      assert.equal(button(tree, "Buat gambar AI").props.disabled, true);
+      click(button(tree, "Buat gambar AI"));
       assert.equal(fixture.requests.length, 2);
 
       const successfulRetry = click(button(tree, "Cek status lagi"));
       assert.equal(fixture.requests[2].init.method, "GET");
-      click(button(fixture.render(), "Generate aset AI"));
+      click(button(fixture.render(), "Buat gambar AI"));
       assert.equal(fixture.requests.length, 3, "Generation stays blocked while the manual retry is unresolved");
       fixture.requests[2].resolve(json({ success: true, jobs: [] }));
       await successfulRetry;
       tree = fixture.render();
       assert.doesNotMatch(content(tree), /Still unavailable|Cek status lagi/);
-      assert.equal(button(tree, "Generate aset AI").props.disabled, false);
-      click(button(tree, "Generate aset AI"));
+      assert.equal(button(tree, "Buat gambar AI").props.disabled, false);
+      click(button(tree, "Buat gambar AI"));
       assert.equal(fixture.requests.length, 4);
       assert.equal(fixture.requests[3].init.method, "POST");
       fixture.requests[3].resolve(json({ success: true, job: { id: "job-retry", status: "queued", title: "Retry asset", fileId: null, error: null } }));

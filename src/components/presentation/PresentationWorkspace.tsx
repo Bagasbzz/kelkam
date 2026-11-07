@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, Download, ImagePlus, Loader2, Play, Plus, Save, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, Download, ImagePlus, Loader2, Play, Plus, Presentation, Save, Sparkles, Trash2, X } from "lucide-react";
 import { authenticatedFetch, useAuth } from "@/components/AuthProvider";
 import { describeRunStatus, fetchActiveRun, followRun, isRunLive, type AgentRunPublic } from "@/lib/client/agent-run";
 import { getErrorMessage } from "@/lib/errors";
@@ -43,7 +43,7 @@ function Preview({ deck, index }: { deck: PresentationDeck; index: number }) {
 export default function PresentationWorkspace() {
   const { user, loading, openLoginModal } = useAuth();
   if (loading) return <div className={styles.loading}><Loader2 className="animate-spin" /> Memuat presentasi...</div>;
-  if (!user) return <main className={styles.landing}><p className={styles.kicker}>PRESENTASI</p><h1>Dari bahan Anda,<br />jadi cerita yang hidup.</h1><p>Unggah dokumen, jawab beberapa pertanyaan, lalu lihat dan edit slide Anda.</p><button className={styles.primary} onClick={openLoginModal}>Masuk untuk mulai</button></main>;
+  if (!user) return <main className={styles.landing}><header className={styles.simpleHero}><div className={styles.heroIcon}><Presentation size={30} aria-hidden="true" /></div><p className={styles.kicker}>PRESENTASI AI</p><h1>Buat presentasi dengan AI</h1><p>Susun bahan menjadi slide dengan desain yang rapi dan beragam. Edit teks, gambar, dan tata letak, lalu unduh sebagai PowerPoint yang tetap dapat diedit.</p><button className={styles.primary} onClick={openLoginModal}>Masuk untuk membuat presentasi</button></header></main>;
   return <PresentationLibrary key={user.id} owner={user.id} />;
 }
 
@@ -87,9 +87,9 @@ function PresentationLibrary({ owner }: { owner: string }) {
   if (project) return <DeckEditor key={project.id} initial={project} initialGeneration={generation} onClose={close} />;
   if (intake) return <PresentationIntake onReady={create} onCancel={() => { if (!creating.current) setIntake(false); }} />;
   return <main className={styles.landing}>
-    <header className={styles.simpleHero}><p className={styles.kicker}>PRESENTASI / DARI BAHAN ANDA</p><h1>Bawa bahannya.<br />Kita susun ceritanya.</h1><p>Makalah, catatan, atau materi kelompok. AI membantu menentukan isi dan tampilan, Anda tetap memegang kendali.</p><button className={styles.uploadStart} onClick={() => setIntake(true)}><Plus size={28} /><strong>Unggah bahan & mulai</strong><span>PDF, Word, PowerPoint, gambar, atau teks</span></button><small>Belum ada generasi berbayar sampai Anda memilih lanjut.</small></header>
+    <header className={styles.simpleHero}><div className={styles.heroIcon}><Presentation size={30} aria-hidden="true" /></div><p className={styles.kicker}>PRESENTASI AI</p><h1>Buat presentasi dengan AI</h1><p>Unggah dokumen atau masukkan topik. AI membantu menyusun isi dan desain slide sesuai kebutuhan Anda, lalu hasilnya dapat diedit dan diunduh sebagai PowerPoint.</p><div className={styles.featureList}><span>Desain slide beragam</span><span>Teks dan gambar dapat diedit</span><span>Unduh PPTX</span></div><button className={styles.uploadStart} onClick={() => setIntake(true)}><Plus size={26} /><strong>Buat presentasi</strong><span>Unggah PDF, Word, PowerPoint, gambar, atau masukkan teks</span></button><small>Konsultasi dan pembuatan slide menggunakan kuota AI setelah persetujuan Anda.</small></header>
     {error && <p role="alert" className={styles.error}>{error}</p>}
-    <section><div className={styles.sectionHeading}><h2>Lanjutkan presentasi</h2><span>{projects.length} tersimpan</span></div><div className={styles.projects}>{projects.map((item) => <button className={styles.project} key={item.id} disabled={busy} onClick={async () => { setBusy(true); setError(""); try { setGeneration(null); setProject((await api<{ project: Project }>(`/api/presentasi/${item.id}`)).project); } catch (e) { setError(getErrorMessage(e)); } finally { setBusy(false); } }}><span className={styles.projectMark}>P</span><strong>{item.title}</strong><span>{new Date(item.updatedAt).toLocaleDateString("id-ID")}</span></button>)}{!projects.length && <p className={styles.empty}>Presentasi Anda akan tersimpan di sini. Tidak perlu memilih template sebelum mengunggah bahan.</p>}</div></section>
+    <section><div className={styles.sectionHeading}><h2>Presentasi tersimpan</h2><span>{projects.length} presentasi</span></div><div className={styles.projects}>{projects.map((item) => <button className={styles.project} key={item.id} disabled={busy} onClick={async () => { setBusy(true); setError(""); try { setGeneration(null); setProject((await api<{ project: Project }>(`/api/presentasi/${item.id}`)).project); } catch (e) { setError(getErrorMessage(e)); } finally { setBusy(false); } }}><span className={styles.projectMark}><Presentation size={24} aria-hidden="true" /></span><strong>{item.title}</strong><span>{new Date(item.updatedAt).toLocaleDateString("id-ID")}</span></button>)}{!projects.length && <p className={styles.empty}>Belum ada presentasi tersimpan. Pilih Buat presentasi untuk memulai.</p>}</div></section>
   </main>;
 }
 

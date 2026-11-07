@@ -496,6 +496,9 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
   hooks.render(library.type as Component, library.props);
   await flush();
   let tree = hooks.render(library.type as Component, library.props);
+  assert.equal(content(find(tree, (element) => element.type === "h1", "library heading")), "Buat presentasi dengan AI");
+  assert.ok(button(tree, "Buat presentasi"));
+  assert.doesNotMatch(content(tree), /Bawa bahannya|Kita susun ceritanya|Bukan sekadar poin/);
   await invoke(button(tree, deck.title), "onClick");
   const editor = hooks.render(library.type as Component, library.props);
   assert.equal(typeof editor.type, "function");
@@ -536,4 +539,23 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
   assert.ok(noMotionDeck.slides.every((slide) => slide.visual?.motion === "none"));
   assert.deepEqual(noMotionDeck.slides.map((slide) => slide.visual?.background), editedDeck.slides.map((slide) => slide.visual?.background));
   assert.deepEqual(requests, ["/api/presentasi", "/api/presentasi/offline-project"], "Editing and presentation are local, with no generation requests");
+});
+
+test("signed-out presentation uses the same plain heading and requires login without AI calls", async (t) => {
+  const hooks = hooksFixture({ click() {} });
+  t.after(hooks.cleanup);
+  let opened = 0;
+  const workspaceModule = await loadComponent("PresentationWorkspace.tsx", hooks.react, {
+    "@/components/AuthProvider": { useAuth: () => ({ user: null, loading: false, openLoginModal: () => { opened++; } }), authenticatedFetch: () => assert.fail("Signed-out landing must not make requests") },
+    "@/lib/client/agent-run": {},
+    "@/lib/errors": {},
+    "./PresentationIntake": { default: () => null },
+    "./SlideCanvas": { default: () => null, TARGET_LABELS: {} },
+    "./SlidePlayer": { default: () => null },
+    "./VisualControls": { default: () => null },
+  });
+  const tree = hooks.render(workspaceModule.default);
+  assert.equal(content(find(tree, (element) => element.type === "h1", "signed-out heading")), "Buat presentasi dengan AI");
+  invoke(button(tree, "Masuk untuk membuat presentasi"), "onClick");
+  assert.equal(opened, 1);
 });

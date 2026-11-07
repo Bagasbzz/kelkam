@@ -108,6 +108,9 @@ jobs:
             tar -xzf deploy.tar.gz
             rm deploy.tar.gz
 
+            # HTML/RSC cache keys can survive builds; invalidate only build-owned responses.
+            rm -rf -- .next/standalone/.next/server/route-cache .next/server/route-cache
+
             # Migrasi DB TIDAK dijalankan di sini: engine Prisma crash (core dumped) di server cPanel.
             # Jalankan SQL migrasi manual via phpPgAdmin (lihat file database-hotfix-*.sql),
             # lalu verifikasi di /api/admin/db-health.
@@ -135,7 +138,18 @@ jobs:
               if (!response.ok) throw new Error(`HTTP ${response.status}`);
               const release = await response.json();
               if (release.commit !== expected) throw new Error(`Serving a different release: ${release.commit}`);
-              console.log(`Verified active production commit ${expected}`);
+              for (const pathname of ['/', '/login']) {
+                const page = await fetch(`https://keluhkampus.my.id${pathname}?release-check=${expected}&attempt=${attempt}`, {
+                  headers: { 'Cache-Control': 'no-cache' },
+                  signal: AbortSignal.timeout(15000),
+                  redirect: 'error',
+                });
+                if (!page.ok) throw new Error(`Page ${pathname}: HTTP ${page.status}`);
+                const html = await page.text();
+                const marker = `<meta name="application-release" content="${expected}"`;
+                if (!html.includes(marker)) throw new Error(`Page ${pathname} is serving HTML from another release`);
+              }
+              console.log(`Verified active API and HTML production commit ${expected}`);
               process.exit(0);
             } catch (error) {
               console.error(`Release check ${attempt}/12: ${error.message}`);

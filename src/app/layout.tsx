@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   title: "keluhkampus | Platform Berbagai Tools Mahasiswa",
   description: "Platform berbagai tools mahasiswa untuk mempermudah pengerjaan tugas kuliahmu.",
   icons: { icon: "/icon.svg" },
+  other: { "application-release": process.env.APPLICATION_RELEASE || "unknown" },
 };
 
 export default function RootLayout({

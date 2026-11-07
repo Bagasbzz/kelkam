@@ -111,3 +111,16 @@ test("deploy verifies the running commit after requesting restart, not just tran
   assert.match(workflow, /process\.exit\(1\)/);
   assert.match(config, /APPLICATION_RELEASE: .*process\.env\.GITHUB_SHA/);
 });
+
+test("deployment invalidates only response caches and verifies compiled release in public HTML", async () => {
+  const workflow = await readFile(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  const layout = await readFile(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+  const invalidation = "rm -rf -- .next/standalone/.next/server/route-cache .next/server/route-cache";
+  assert.ok(workflow.includes(invalidation));
+  assert.ok(workflow.indexOf(invalidation) > workflow.indexOf("tar -xzf deploy.tar.gz"));
+  assert.ok(workflow.indexOf(invalidation) < workflow.indexOf("touch tmp/restart.txt"));
+  assert.match(layout, /"application-release": process\.env\.APPLICATION_RELEASE/);
+  assert.match(workflow, /for \(const pathname of \['\/', '\/login'\]\)/);
+  assert.match(workflow, /html\.includes\(marker\)/);
+  assert.match(workflow, /<meta name="application-release" content="\$\{expected\}"/);
+});

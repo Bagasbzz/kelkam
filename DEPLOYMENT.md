@@ -232,7 +232,7 @@ Setiap push ke `main` di GitHub akan otomatis:
 5. Copy `deploy/` bundle
 6. SCP ke JKC `DEPLOY_DIR`
 7. SSH: `touch tmp/restart.txt` (trigger Passenger restart)
-8. Verifikasi `https://keluhkampus.my.id/api/release` mengembalikan commit yang sama dengan workflow, bukan hanya HTTP 200. Pemeriksaan ini tidak memakai database atau provider AI.
+8. Bersihkan hanya cache respons build `server/route-cache` sebelum restart. Verifikasi `/api/release` dan metadata `application-release` pada HTML beranda/login sama dengan commit workflow, bukan hanya HTTP 200. Ini mendeteksi API baru yang masih menyajikan HTML lama, tanpa memakai database atau provider AI.
 
 Lihat `.github/workflows/deploy.yml` untuk detail step.
 
