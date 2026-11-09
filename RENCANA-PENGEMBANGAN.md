@@ -7,7 +7,7 @@
 > Aturan dari pemilik: tahap rancangan **bukan izin implementasi**. Jangan ubah kode, database,
 > atau konfigurasi untuk fitur di bawah sampai pemilik meminta secara eksplisit.
 
-Terakhir diperbarui: 2026-11-07
+Terakhir diperbarui: 2026-11-09
 
 ---
 
@@ -203,7 +203,7 @@ warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta log
   Belum: gambar AI otomatis tanpa klik (masih lewat tombol "Buat gambar" di Rencana).
 - Catatan biaya: sesi Claude Code yang panjang (konteks ±685 ribu token) mahal per langkah; mulai sesi baru per tugas
   dan jangan ganti model di tengah sesi.
-- **Sumber Laporan diperluas (K13–K16, tahap 1 selesai, belum di-commit/deploy):**
+- **Sumber Laporan diperluas (K13–K16, tahap 1 selesai, commit `da75d82`, belum di-push/deploy):**
   - Jenis sumber baru di `src/lib/references/source-kind.ts`: `journal`, `book`, `thesis` (skripsi/tesis/preprint),
     `official` (laporan lembaga ber-DOI), `web` (belum dicari). Klasifikasi dari tipe publikasi OpenAlex/Crossref/Semantic Scholar.
   - Buku: `src/lib/references/books.ts` (Google Books dengan ISBN, cadangan Open Library) + buku/bab buku ber-DOI dari Crossref.
@@ -238,3 +238,21 @@ Usulan (disetujui arahnya 2026-11-09, K17–K20; implementasi belum dimulai):
 4. UI: status "Sedang diaudit (putaran n/2)", isi disembunyikan sampai selesai (K19); hasil diberi label "Lolos audit"
    + ringkasan perbaikan. Berlaku di semua mode, termasuk ringkas.
 5. Urutan: Laporan dulu (perluas `auditChapter` + step audit akhir di `report-jobs.ts`), lalu Presentasi (K20).
+
+### Status
+- **Laporan: selesai dibangun 2026-11-09 (belum di-commit/deploy).**
+  - `src/lib/report/final-review.ts`: `checkReportLocally` (bab hilang, placeholder gagal/terpotong, `[ISI DATA]`,
+    heading kosong, sitasi di luar sumber terpilih, jumlah sumber dikutip) + `reviewReport` (AI_MODEL_REVIEW, JSON vonis,
+    vonis dihitung dari tingkat masalah, bukan kata "lulus" dari model; bila AI gagal → vonis dari cek otomatis, ditandai).
+  - `report-jobs.ts`: step baru `review:<n>` (selalu ada di akhir, semua mode) dan `fix:<n>:<idx>` yang ditambahkan dinamis.
+    Review menolak → fix untuk bab bermasalah (bukan placeholder) + `review:<n+1>`; maks. 2 putaran perbaikan.
+    Step gerbang mutu tidak dihitung dalam batas 30 langkah/40 percobaan penulisan. Bab final = fix terakhir > audit bab > tulisan.
+  - Perbaikan memakai `auditChapter(..., auditorIssues)` (prompt prioritas temuan auditor, guard placeholder/penyusutan tetap).
+  - Payload job kini membawa `auditContext` (10 pesan terakhir pengguna, catatan brief, target panjang, bahasa, syarat jurnal).
+  - Job publik punya `review` (berjalan/lulus/catatan + masalah tersisa). Chat otomatis menulis "Lolos audit akhir" atau
+    "Catatan audit akhir" + daftar masalah (K17). Draft tetap baru muncul setelah job selesai (K19).
+  - UI `ReportJobProgress`: teks "Auditor AI sedang memeriksa…", info putaran, kotak hijau lolos / kuning catatan.
+  - Tes: `scripts/final-review.test.ts`; 323 tes lulus, typecheck bersih. Belum diuji ujung-ke-ujung dengan AI sungguhan
+    dan DB (butuh server), tampilan belum dicek di browser.
+  - Biaya: tiap laporan +1 s.d. 3 panggilan auditor (Sonnet, input = seluruh laporan) + perbaikan per bab bermasalah.
+- **Presentasi: belum mulai** (tahap berikutnya sesuai K20).

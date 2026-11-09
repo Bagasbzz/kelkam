@@ -15,6 +15,8 @@ export interface ReportJobEvent { t: string; level: "info" | "warn" | "error"; m
 export interface ReportJobStep {
   index: number;
   title: string;
+  /** diagram | chapter | audit | review (audit akhir) | fix (perbaikan dari auditor). */
+  kind?: "diagram" | "chapter" | "audit" | "review" | "fix";
   status: "queued" | "running" | "done" | "fallback" | "failed";
   attempts: number;
   error?: string;
@@ -22,6 +24,14 @@ export interface ReportJobStep {
   finishedAt?: string;
   tokensUsed: number;
   words: number;
+}
+export interface ReportJobReview {
+  status: "berjalan" | "lulus" | "catatan";
+  rounds: number;
+  fixes: number;
+  summary: string;
+  aiUnavailable: boolean;
+  remaining: Array<{ chapter: string | null; severity: "berat" | "sedang" | "ringan"; problem: string }>;
 }
 export interface ReportJob {
   id: string;
@@ -44,6 +54,7 @@ export interface ReportJob {
   error?: string;
   steps: ReportJobStep[];
   log: ReportJobEvent[];
+  review?: ReportJobReview;
 }
 
 interface JobPayload { success?: boolean; error?: string; job?: ReportJob; active?: ReportJob | null }

@@ -152,6 +152,7 @@ test("report-job admission creates zero-step done citation artifact without paid
     "@/lib/server/image-jobs": { startImageJob: () => { throw new Error("paid image forbidden"); } },
     "@/lib/security/redact-secrets": { sanitizeForPersistence: (value: unknown) => value },
     "@/lib/errors": { sanitizePublicErrorText: (text: string) => text }, "@/lib/report/figure-placeholders": figures, "@/lib/server/ai-budget": {},
+    "@/lib/report/final-review": { MAX_FIX_ROUNDS: 2 },
   });
   const result = await jobs.startReportJob(project("citations_only", { diagrams: [{ title: "Stale", type: "flowchart" }], figures: [{ title: "Stale paid", prompt: "do not generate" }] }), "owner", "lengkap");
   assert.equal(result.status, "done");

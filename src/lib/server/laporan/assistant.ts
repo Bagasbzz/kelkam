@@ -292,7 +292,30 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
       readLevel: s.readLevel,
       fullText: s.fullText || "",
     })),
+    // Konteks untuk auditor akhir (final-review.ts): permintaan asli pengguna + preferensi brief.
+    auditContext: intent.outputMode === "citations_only" ? undefined : {
+      language: b.language || "id",
+      targetLength: b.targetLength || "",
+      journalRequirement: b.journalRequirement ? JOURNAL_REQUIREMENT_LABEL[b.journalRequirement] : "",
+      notes: b.notes || [],
+      userMessages: await recentUserMessages(session.id),
+    },
   };
+}
+
+/** Pesan pengguna terakhir (lama → baru), dipakai auditor untuk mengecek kesesuaian dengan permintaan. */
+async function recentUserMessages(sessionId: string) {
+  try {
+    const rows = await prisma.reportMessage.findMany({
+      where: { sessionId, role: "user" },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { content: true },
+    });
+    return rows.map((row) => row.content.slice(0, 800)).reverse();
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -889,9 +912,19 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
       fileLine = "File DOCX otomatis gagal dibuat; gunakan tombol **Unduh DOCX** di tab Draft.";
     }
 
+    const review = job.review;
+    const reviewLines = !review ? [] : review.status === "lulus"
+      ? [`**Lolos audit akhir.** Auditor AI memeriksa dokumen utuh terhadap permintaanmu${review.fixes ? ` dan ${review.fixes} bab sudah diperbaiki sebelum dikirim` : ""}.`, ""]
+      : [
+        `**Catatan audit akhir:** ${review.aiUnavailable ? "auditor AI tidak tersedia saat ini, jadi hanya pemeriksaan otomatis yang dijalankan." : `setelah ${review.rounds} kali audit${review.fixes ? ` dan ${review.fixes} perbaikan bab` : ""}, masih ada hal yang perlu kamu cek.`}`,
+        ...review.remaining.slice(0, 8).map((issue) => `- ${issue.chapter ? `${issue.chapter}: ` : ""}${issue.problem}`),
+        ...(review.remaining.length > 8 ? [`- dan ${review.remaining.length - 8} catatan lain.`] : []),
+        "",
+      ];
     const content = [
       `Laporan **${title}** selesai disusun: ${chapters.length} bab, ${diagramsDone} diagram, ±${words.toLocaleString("id-ID")} kata.`,
       "",
+      ...reviewLines,
       fileLine,
       "",
       "Catatan:",

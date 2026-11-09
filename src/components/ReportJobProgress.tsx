@@ -81,8 +81,14 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
   // Macet: server tidak menyentuh job > 75s padahal belum selesai.
   const stuck = active && !polling && idle > 75;
   const stalled = active && polling && idle > 100;
-  const hasFallback = job.steps.some((s) => s.status === "fallback");
+  const hasFallback = job.steps.some((s) => s.status === "fallback" && (!s.kind || s.kind === "chapter"));
   const runningStep = job.steps.find((s) => s.status === "running");
+  const runningVerb = runningStep?.kind === "review" ? "Auditor AI sedang memeriksa"
+    : runningStep?.kind === "fix" ? "Sedang memperbaiki"
+      : runningStep?.kind === "audit" ? "Sedang mengaudit"
+        : runningStep?.kind === "diagram" ? "Sedang membuat"
+          : "Sedang menulis";
+  const runningTitle = runningStep?.title.replace(/^(Diagram|Audit|Perbaikan):\s*/, "");
 
   return (
     <div className="rounded-xl border border-blue-100 bg-blue-50 p-4 text-slate-800">
@@ -102,9 +108,35 @@ export default function ReportJobProgress({ job, polling, onResume, onRetry, onC
 
       {runningStep && active && (
         <p className="mt-2 text-sm text-blue-700">
-          Sedang menulis <b>{runningStep.title}</b>, {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
-          {runningStep.attempts > 1 ? ` (percobaan ${runningStep.attempts})` : ""}. Satu bagian biasanya 15-60 dtk.
+          {runningVerb} <b>{runningTitle}</b>, {seconds(runningStep.startedAt, undefined, nowMs ? nowMs - clockOffsetMs : undefined) ?? 0} dtk
+          {runningStep.attempts > 1 ? ` (percobaan ${runningStep.attempts})` : ""}.{" "}
+          {runningStep.kind === "review"
+            ? "Laporan dibaca utuh dan dicocokkan dengan permintaanmu sebelum dikirim."
+            : "Satu bagian biasanya 15-60 dtk."}
         </p>
+      )}
+
+      {active && job.review?.status === "berjalan" && (job.review.rounds > 0 || job.review.fixes > 0) && (
+        <p className="mt-1 text-xs text-blue-700">
+          Audit akhir: {job.review.rounds} pemeriksaan selesai, {job.review.fixes} bab sudah diperbaiki. Hasil dikirim setelah lolos audit (maks. 2 putaran perbaikan).
+        </p>
+      )}
+
+      {job.status === "done" && job.review && job.review.status !== "berjalan" && (
+        job.review.status === "lulus" ? (
+          <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+            <b>Lolos audit akhir.</b> {job.review.summary}{job.review.fixes ? ` (${job.review.fixes} bab diperbaiki sebelum dikirim)` : ""}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <b>Selesai dengan catatan audit.</b> {job.review.aiUnavailable ? "Auditor AI tidak tersedia, hanya pemeriksaan otomatis yang dijalankan." : job.review.summary}
+            {job.review.remaining.length > 0 && (
+              <ul className="mt-1 list-disc pl-4">
+                {job.review.remaining.slice(0, 6).map((issue, i) => <li key={i}>{issue.chapter ? <b>{issue.chapter}: </b> : null}{issue.problem}</li>)}
+              </ul>
+            )}
+          </div>
+        )
       )}
 
       {(stuck || stalled) && (

@@ -47,23 +47,54 @@ import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
 import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
+import { blocksApproval, checkReportLocally, fixInstructions, MAX_FIX_ROUNDS, parseVerdict, reviewReport, type ReviewChapter, type ReviewSeverity } from "@/lib/report/final-review";
 
 // ---------------------------------------------------------------------------
 // Jenis step. Disimpan lewat prefix `sectionId` supaya tidak perlu kolom baru:
-//   "diagram:<id>" → buat diagram UML via engine UML Builder (sebelum bab)
-//   "<sectionId>"  → tulis satu bab
-//   "audit:<idx>"  → audit & perbaiki bab pada step index <idx> (setelah semua bab)
+//   "diagram:<id>"       → buat diagram UML via engine UML Builder (sebelum bab)
+//   "<sectionId>"        → tulis satu bab
+//   "audit:<idx>"        → audit & perbaiki bab pada step index <idx> (setelah semua bab)
+//   "review:<round>"     → audit akhir dokumen utuh oleh AI auditor (gerbang mutu)
+//   "fix:<round>:<idx>"  → perbaiki bab <idx> sesuai temuan review putaran <round>
+// Step review/fix ditambahkan dinamis: review menolak → fix per bab + review ulang.
 // ---------------------------------------------------------------------------
 
-export type ReportStepKind = "diagram" | "chapter" | "audit";
+export type ReportStepKind = "diagram" | "chapter" | "audit" | "review" | "fix";
 
 const DIAGRAM_PREFIX = "diagram:";
 const AUDIT_PREFIX = "audit:";
+const REVIEW_PREFIX = "review:";
+const FIX_PREFIX = "fix:";
 
 export function stepKind(sectionId: string | null | undefined): ReportStepKind {
   if (sectionId?.startsWith(DIAGRAM_PREFIX)) return "diagram";
   if (sectionId?.startsWith(AUDIT_PREFIX)) return "audit";
+  if (sectionId?.startsWith(REVIEW_PREFIX)) return "review";
+  if (sectionId?.startsWith(FIX_PREFIX)) return "fix";
   return "chapter";
+}
+
+function reviewRound(sectionId: string | null | undefined) {
+  return Number((sectionId || "").slice(REVIEW_PREFIX.length)) || 1;
+}
+
+function parseFixId(sectionId: string | null | undefined) {
+  const [round, target] = (sectionId || "").slice(FIX_PREFIX.length).split(":").map(Number);
+  return { round: round || 1, target: Number.isFinite(target) ? target : -1 };
+}
+
+/** Step gerbang mutu dibatasi strukturnya sendiri, tidak memakan batas langkah/percobaan penulisan. */
+function isQualityGateStep(sectionId: string | null | undefined) {
+  const kind = stepKind(sectionId);
+  return kind === "review" || kind === "fix";
+}
+
+function countedAttempts(steps: Array<{ sectionId: string | null; attempts: number }>) {
+  return steps.filter((step) => !isQualityGateStep(step.sectionId)).reduce((sum, step) => sum + step.attempts, 0);
+}
+
+function countedSteps(steps: Array<{ sectionId: string | null }>) {
+  return steps.filter((step) => !isQualityGateStep(step.sectionId)).length;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +149,20 @@ export interface ReportJob {
   error?: string;
   steps: ReportJobStep[];
   log: ReportJobEvent[];
+  /** Hasil gerbang mutu (audit akhir). Tidak ada untuk job lama / sitasi saja. */
+  review?: ReportReviewSummary;
+}
+
+export interface ReportReviewSummary {
+  /** berjalan = audit belum selesai; lulus = disetujui auditor; catatan = dikirim dengan masalah tersisa (K17). */
+  status: "berjalan" | "lulus" | "catatan";
+  /** Jumlah audit yang sudah selesai. */
+  rounds: number;
+  /** Jumlah perbaikan bab yang berhasil diterapkan. */
+  fixes: number;
+  summary: string;
+  aiUnavailable: boolean;
+  remaining: Array<{ chapter: string | null; severity: ReviewSeverity; problem: string }>;
 }
 
 export interface ReportJobSummary {
@@ -223,6 +268,7 @@ function toPublic(row: JobRow): ReportJob {
   const heartbeat = row.heartbeatAt ?? row.updatedAt;
   const doneSteps = row.steps.filter((step) => isStepFinished(step.status)).length;
   const finished = isJobFinished(row.status);
+  const review = reviewSummaryOf(row.steps);
   return {
     id: row.id,
     title: row.title,
@@ -252,9 +298,33 @@ function toPublic(row: JobRow): ReportJob {
       startedAt: step.startedAt?.toISOString(),
       finishedAt: step.finishedAt?.toISOString(),
       tokensUsed: step.tokensUsed,
-      words: countWords(step.output),
+      // Output step review berupa JSON vonis, bukan teks laporan.
+      words: stepKind(step.sectionId) === "review" ? 0 : countWords(step.output),
     })),
     log: parseLog(row.log),
+    ...(review ? { review } : {}),
+  };
+}
+
+/** Ringkasan gerbang mutu dari step review/fix. */
+function reviewSummaryOf(steps: Array<{ sectionId: string | null; status: string; output: string | null }>): ReportReviewSummary | undefined {
+  const reviews = steps.filter((step) => stepKind(step.sectionId) === "review").sort((a, b) => reviewRound(a.sectionId) - reviewRound(b.sectionId));
+  if (!reviews.length) return undefined;
+  const finishedReviews = reviews.filter((step) => isStepFinished(step.status));
+  const fixes = steps.filter((step) => stepKind(step.sectionId) === "fix" && step.status === "done" && step.output).length;
+  const pending = reviews.some((step) => !isStepFinished(step.status)) || steps.some((step) => stepKind(step.sectionId) === "fix" && !isStepFinished(step.status));
+  const last = finishedReviews.at(-1);
+  if (pending || !last) return { status: "berjalan", rounds: finishedReviews.length, fixes, summary: "", aiUnavailable: false, remaining: [] };
+  const verdict = parseVerdict(last.output);
+  if (!verdict) return { status: "catatan", rounds: finishedReviews.length, fixes, summary: "Audit akhir tidak dapat dijalankan; hasil belum diperiksa auditor.", aiUnavailable: true, remaining: [] };
+  const remaining = verdict.issues.filter(blocksApproval).map((issue) => ({ chapter: issue.chapter, severity: issue.severity, problem: issue.problem }));
+  return {
+    status: verdict.verdict === "lulus" && !verdict.aiUnavailable ? "lulus" : "catatan",
+    rounds: finishedReviews.length,
+    fixes,
+    summary: verdict.summary,
+    aiUnavailable: verdict.aiUnavailable,
+    remaining,
   };
 }
 
@@ -404,9 +474,11 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
       seeds.push({ sectionId: `${AUDIT_PREFIX}${chapterStart + index}`, title: `Audit: ${section.title || `Bagian ${index + 1}`}` });
     });
   }
-  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit` : "tanpa audit (mode ringkas)"}` });
+  // Gerbang mutu (K17–K20): audit akhir dokumen utuh di semua mode; perbaikan + audit ulang ditambahkan dinamis.
+  if (!deterministic) seeds.push({ sectionId: `${REVIEW_PREFIX}1`, title: "Audit akhir dokumen" });
+  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit bab` : "tanpa audit per bab (mode ringkas)"} → audit akhir (maks. ${MAX_FIX_ROUNDS} putaran perbaikan)` });
 
-  if (seeds.length > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 30 langkah dan 3 ilustrasi.");
+  if (countedSteps(seeds) > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 30 langkah dan 3 ilustrasi.");
   const row = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
     await expireAbandonedJobs(tx);
@@ -477,7 +549,7 @@ export async function retryReportJob(id: string, ownerId: string, opts: { redoFa
   const row = await readJob(id, ownerId);
   if (!row) return null;
   if (row.createdAt.getTime() < Date.now() - JOB_TTL_MS) throw new AiBudgetError("Job kedaluwarsa. Buat laporan baru untuk melanjutkan.");
-  if (row.steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) throw new AiBudgetError("Batas percobaan laporan tercapai.");
+  if (countedAttempts(row.steps) >= MAX_TOTAL_ATTEMPTS) throw new AiBudgetError("Batas percobaan laporan tercapai.");
   if (["failed", "cancelled", "done"].includes(row.status)) {
     await prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
@@ -573,7 +645,7 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
 
   // Step "running" milik proses lain yang masih hidup → tunggu.
   if (hasLiveStep(row, now)) return toPublic(row);
-  if (row.totalSteps > MAX_TOTAL_STEPS || steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) {
+  if (countedSteps(steps) > MAX_TOTAL_STEPS || countedAttempts(steps) >= MAX_TOTAL_ATTEMPTS) {
     await appendLog(row.id, log, "error", "Batas langkah atau percobaan laporan tercapai.", { status: "failed", error: "Batas pemrosesan laporan tercapai." });
     return toPublic((await readJob(row.id, ownerId))!);
   }
@@ -616,12 +688,13 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
     log.push({ t: new Date().toISOString(), level: "warn", msg: `Langkah ${next.index + 1} terdeteksi macet (>${Math.round(STALE_STEP_MS / 1000)}s), diulang` });
   }
 
-  const verb = kind === "diagram" ? "Membuat" : kind === "audit" ? "Mengaudit" : "Menulis";
+  const verb = kind === "diagram" ? "Membuat" : kind === "audit" ? "Mengaudit" : kind === "fix" ? "Memperbaiki" : "Menulis";
+  const stageLabel = kind === "review" ? next.title : `${verb} ${next.title.replace(/^(Diagram|Audit|Perbaikan):\s*/, "")}`;
   const claimTime = new Date();
   const claimed = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM report_jobs WHERE id = ${row.id} FOR UPDATE`;
     const current = await tx.reportJob.findFirst({ where: { id: row.id, ownerId, status: { in: ["queued", "running"] } }, include: { steps: true } });
-    if (!current || hasLiveStep(current) || current.steps.reduce((sum, step) => sum + step.attempts, 0) >= MAX_TOTAL_ATTEMPTS) return false;
+    if (!current || hasLiveStep(current) || countedAttempts(current.steps) >= MAX_TOTAL_ATTEMPTS) return false;
     const claim = await tx.reportJobStep.updateMany({
       where: { id: next.id, status: next.status, attempts: next.attempts, updatedAt: next.updatedAt },
       data: { status: "running", attempts: { increment: 1 }, error: null, startedAt: claimTime, finishedAt: null },
@@ -631,7 +704,7 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
       where: { id: row.id },
       data: {
         status: "running",
-        stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps})`,
+        stage: `${stageLabel} (${next.index + 1}/${row.totalSteps})`,
         progress: progressFor(doneBefore, row.totalSteps),
         heartbeatAt: new Date(),
       },
@@ -653,7 +726,7 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
   const savePartial = async (text: string) => {
     await prisma.$transaction([
       prisma.reportJobStep.updateMany({ where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } }, data: { output: text } }),
-      prisma.reportJob.updateMany({ where: { id: row.id, status: "running" }, data: { heartbeatAt: new Date(), stage: `${verb} ${next.title.replace(/^(Diagram|Audit):\s*/, "")} (${next.index + 1}/${row.totalSteps}) · ${countWords(text)} kata` } }),
+      prisma.reportJob.updateMany({ where: { id: row.id, status: "running" }, data: { heartbeatAt: new Date(), stage: `${stageLabel} (${next.index + 1}/${row.totalSteps}) · ${countWords(text)} kata` } }),
     ]);
   };
   const onPartial = (text: string) => {
@@ -693,7 +766,9 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
     const staleChapter = kind === "chapter" && outlineIndex < 0;
     const auditTarget = kind === "audit" ? row.steps.find((step) => step.index === Number((next.sectionId || "").slice(AUDIT_PREFIX.length))) : undefined;
     const staleAudit = kind === "audit" && !compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === auditTarget?.sectionId);
-    if (compact.intent.outputMode === "citations_only" || staleDiagram || staleChapter || staleAudit) {
+    const fixTarget = kind === "fix" ? row.steps.find((step) => step.index === parseFixId(next.sectionId).target) : undefined;
+    const staleFix = kind === "fix" && (!fixTarget || stepKind(fixTarget.sectionId) !== "chapter");
+    if (compact.intent.outputMode === "citations_only" || staleDiagram || staleChapter || staleAudit || staleFix) {
       await prisma.reportJobStep.updateMany({
         where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
         data: { status: "done", output: "", summary: "Dilewati sesuai kontrak mode/scope/visual", finishedAt: new Date() },
@@ -703,6 +778,10 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
       await runDiagramStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, project, onEvent);
     } else if (kind === "audit") {
       await runAuditStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, steps, project, mode, onEvent);
+    } else if (kind === "review") {
+      await runReviewStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, project, onEvent, controller.signal);
+    } else if (kind === "fix") {
+      await runFixStep(row, { ...next, attempts: attemptNo, startedAt: claimTime }, project, mode, onEvent);
     } else {
       const chapter = await generateChapter(project, chapterInput);
       controller.signal.throwIfAborted();
@@ -990,6 +1069,138 @@ async function runAuditStep(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Gerbang mutu: audit akhir dokumen utuh → perbaikan per bab → audit ulang
+// ---------------------------------------------------------------------------
+
+interface FinalChapter extends ReviewChapter {
+  /** index step bab asal (dipakai sebagai target perbaikan). */
+  stepIndex: number;
+}
+
+/**
+ * Isi final tiap bab, berurutan: perbaikan terakhir (fix) > hasil audit per bab > tulisan asli.
+ * Hanya bab yang masih ada di outline dan sudah selesai ditulis.
+ */
+function finalChapters(row: Pick<JobRow, "payload" | "steps">): FinalChapter[] {
+  const compact = compactProject(row.payload);
+  const auditByTarget = new Map<number, string>();
+  const fixByTarget = new Map<number, { round: number; output: string }>();
+  for (const step of row.steps) {
+    const kind = stepKind(step.sectionId);
+    if (kind === "audit" && step.status === "done" && step.output) {
+      auditByTarget.set(Number((step.sectionId || "").slice(AUDIT_PREFIX.length)), step.output);
+    } else if (kind === "fix" && step.status === "done" && step.output) {
+      const { round, target } = parseFixId(step.sectionId);
+      const current = fixByTarget.get(target);
+      if (!current || round > current.round) fixByTarget.set(target, { round, output: step.output });
+    }
+  }
+  return row.steps
+    .filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId))
+    .filter((step) => isStepFinished(step.status) && step.output)
+    .sort((a, b) => a.index - b.index)
+    .map((step) => ({
+      stepIndex: step.index,
+      title: step.title,
+      content: fixByTarget.get(step.index)?.output ?? auditByTarget.get(step.index) ?? (step.output as string),
+      placeholder: step.status === "fallback",
+    }));
+}
+
+async function runReviewStep(
+  row: JobRow,
+  step: JobRow["steps"][number],
+  project: unknown,
+  emit: (message: string) => void,
+  signal: AbortSignal,
+) {
+  const round = reviewRound(step.sectionId);
+  const chapters = finalChapters(row);
+  const localIssues = checkReportLocally(project, chapters);
+  const previousStep = row.steps.find((item) => stepKind(item.sectionId) === "review" && reviewRound(item.sectionId) === round - 1);
+  const previousIssues = parseVerdict(previousStep?.output)?.issues.filter(blocksApproval);
+  emit(`Pemeriksaan otomatis: ${localIssues.length ? `${localIssues.length} temuan` : "tidak ada temuan"}`);
+  const verdict = await reviewReport(project, { chapters, round, localIssues, previousIssues, onEvent: emit, signal });
+  signal.throwIfAborted();
+
+  // Bab yang bisa diperbaiki otomatis: punya masalah berat/sedang, bukan placeholder (penulisan gagal total).
+  const byChapter = new Map<string, FinalChapter>(chapters.map((chapter) => [chapter.title, chapter]));
+  const targets = verdict.verdict === "perbaiki" && !verdict.aiUnavailable && round <= MAX_FIX_ROUNDS
+    ? chapters.filter((chapter) => !chapter.placeholder && verdict.issues.some((issue) => issue.chapter === chapter.title && blocksApproval(issue)))
+    : [];
+  const unassigned = verdict.issues.filter((issue) => blocksApproval(issue) && (!issue.chapter || !byChapter.has(issue.chapter)));
+
+  await prisma.$transaction(async (tx) => {
+    const saved = await tx.reportJobStep.updateMany({
+      where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
+      data: {
+        status: "done",
+        output: JSON.stringify(verdict),
+        summary: `${verdict.verdict === "lulus" ? "Lulus" : "Perlu perbaikan"}: ${verdict.summary}`.slice(0, 400),
+        tokensUsed: verdict.tokensUsed,
+        finishedAt: new Date(),
+      },
+    });
+    if (saved.count !== 1 || !targets.length) return;
+    const maxIndex = Math.max(...row.steps.map((item) => item.index));
+    const extra = [
+      ...targets.map((chapter, i) => ({ index: maxIndex + 1 + i, sectionId: `${FIX_PREFIX}${round}:${chapter.stepIndex}`, title: `Perbaikan: ${chapter.title}` })),
+      { index: maxIndex + 1 + targets.length, sectionId: `${REVIEW_PREFIX}${round + 1}`, title: `Audit ulang setelah perbaikan ${round}/${MAX_FIX_ROUNDS}` },
+    ];
+    await tx.reportJobStep.createMany({ data: extra.map((item) => ({ ...item, jobId: row.id, status: "queued" })) });
+    await tx.reportJob.update({ where: { id: row.id }, data: { totalSteps: { increment: extra.length } } });
+  });
+
+  if (verdict.verdict === "lulus") emit(`Audit akhir putaran ${round}: LULUS. ${verdict.summary}`);
+  else if (targets.length) emit(`Audit akhir putaran ${round}: ${targets.length} bab diperbaiki lalu diaudit ulang (${targets.map((chapter) => chapter.title).join(", ")})`);
+  else emit(`Audit akhir putaran ${round}: masih ada ${verdict.issues.filter(blocksApproval).length} masalah; ${round > MAX_FIX_ROUNDS ? "batas putaran tercapai" : "tidak bisa diperbaiki otomatis"}, hasil dikirim dengan catatan`);
+  if (unassigned.length && targets.length) emit(`${unassigned.length} masalah umum dicatat untuk pengguna (tidak terkait satu bab)`);
+}
+
+async function runFixStep(
+  row: JobRow,
+  step: JobRow["steps"][number],
+  project: unknown,
+  mode: ReportMode,
+  emit: (message: string) => void,
+) {
+  const { round, target } = parseFixId(step.sectionId);
+  const chapters = finalChapters(row);
+  const chapter = chapters.find((item) => item.stepIndex === target);
+  const reviewStep = row.steps.find((item) => stepKind(item.sectionId) === "review" && reviewRound(item.sectionId) === round);
+  const issues = parseVerdict(reviewStep?.output)?.issues.filter((issue) => chapter && issue.chapter === chapter.title) || [];
+  if (!chapter || !issues.length) {
+    await prisma.reportJobStep.updateMany({
+      where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
+      data: { status: "fallback", error: "tidak ada temuan untuk bab ini", finishedAt: new Date() },
+    });
+    emit("Tidak ada temuan auditor untuk bab ini, dilewati");
+    return;
+  }
+  const position = Math.max(0, chapters.findIndex((item) => item.stepIndex === target));
+  const result = await auditChapter(project, {
+    content: chapter.content,
+    sectionTitle: chapter.title,
+    index: position,
+    total: chapters.length || 1,
+    mode,
+    onEvent: emit,
+    auditorIssues: fixInstructions(issues),
+  });
+  await prisma.reportJobStep.updateMany({
+    where: { id: step.id, attempts: step.attempts, startedAt: step.startedAt, status: "running", job: { status: "running" } },
+    data: {
+      status: result.changed ? "done" : "fallback",
+      output: result.changed ? result.content : null,
+      summary: `${issues.length} temuan auditor`,
+      tokensUsed: result.tokensUsed,
+      error: result.changed ? null : "perbaikan tidak menghasilkan versi yang lebih baik",
+      finishedAt: new Date(),
+    },
+  });
+}
+
 /** Keep recoverable markers intact; report missing/pending assets through logs. */
 async function annotateMissingFigures(markdown: string, payload: unknown, ownerId: string) {
   const compact = compactProject(payload);
@@ -1031,19 +1242,11 @@ async function annotateMissingFigures(markdown: string, payload: unknown, ownerI
 
 async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]): Promise<ReportJob> {
   const compact = compactProject(row.payload);
-  // Bab final = output audit (bila ada & berhasil) atau output bab.
-  const auditByTarget = new Map<number, string>();
-  for (const step of row.steps) {
-    if (stepKind(step.sectionId) === "audit" && step.status === "done" && step.output) {
-      auditByTarget.set(Number((step.sectionId || "").slice(AUDIT_PREFIX.length)), step.output);
-    }
-  }
-  const chapterSteps = row.steps
-    .filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId))
-    .sort((a, b) => a.index - b.index);
-  const chapters = chapterSteps
-    .filter((step) => isStepFinished(step.status) && step.output)
-    .map((step) => auditByTarget.get(step.index) ?? (step.output as string));
+  // Bab final = perbaikan auditor terakhir > audit per bab > tulisan asli.
+  const finals = finalChapters(row);
+  const chapters = finals.map((chapter) => chapter.content);
+  const chapterSteps = row.steps.filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId));
+  const auditedCount = row.steps.filter((step) => stepKind(step.sectionId) === "audit" && step.status === "done" && step.output).length;
 
   if (!chapters.length && compact.intent.outputMode !== "citations_only") {
     await appendLog(row.id, log, "error", "Tidak ada bagian yang berhasil ditulis", {
@@ -1058,7 +1261,7 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
 
   const fallbackCount = chapterSteps.filter((step) => step.status === "fallback").length;
   const diagramsDone = extractDiagramArtifacts(row.payload).length;
-  const auditedCount = auditByTarget.size;
+  const review = reviewSummaryOf(row.steps);
   const assembled = assembleReport(row.payload, chapters);
   const { result, missing, pending, insertedTitles } = await annotateMissingFigures(assembled, row.payload, ownerId);
   const totalWords = countWords(result);
@@ -1068,6 +1271,11 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
   }
   if (pending.length) await appendLog(row.id, log, "warn", `${pending.length} gambar masih diproses: ${pending.slice(0, 4).join("; ")}`);
   if (insertedTitles.length) await appendLog(row.id, log, "info", `${insertedTitles.length} penanda gambar dipulihkan dari rencana`);
+  if (review) {
+    await appendLog(row.id, log, review.status === "lulus" ? "info" : "warn", review.status === "lulus"
+      ? `Lolos audit akhir (${review.rounds} audit, ${review.fixes} perbaikan bab)`
+      : `Audit akhir selesai dengan catatan: ${review.remaining.length} masalah tersisa setelah ${review.rounds} audit${review.aiUnavailable ? " (auditor AI tidak tersedia)" : ""}`);
+  }
   await appendLog(
     row.id,
     log,
@@ -1078,7 +1286,11 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
       progress: 100,
       stage: fallbackCount
         ? `Laporan selesai, ${fallbackCount} bagian perlu dilengkapi lewat revisi`
-        : "Laporan selesai disusun",
+        : review?.status === "lulus"
+          ? "Laporan selesai dan lolos audit"
+          : review
+            ? "Laporan selesai dengan catatan audit"
+            : "Laporan selesai disusun",
       result,
       source: fallbackCount ? "ai-partial" : "ai",
       error: null,
