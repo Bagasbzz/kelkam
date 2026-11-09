@@ -14,11 +14,18 @@
 import { searchSemanticScholar } from "./semantic-scholar";
 import { searchOpenAlex } from "./openalex";
 import { searchCrossref, verifyCrossrefDoi } from "./crossref";
+import { searchBooks } from "./books";
 import { checkPdfUrls, type PdfStatus } from "./verify-pdf";
 import { fetchWithRetryAndCache, isRecord } from "./provider-client";
 import type { ProviderPaper, SearchOptions } from "./types";
 import { buildJournalCheckLinks, normalizeJournalIssns, type JournalVerification } from "./journal-check";
 import type { JournalVerificationResult } from "./journal-verifier";
+import { classifySourceKind, formatApaCitation, normalizeSourceKinds, publicationDetail, type SourceKind } from "./source-kind";
+
+export type { SourceKind } from "./source-kind";
+
+/** Cara sumber diverifikasi; tiap jenis punya bukti berbeda. */
+export type SourceVerificationMethod = "crossref-doi" | "google-books-isbn" | "open-library" | "openalex";
 
 export type JournalRequirement =
   | "bebas"
@@ -67,12 +74,23 @@ export interface VerifiedSource {
   fullText?: string;
   /** Jumlah karakter teks penuh asli sebelum dipotong. */
   fullTextChars?: number;
+  /** Jenis sumber. Sesi lama tidak punya field ini; pakai `sourceKindOf`. */
+  kind?: SourceKind;
+  /** Tipe publikasi mentah dari provider (mis. book-chapter, dissertation). */
+  publicationType?: string | null;
+  publisher?: string | null;
+  isbn?: string[];
+  /** Lolos verifikasi sesuai jenisnya (DOI Crossref, ISBN, atau katalog). */
+  verified?: boolean;
+  verifiedBy?: SourceVerificationMethod;
 }
 
 export interface FindSourcesOptions extends SearchOptions {
   requirement?: JournalRequirement;
   /** Minimum DOI terverifikasi; default true (sumber tanpa DOI valid dibuang). */
   requireDoi?: boolean;
+  /** Jenis sumber yang dicari. Kosong = campuran bawaan (jurnal mayoritas). */
+  kinds?: SourceKind[];
   /** Callback progres (untuk UI live). */
   onProgress?: (text: string) => void;
 }
@@ -138,6 +156,9 @@ export function mergeAndDeduplicate(
       if (!merged.abstract && paper.abstract) merged.abstract = paper.abstract;
       if (!merged.url && paper.url) merged.url = paper.url;
       if (!merged.venue && paper.venue) merged.venue = paper.venue;
+      if (!merged.publisher && paper.publisher) merged.publisher = paper.publisher;
+      if (!merged.publicationType && paper.publicationType) merged.publicationType = paper.publicationType;
+      if (paper.isbn?.length) merged.isbn = Array.from(new Set([...(merged.isbn || []), ...paper.isbn]));
       if (!merged.authors?.length) merged.authors = paper.authors || [];
       merged.issn = normalizeJournalIssns([...(merged.issn || []), ...(paper.issn || [])]);
       if (merged.inDoaj === undefined && paper.inDoaj !== undefined) merged.inDoaj = paper.inDoaj;
@@ -174,14 +195,22 @@ export function toApaFromProvider(paper: ProviderPaper) {
   return `${authors || "Penulis tidak tersedia"} (${year}). ${title}.${venue ? ` ${venue}.` : ""}${doi ? ` ${doiToUrl(doi)}` : ""}`;
 }
 
-function qualitySignals(p: ProviderPaper, pdfStatus: PdfStatus): string[] {
+function qualitySignals(p: ProviderPaper, pdfStatus: PdfStatus, kind: SourceKind = "journal", verifiedBy?: SourceVerificationMethod): string[] {
   const out: string[] = [];
+  const detail = publicationDetail(kind, p.publicationType);
   if (p.doiVerified) out.push("DOI terverifikasi Crossref");
+  if (verifiedBy === "google-books-isbn" && p.isbn?.length) out.push(`ISBN ${p.isbn[0]} (Google Books)`);
+  else if (verifiedBy === "open-library") out.push("Tercatat di katalog Open Library");
+  else if (verifiedBy === "openalex") out.push("Tercatat di OpenAlex");
+  if (kind === "book") out.push(detail);
+  else if (kind === "thesis") out.push(`${detail} (belum tentu peer-review)`);
+  else if (kind === "official") out.push(detail);
   if (p.inDoaj) out.push("Terindeks DOAJ");
-  if (p.venueType === "journal") out.push("Diterbitkan di jurnal");
-  else if (p.venueType === "conference") out.push("Prosiding konferensi");
-  else if (p.venueType === "repository") out.push("Repositori/preprint (belum tentu peer-review)");
-  if (p.issn?.length) out.push(`ISSN ${p.issn[0]}`);
+  if (kind === "journal") {
+    if (p.venueType === "journal") out.push("Diterbitkan di jurnal");
+    else if (p.venueType === "conference") out.push("Prosiding konferensi");
+  }
+  if (p.issn?.length && kind === "journal") out.push(`ISSN ${p.issn[0]}`);
   if ((p.citationCount || 0) >= 50) out.push(`${p.citationCount} sitasi`);
   if (pdfStatus === "verified") out.push("Tautan PDF terverifikasi");
   else if (pdfStatus === "landing_page") out.push("Halaman penerbit tersedia");
@@ -254,14 +283,72 @@ export function scoreSource(p: ProviderPaper, terms: string[], nowYear = new Dat
   return Math.round((relevance * 0.6 + recency * 0.3 + citations * 0.1) * 100);
 }
 
-/** Only narrow to journal candidates; ISSN/DOAJ cannot establish any requested rank. */
-function passesRequirement(p: ProviderPaper, req: JournalRequirement | undefined) {
-  if (!req || req === "bebas") return true;
+/**
+ * Syarat SINTA/Scopus hanya menyaring kandidat JURNAL; ISSN/DOAJ tidak membuktikan
+ * peringkat. Buku/laporan tidak terkena syarat ini.
+ */
+function passesRequirement(p: ProviderPaper, kind: SourceKind, req: JournalRequirement | undefined) {
+  if (!req || req === "bebas" || kind !== "journal") return true;
   return p.venueType === "journal" || (!p.venueType && Boolean(p.venue));
+}
+
+/** Campuran bawaan: syarat jurnal ketat → tanpa preprint/skripsi. */
+function defaultKinds(req: JournalRequirement | undefined): SourceKind[] {
+  return !req || req === "bebas" ? ["journal", "book", "thesis", "official"] : ["journal", "book"];
+}
+
+function isFrom(p: ProviderPaper, provider: string) {
+  return p.source === provider || Boolean(p.sourceProviders?.includes(provider));
+}
+
+/** Bukti verifikasi per jenis; null = tidak lolos. */
+function verificationOf(p: ProviderPaper, kind: SourceKind): SourceVerificationMethod | null {
+  if (p.doiVerified) return "crossref-doi";
+  // DOI DataCite (arXiv, Zenodo, repositori kampus) tidak ada di Crossref; cukup tercatat di OpenAlex.
+  if (kind === "thesis" && isFrom(p, "openalex") && p.url) return "openalex";
+  if (p.doi) return null;
+  if (kind === "book" && isFrom(p, "google-books") && p.isbn?.length) return "google-books-isbn";
+  if (kind === "book" && isFrom(p, "open-library")) return "open-library";
+  return null;
+}
+
+type Candidate = { paper: ProviderPaper; kind: SourceKind; score: number };
+
+/**
+ * Jurnal tetap mayoritas saat campuran: tiap jenis non-jurnal maks. ±1/4 limit,
+ * total non-jurnal maks. 40%. Sisa kuota diisi kandidat berikutnya bila jurnal kurang.
+ */
+function pickWithQuota<T extends Candidate>(items: T[], kinds: SourceKind[], limit: number): T[] {
+  if (kinds.length === 1 || !kinds.includes("journal")) return items.slice(0, limit);
+  const perKind = Math.max(1, Math.round(limit / 4));
+  const nonJournalCap = Math.max(1, Math.floor(limit * 0.4));
+  const counts = new Map<SourceKind, number>();
+  let nonJournal = 0;
+  const picked: T[] = [];
+  const rest: T[] = [];
+  for (const item of items) {
+    if (picked.length >= limit) break;
+    if (item.kind === "journal") { picked.push(item); continue; }
+    const count = counts.get(item.kind) || 0;
+    if (count < perKind && nonJournal < nonJournalCap) {
+      counts.set(item.kind, count + 1);
+      nonJournal += 1;
+      picked.push(item);
+    } else {
+      rest.push(item);
+    }
+  }
+  for (const item of rest) {
+    if (picked.length >= limit) break;
+    picked.push(item);
+  }
+  return picked.sort((a, b) => b.score - a.score);
 }
 
 export async function findVerifiedSources(query: string, options: FindSourcesOptions = {}): Promise<VerifiedSource[]> {
   const limit = Math.min(Number(options.limit || 6), 25);
+  const requested = normalizeSourceKinds(options.kinds);
+  const kinds = requested.length ? requested : defaultKinds(options.requirement);
   const searchOptions: SearchOptions = {
     limit: Math.min(limit * 3, 40),
     yearFrom: options.yearFrom ?? null,
@@ -269,53 +356,79 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     openAccessOnly: Boolean(options.openAccessOnly),
   };
   const progress = options.onProgress ?? (() => {});
-  const [ss, oa, cr] = await Promise.all([
+  const wantsBooks = kinds.includes("book");
+  const [ss, oa, cr, books] = await Promise.all([
     searchSemanticScholar(query, searchOptions),
     searchOpenAlex(query, searchOptions),
     searchCrossref(query, searchOptions),
+    wantsBooks && !options.openAccessOnly ? searchBooks(query, { ...searchOptions, limit: Math.min(limit * 2, 20) }) : Promise.resolve([] as ProviderPaper[]),
   ]);
-  const merged = mergeAndDeduplicate([ss, oa, cr]).filter((p) => p.title && (options.requireDoi === false || p.doi));
-  progress(`${merged.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}), memverifikasi DOI…`);
-
-  // Urutkan dulu berdasarkan relevansi + kebaruan supaya kandidat terbaik yang diverifikasi.
   const terms = queryTerms(query);
-  const ranked = merged
-    .map((p) => ({ p, score: scoreSource(p, terms) }))
+  const candidates: Candidate[] = mergeAndDeduplicate([ss, oa, cr, books])
+    .filter((p) => p.title)
+    // Ulasan buku di majalah Choice (DOI 10.5860/choice.*) bukan buku itu sendiri.
+    .filter((p) => !/^10\.5860\/choice/i.test(normalizeDoi(p.doi) || ""))
+    .map((p) => ({ paper: p, kind: classifySourceKind(p), score: scoreSource(p, terms) }))
+    // Tahap awal: hanya jenis yang diminta (tipe bisa diperjelas Crossref nanti) dan punya identitas yang bisa dicek.
+    .filter(({ paper: p, kind }) => options.requireDoi === false || p.doi || kind === "book" || kind === "thesis")
     .sort((a, b) => b.score - a.score);
+  progress(`${candidates.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}${wantsBooks ? `, katalog buku ${books.length}` : ""}), memverifikasi DOI/ISBN…`);
 
-  const doiChecked = await Promise.all(
-    ranked.slice(0, Math.min(limit * 3, 30)).map(async ({ p: paper, score }) => {
-      if (!paper.doi) return { paper, score };
+  // Verifikasi DOI hanya untuk kandidat teratas yang ber-DOI (maks. 30 panggilan Crossref).
+  const topCandidates = candidates.slice(0, Math.min(limit * 5, 60));
+  let doiBudget = Math.min(limit * 3, 30);
+  const checked = await Promise.all(
+    topCandidates.map(async (candidate): Promise<Candidate | null> => {
+      const paper = candidate.paper;
+      if (!paper.doi) return candidate;
+      if (doiBudget <= 0) return null;
+      doiBudget -= 1;
       const check = await verifyCrossrefDoi(paper.doi);
+      const crossrefKind = check.type ? classifySourceKind({ publicationType: check.type }) : "journal";
+      const kind = crossrefKind !== "journal" ? crossrefKind : candidate.kind;
+      // Bab buku: judul buku ada di container-title Crossref; OpenAlex sering hanya memberi nama platform ("Springer eBooks").
+      const platformVenue = /\be-?books?$/i.test(String(paper.venue || ""));
+      const venue = kind === "book" && check.venue ? check.venue : platformVenue ? "" : paper.venue || check.venue || "";
       return {
-        score,
+        score: candidate.score,
+        // Tipe Crossref (book-chapter, dissertation, posted-content, report) memperjelas jenis.
+        kind,
         paper: {
           ...paper,
           doi: check.canonicalDoi || paper.doi,
           doiVerified: check.verified,
           url: paper.url || check.publisherUrl || null,
           pdfUrl: paper.pdfUrl || check.pdfUrl || null,
-          venue: paper.venue || check.venue || "",
+          venue,
+          publisher: paper.publisher || check.publisher || null,
+          publicationType: crossrefKind !== "journal" ? check.type : paper.publicationType || check.type,
           issn: normalizeJournalIssns([...(paper.issn || []), ...(check.issn || [])]),
         },
       };
     }),
   );
 
-  const eligibleRanked = doiChecked
-    .filter(({ paper: p }) => (options.requireDoi === false ? true : p.doiVerified))
-    .filter(({ paper: p }) => passesRequirement(p, options.requirement))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  const eligible = checked
+    .filter((c): c is Candidate => Boolean(c))
+    .filter(({ kind }) => kinds.includes(kind))
+    .map((c) => ({ ...c, verifiedBy: verificationOf(c.paper, c.kind) }))
+    .filter(({ verifiedBy }) => options.requireDoi === false || Boolean(verifiedBy))
+    .filter(({ paper: p, kind }) => passesRequirement(p, kind, options.requirement))
+    .sort((a, b) => b.score - a.score);
+  const eligibleRanked = pickWithQuota(eligible, kinds, limit);
 
-  progress(`${eligibleRanked.length} kandidat setelah pemeriksaan DOI${options.requirement && options.requirement !== "bebas" ? "; peringkat/indeks jurnal belum dikonfirmasi" : ""}, mengecek PDF open access…`);
+  const kindSummary = kinds.length > 1
+    ? ` (${eligibleRanked.filter((c) => c.kind === "journal").length} jurnal, ${eligibleRanked.filter((c) => c.kind === "book").length} buku, ${eligibleRanked.filter((c) => c.kind === "thesis").length} skripsi/preprint)`
+    : "";
+  progress(`${eligibleRanked.length} kandidat lolos verifikasi${kindSummary}${options.requirement && options.requirement !== "bebas" ? "; peringkat/indeks jurnal belum dikonfirmasi" : ""}, mengecek PDF open access…`);
   // Tahap 1: cek pdfUrl dari provider (sekaligus cari PDF asli bila ternyata landing page).
   let checks = await checkPdfUrls(eligibleRanked.map(({ paper }) => paper.pdfUrl));
 
   // Tahap 2: yang belum verified → coba Unpaywall (by DOI), lalu halaman penerbit (citation_pdf_url).
+  // Halaman katalog buku (Google Books/Open Library) bukan PDF, jadi dilewati.
   const retry = eligibleRanked
-    .map(({ paper }, i) => ({ paper, i }))
-    .filter(({ i }) => checks[i].status !== "verified");
+    .map(({ paper, verifiedBy }, i) => ({ paper, verifiedBy, i }))
+    .filter(({ i, verifiedBy }) => checks[i].status !== "verified" && verifiedBy !== "google-books-isbn" && verifiedBy !== "open-library");
   if (retry.length) {
     const fallbackUrls = await Promise.all(retry.map(async ({ paper }) => {
       const doi = normalizeDoi(paper.doi);
@@ -330,7 +443,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     });
   }
 
-  return eligibleRanked.map(({ paper: p, score }, i) => {
+  return eligibleRanked.map(({ paper: p, score, kind, verifiedBy }, i) => {
     const doi = normalizeDoi(p.doi);
     const { status: pdfStatus, url: verifiedPdf } = checks[i];
     return {
@@ -354,12 +467,28 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
       venueType: p.venueType || null,
       language: p.language || null,
       sourceProviders: p.sourceProviders || [],
-      citationApa: toApaFromProvider(p),
-      qualitySignals: qualitySignals(p, pdfStatus),
-      checkLinks: checkLinks(p),
+      citationApa: formatApaCitation({
+        kind,
+        publicationType: p.publicationType,
+        authors: p.authors || [],
+        year: p.year ?? null,
+        title: p.title,
+        venue: p.venue,
+        publisher: p.publisher,
+        doiUrl: doi ? doiToUrl(doi) : null,
+        url: p.url,
+      }),
+      qualitySignals: qualitySignals(p, pdfStatus, kind, verifiedBy || undefined),
+      checkLinks: kind === "journal" ? checkLinks(p) : [],
       readLevel: p.abstract ? "abstract" : "none",
       relevance: score,
       selected: true,
+      kind,
+      publicationType: p.publicationType || null,
+      publisher: p.publisher || null,
+      isbn: p.isbn || [],
+      verified: Boolean(verifiedBy),
+      verifiedBy: verifiedBy || undefined,
     };
   });
 }

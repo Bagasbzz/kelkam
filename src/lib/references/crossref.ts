@@ -141,7 +141,7 @@ export async function searchCrossref(query: string, options: SearchOptions = {})
   const url = new URL(CROSSREF_BASE);
   url.searchParams.set("query.bibliographic", String(query || ""));
   url.searchParams.set("rows", String(rows));
-  url.searchParams.set("select", "DOI,title,author,issued,container-title,URL,is-referenced-by-count,link,publisher,ISSN");
+  url.searchParams.set("select", "DOI,title,author,issued,container-title,URL,is-referenced-by-count,link,publisher,ISSN,type");
 
   try {
     const json = await fetchWithRetryAndCache(url.toString(), {
@@ -162,6 +162,8 @@ export async function searchCrossref(query: string, options: SearchOptions = {})
           authors: reconstructAuthors(item),
           year,
           venue: reconstructVenue(item),
+          publisher: reconstructPublisher(item),
+          publicationType: typeof item.type === "string" ? item.type : null,
           issn: reconstructIssn(item),
           abstract: null,
           url: item.URL ? String(item.URL) : null,

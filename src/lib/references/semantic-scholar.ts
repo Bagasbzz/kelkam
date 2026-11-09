@@ -23,6 +23,7 @@ export async function searchSemanticScholar(query: string, options: SearchOption
     "externalIds",
     "citationCount",
     "publicationVenue",
+    "publicationTypes",
   ].join(",");
 
   const url = new URL(SEMANTIC_SCHOLAR_BASE);
@@ -62,6 +63,9 @@ export async function searchSemanticScholar(query: string, options: SearchOption
         doi: externalIds.DOI ? String(externalIds.DOI) : null,
         citationCount: Number(paper.citationCount) || 0,
         isOpenAccess: Boolean(paper.isOpenAccess || openAccessPdf.url),
+        publicationType: Array.isArray(paper.publicationTypes)
+          ? paper.publicationTypes.filter((t): t is string => typeof t === "string").join(",") || null
+          : null,
         source: "semantic-scholar",
         raw: paper,
       };

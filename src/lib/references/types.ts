@@ -21,6 +21,10 @@
   venueType?: string | null;
   publicationType?: string | null;
   language?: string | null;
+  /** Penerbit (terutama buku). */
+  publisher?: string | null;
+  /** ISBN (buku), dinormalisasi tanpa tanda hubung. */
+  isbn?: string[];
   raw?: unknown;
 }
 

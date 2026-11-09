@@ -23,6 +23,7 @@ import { getErrorMessage as baseErrorMessage, toPublicAssistantMessage } from "@
 import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/client/report-job";
 import { controlRun, fetchActiveRun, followRun, isRunLive, type AgentEvent, type AgentRunPublic } from "@/lib/client/agent-run";
 import type { VerifiedSource } from "@/lib/references/find-sources";
+import { SOURCE_KIND_DESCRIPTION, SOURCE_KIND_LABEL, SOURCE_KINDS, sourceKindOf, type SourceKind } from "@/lib/references/source-kind";
 import type { ReportBrief, ReportPlan } from "@/lib/server/laporan/assistant";
 import { DOCX_PRESETS } from "@/utils/markdown-docx-exporter";
 import { attachmentError, clipboardFiles, MAX_CHAT_ATTACHMENTS } from "@/lib/client/report-attachments";
@@ -59,6 +60,14 @@ const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF terbuka", landing_page: "Halaman penerbit", closed: "Berbayar", broken: "Tautan rusak", unknown: "PDF ?" };
+/** Warna label jenis sumber (tab Sumber). */
+const KIND_BADGE: Record<SourceKind, string> = {
+  journal: "bg-blue-600 text-white",
+  book: "bg-amber-500 text-white",
+  thesis: "bg-violet-600 text-white",
+  official: "bg-emerald-600 text-white",
+  web: "bg-slate-600 text-white",
+};
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
@@ -86,6 +95,7 @@ export default function LaporanPage() {
   const [deep, setDeep] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("rencana");
+  const [sourceFilter, setSourceFilter] = useState<SourceKind | "all">("all");
   const [panelOpen, setPanelOpen] = useState(false);   // desktop: panel kanan terbuka
   const [sidebarOpen, setSidebarOpen] = useState(true); // desktop: daftar sesi terbuka
   const [sheet, setSheet] = useState<"sesi" | "panel" | null>(null); // mobile: bottom sheet
@@ -621,38 +631,66 @@ export default function LaporanPage() {
               )}
 
               {detail && tab === "sumber" && (() => {
+                const kindCounts = new Map<SourceKind, number>();
+                for (const s of detail.sources) kindCounts.set(sourceKindOf(s), (kindCounts.get(sourceKindOf(s)) || 0) + 1);
+                const activeFilter = sourceFilter !== "all" && kindCounts.get(sourceFilter) ? sourceFilter : "all";
+                const visible = activeFilter === "all" ? detail.sources : detail.sources.filter((s) => sourceKindOf(s) === activeFilter);
                 const selectedCount = detail.sources.filter((s) => s.selected !== false).length;
                 const fullCount = detail.sources.filter((s) => s.readLevel === "fulltext").length;
-                const downloadable = detail.sources.filter((s) => s.selected !== false && s.pdfStatus === "verified");
+                const downloadable = visible.filter((s) => s.selected !== false && s.pdfStatus === "verified");
+                const filterLabel = activeFilter === "all" ? "" : ` (${SOURCE_KIND_LABEL[activeFilter]})`;
                 return (
                 <div className="space-y-2">
-                  <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />DOI valid bukan berarti jurnal terakreditasi SINTA atau terindeks Scopus. Cek <b>nama jurnal dan semua ISSN</b> di bawah, lalu simpan hasil beserta tautan bukti resminya. Jika pencarian resmi kosong, gunakan pencarian alternatif berdasarkan nama. Label teks penuh hanya muncul bila PDF berhasil dibaca.</p>
+                  <p className="rounded-lg bg-amber-50 px-2.5 py-2 text-sm text-amber-800"><ShieldCheck className="mr-1 inline h-3.5 w-3.5" />Untuk jurnal: DOI valid bukan berarti terakreditasi SINTA atau terindeks Scopus. Cek <b>nama jurnal dan semua ISSN</b> di bawah, lalu simpan hasil beserta tautan bukti resminya. Jika pencarian resmi kosong, gunakan pencarian alternatif berdasarkan nama. Buku diverifikasi lewat ISBN/katalog; skripsi dan preprint belum tentu peer-review. Label teks penuh hanya muncul bila PDF berhasil dibaca.</p>
+                  {detail.sources.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter jenis sumber">
+                      {(["all", ...SOURCE_KINDS.filter((k) => kindCounts.get(k))] as const).map((k) => {
+                        const active = activeFilter === k;
+                        const count = k === "all" ? detail.sources.length : kindCounts.get(k) || 0;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => setSourceFilter(k)}
+                            aria-pressed={active}
+                            title={k === "all" ? "Tampilkan semua jenis sumber" : SOURCE_KIND_DESCRIPTION[k]}
+                            className={`rounded-full border px-2.5 py-1 text-[13px] font-semibold transition ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
+                          >
+                            {k === "all" ? "Semua" : SOURCE_KIND_LABEL[k]} <span className={active ? "text-white/70" : "text-slate-400"}>{count}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                  {detail.sources.length > 0 && (
                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
                         <span><b>{selectedCount}</b> dari {detail.sources.length} dipakai, <b>{fullCount}</b> dibaca penuh</span>
                        <span><b>{detail.sources.filter((s) => s.journalVerification).length}</b> hasil cek jurnal tersimpan</span>
-                       <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua</button>
-                       <button type="button" onClick={() => toggleSources(detail.sources.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan</button>
+                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua{filterLabel}</button>
+                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan{filterLabel}</button>
                        {downloadable.length > 0 && <button type="button" disabled={downloadingSources || downloadable.length > 10} onClick={() => void downloadSources(downloadable.map((s) => s.id), true)} className="font-semibold text-emerald-700 hover:underline disabled:opacity-50">{downloadingSources ? "Menyiapkan ZIP..." : `Unduh ${downloadable.length} PDF terpilih (ZIP, maks. 10)`}</button>}
                      </div>
                    )}
                   {!detail.sources.length && <p className="text-sm text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
-                  {detail.sources.map((s) => {
+                  {visible.map((s) => {
                     const on = s.selected !== false;
+                    const kind = sourceKindOf(s);
                     return (
                     <div key={s.id} className={`flex gap-2 rounded-xl border p-2.5 ${on ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-70"}`}>
                       <input type="checkbox" checked={on} onChange={(e) => toggleSources([s.id], e.target.checked)} className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-blue-600" aria-label="Pakai sumber ini" />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm leading-snug text-slate-900">{s.citationApa}</div>
                         <div className="mt-1.5 flex flex-wrap gap-1">
+                          <span className={`rounded px-1.5 py-0.5 text-[13px] font-bold uppercase tracking-wide ${KIND_BADGE[kind]}`}>{SOURCE_KIND_LABEL[kind]}</span>
                           {s.readLevel === "fulltext"
                             ? <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[13px] font-semibold text-blue-700">Teks penuh dibaca{s.fullTextChars ? ` (${Math.round(s.fullTextChars / 1000)}k karakter)` : ""}</span>
-                            : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">Hanya abstrak</span>}
+                            : <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">{kind === "book" ? (s.abstract ? "Deskripsi penerbit" : "Tanpa deskripsi") : "Hanya abstrak"}</span>}
                           {typeof s.relevance === "number" && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">Relevansi {s.relevance}</span>}
                           {s.qualitySignals.filter((q) => q !== "Teks penuh dibaca AI").map((q) => <span key={q} className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] text-slate-600">{q}</span>)}
-                          {s.pdfStatus && <span className={`rounded px-1.5 py-0.5 text-[13px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
+                          {s.pdfStatus && !(kind === "book" && s.pdfStatus === "unknown") && <span className={`rounded px-1.5 py-0.5 text-[13px] ${s.pdfStatus === "verified" ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{PDF_LABEL[s.pdfStatus]}</span>}
+                          {kind !== "journal" && s.url && /^https?:\/\//i.test(s.url) && <a href={s.url} target="_blank" rel="noopener noreferrer" className="rounded bg-slate-100 px-1.5 py-0.5 text-[13px] font-semibold text-blue-700 hover:underline">{kind === "book" && !s.doi ? "Lihat di katalog" : "Buka sumber"}</a>}
                         </div>
-                         <JournalCheck key={`${detail.id}:${s.id}`} source={s} verification={s.journalVerification} onVerificationChange={(value) => void saveJournalVerification(s.id, value)} onDownload={() => void downloadSources([s.id], false)} downloading={downloadingSources} />
+                         {kind === "journal" && <JournalCheck key={`${detail.id}:${s.id}`} source={s} verification={s.journalVerification} onVerificationChange={(value) => void saveJournalVerification(s.id, value)} onDownload={() => void downloadSources([s.id], false)} downloading={downloadingSources} />}
                       </div>
                     </div>
                     );

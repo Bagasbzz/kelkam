@@ -66,6 +66,14 @@ Terakhir diperbarui: 2026-11-07
 | K10 | Akun lama tanpa verifikasi email | Usulan: tidak dipaksa verifikasi. Login Google pertama dengan email sama → akun ditautkan, sesi lama dicabut, sandi lama wajib diatur ulang. | Menunggu konfirmasi |
 | K11 | Subdomain admin | Usulan: tidak perlu subdomain; super admin login lewat `/login` biasa yang tetap terbuka saat maintenance. | Menunggu konfirmasi |
 | K12 | Anggaran rem darurat AI | Default sementara 200 juta unit, 20.000 panggilan, 300 gambar per hari untuk seluruh situs (bisa diubah via env). | Sementara, perlu konfirmasi |
+| K13 | Jenis sumber Laporan | Tambah: buku & bab buku, skripsi/tesis/preprint, dokumen resmi/regulasi, artikel web/berita tepercaya (selain jurnal/prosiding). Tiap jenis punya verifikasi sendiri (DOI, ISBN, domain tepercaya). | Disetujui 2026-11-09 |
+| K14 | Urutan & pencarian web | Bertahap: buku + skripsi dulu (gratis). Dokumen resmi & web menyusul setelah pemilik mendaftar kunci API pencarian web (Brave/Tavily). | Disetujui 2026-11-09 |
+| K15 | Tampilan sumber | Chip filter "Semua · Jurnal · Buku · Resmi · Web · Skripsi" + jumlah, label warna jenis di tiap kartu. | Disetujui 2026-11-09 |
+| K16 | Campuran sumber | AI mencari semua jenis sesuai topik, jurnal tetap mayoritas; pengguna bisa minta lewat chat ("tambah buku", "jurnal saja"). | Disetujui 2026-11-09 |
+| K17 | Audit gagal setelah batas putaran | Hasil tetap dikirim **disertai catatan masalah yang tersisa**. | Disetujui 2026-11-09 |
+| K18 | Putaran audit | Maksimal **2** siklus audit → perbaiki → audit ulang. | Disetujui 2026-11-09 |
+| K19 | Tampilan selama audit | Pengguna hanya melihat **progres**; isi baru muncul setelah lulus audit (atau batas putaran habis, K17). | Disetujui 2026-11-09 |
+| K20 | Urutan audit | **Laporan dulu**, Presentasi di tahap berikutnya. | Disetujui 2026-11-09 |
 
 ## 4. Rancangan ringkas per fitur
 
@@ -195,3 +203,38 @@ warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta log
   Belum: gambar AI otomatis tanpa klik (masih lewat tombol "Buat gambar" di Rencana).
 - Catatan biaya: sesi Claude Code yang panjang (konteks ±685 ribu token) mahal per langkah; mulai sesi baru per tugas
   dan jangan ganti model di tengah sesi.
+- **Sumber Laporan diperluas (K13–K16, tahap 1 selesai, belum di-commit/deploy):**
+  - Jenis sumber baru di `src/lib/references/source-kind.ts`: `journal`, `book`, `thesis` (skripsi/tesis/preprint),
+    `official` (laporan lembaga ber-DOI), `web` (belum dicari). Klasifikasi dari tipe publikasi OpenAlex/Crossref/Semantic Scholar.
+  - Buku: `src/lib/references/books.ts` (Google Books dengan ISBN, cadangan Open Library) + buku/bab buku ber-DOI dari Crossref.
+    Google Books tanpa kunci sering kena 429 (kuota bersama); isi env `GOOGLE_BOOKS_API_KEY` (gratis) agar stabil.
+  - Verifikasi per jenis (`verifiedBy`): DOI Crossref, ISBN Google Books, katalog Open Library, atau tercatat di OpenAlex
+    (skripsi/preprint, termasuk DOI DataCite). Ulasan Choice (DOI 10.5860/choice) dibuang.
+  - Campuran bawaan: jurnal mayoritas (tiap jenis lain maks. ±1/4, total non-jurnal maks. 40%); syarat SINTA/Scopus → hanya jurnal + buku.
+    AI bisa memakai `findSources.kinds` dan menyimpan preferensi user di `brief.sourceKinds`.
+  - Sitasi APA per jenis (buku, bab buku "Dalam ...", tesis/preprint berlabel, buku tanpa penulis → judul di depan);
+    daftar pustaka (`generate-report.ts` `referenceEntry`) tidak lagi menandai buku "DOI belum tersedia".
+  - UI tab Sumber: chip filter Semua/Jurnal/Buku/Skripsi/Resmi + jumlah, label warna per kartu, pilih/hapus per filter,
+    cek jurnal (SINTA/Scopus) hanya untuk jurnal.
+  - Tes: `scripts/source-kind.test.ts`; seluruh tes lulus, typecheck bersih. Tampilan belum dicek di browser (butuh login + DB).
+  - Tahap 2 (belum): regulasi/dokumen resmi + artikel web via API pencarian web (Brave/Tavily) setelah pemilik mendaftar kunci.
+
+## 9. Audit AI sebelum hasil sampai ke pengguna (permintaan 2026-11-09, RANCANGAN)
+
+Permintaan pemilik: untuk Laporan dan Presentasi, setelah AI selesai mengerjakan, hasil jangan langsung diberikan.
+Sistem membaca ulang seluruh isi, lalu **AI auditor khusus** memeriksa terhadap semua aturan, permintaan pengguna, dan
+rencana yang disetujui. Jika belum benar → diperbaiki lalu diaudit ulang. Hasil baru dikirim setelah auditor menyetujui.
+
+Kondisi sekarang: Laporan sudah punya audit per bab (`auditChapter`, hanya mode lengkap, satu kali, tanpa vonis
+lulus/gagal dan tanpa melihat dokumen utuh). Presentasi belum punya audit.
+
+Usulan (disetujui arahnya 2026-11-09, K17–K20; implementasi belum dimulai):
+1. Pemeriksaan otomatis tanpa AI (Laporan: semua bab rencana ada, sitasi hanya dari sumber tercentang, tidak ada
+   placeholder `[ISI DATA ...]`, gambar ada, penomoran; PPT: jumlah slide, slide kosong, teks meluber, gambar).
+2. AI auditor terpisah (`AI_MODEL_REVIEW`, beda dari model penulis) membaca permintaan awal, brief, rencana disetujui,
+   aturan kampus, dan hasil utuh → JSON vonis LULUS/PERBAIKI + daftar masalah (lokasi, tingkat).
+3. Perbaikan terarah hanya pada bab/slide bermasalah, lalu audit ulang; maks. 2 putaran (K18); jika masih gagal,
+   kirim dengan catatan masalah tersisa (K17).
+4. UI: status "Sedang diaudit (putaran n/2)", isi disembunyikan sampai selesai (K19); hasil diberi label "Lolos audit"
+   + ringkasan perbaikan. Berlaku di semua mode, termasuk ringkas.
+5. Urutan: Laporan dulu (perluas `auditChapter` + step audit akhir di `report-jobs.ts`), lalu Presentasi (K20).

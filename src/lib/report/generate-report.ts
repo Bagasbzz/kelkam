@@ -116,6 +116,9 @@ export function compactProject(project: unknown) {
       year: truncate(reference.year, 12),
       title: truncate(reference.title, 400),
       venue: truncate(reference.venue, 300),
+      /** journal | book | thesis | official | web; data lama tanpa field = journal. */
+      kind: truncate(reference.kind, 20) || "journal",
+      publisher: truncate(reference.publisher, 300),
       query: truncate(reference.query, 400),
       purpose: truncate(reference.purpose, 500),
       citation: truncate(reference.citation || reference.citationApa, 1600),
@@ -555,6 +558,7 @@ function pickReferences(compact: CompactProject, section: ChapterInput["section"
   return picked.map((reference, index) => ({
     id: reference.id, number: reference.number, doi: reference.doi, verified: reference.verified,
     authors: reference.authors, year: reference.year, title: reference.title, venue: reference.venue,
+    jenis: reference.kind,
     citation: reference.citation,
     url: reference.url,
     abstract: reference.abstract,
@@ -1011,16 +1015,31 @@ export function citationInstructions(compact: CompactProject) {
 }
 
 function referenceEntry(reference: CompactReference, compact: CompactProject) {
-  const missing = [!reference.id && "id", !reference.doi && "DOI", reference.verified === undefined && "status verifikasi", !reference.authors.length && "penulis", !reference.year && "tahun", !reference.title && "judul", !reference.venue && "venue"].filter(Boolean);
+  const isJournal = reference.kind === "journal";
+  // Buku/skripsi/laporan sah tanpa DOI (ISBN/katalog/repositori); buku memakai penerbit sebagai pengganti venue.
+  const container = reference.venue || (isJournal ? "" : reference.publisher);
+  const missing = [
+    !reference.id && "id",
+    isJournal ? !reference.doi && "DOI" : !reference.doi && !reference.url && "DOI/tautan",
+    reference.verified === undefined && "status verifikasi",
+    !reference.authors.length && "penulis", !reference.year && "tahun", !reference.title && "judul",
+    !container && (isJournal ? "venue" : "penerbit"),
+  ].filter(Boolean);
   let entry = reference.citation;
-  if (reference.authors.length && reference.title && reference.year) {
+  // APA untuk non-jurnal sudah disusun per jenis saat pencarian (source-kind.ts); pakai apa adanya.
+  const usePrebuilt = !isJournal && Boolean(reference.citation) && !isNumericStyle(compact) && compact.citationStyle !== "Harvard";
+  if (!usePrebuilt && reference.authors.length && reference.title && reference.year) {
     const authors = reference.authors.join(", ");
-    const link = reference.doi ? (/^https?:\/\//i.test(reference.doi) ? reference.doi : `https://doi.org/${reference.doi}`) : reference.url;
+    const link = reference.doi ? (/^https?:\/\//i.test(reference.doi) ? reference.doi : `https://doi.org/${reference.doi}`) : reference.kind === "book" ? "" : reference.url;
     entry = isNumericStyle(compact)
-      ? `${authors}, "${reference.title}," ${reference.venue ? `${reference.venue}, ` : ""}${reference.year}.${link ? ` ${link}` : ""}`
+      ? reference.kind === "book"
+        ? `${authors}, ${reference.title}. ${container ? `${container}, ` : ""}${reference.year}.${link ? ` ${link}` : ""}`
+        : `${authors}, "${reference.title}," ${container ? `${container}, ` : ""}${reference.year}.${link ? ` ${link}` : ""}`
       : compact.citationStyle === "Harvard"
-        ? `${authors} (${reference.year}) '${reference.title}'. ${reference.venue}.${link ? ` ${link}` : ""}`
-        : `${authors} (${reference.year}). ${reference.title}. ${reference.venue}.${link ? ` ${link}` : ""}`;
+        ? reference.kind === "book"
+          ? `${authors} (${reference.year}) ${reference.title}. ${container}.${link ? ` ${link}` : ""}`
+          : `${authors} (${reference.year}) '${reference.title}'. ${container}.${link ? ` ${link}` : ""}`
+        : `${authors} (${reference.year}). ${reference.title}. ${container}.${link ? ` ${link}` : ""}`;
   }
   entry = entry || reference.title || "[Entri sumber belum lengkap]";
   if (missing.length) entry += ` [Metadata belum tersedia: ${missing.join(", ")}; tidak direka.]`;
