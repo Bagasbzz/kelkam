@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { createStarterDeck, type PresentationDeck } from "../src/lib/presentation/model.ts";
-import { DESIGN_PRESETS } from "../src/lib/presentation/presets.ts";
+import { STYLE_EXAMPLES } from "../src/lib/presentation/design.ts";
 import {
   chatTurnSchema, enforceAiDeck, envelopeSchema, MAX_CHAT_SLIDES, planInputSchema, planSchema, PresentationError, projectPayload,
   type PresentationEnvelope, type RunOperation,
@@ -26,7 +26,10 @@ test("chat turn and plan inputs are strict and bounded", () => {
   assert.equal(planInputSchema.safeParse(plan()).success, true);
   assert.equal(planInputSchema.safeParse({ ...plan(), density: "sangat padat" }).success, false);
   assert.equal(planInputSchema.safeParse({ ...plan(), templateId: "tidak-ada" }).success, false);
-  assert.equal(planInputSchema.safeParse({ ...plan(), templateId: DESIGN_PRESETS[0].id }).success, true);
+  assert.equal(planInputSchema.safeParse({ ...plan(), templateId: STYLE_EXAMPLES[0].id }).success, true);
+  assert.equal(planInputSchema.safeParse({ ...plan(), design: { primary: "1E40D8", frame: "blob", fonts: "geometris" } }).success, true);
+  assert.equal(planInputSchema.safeParse({ ...plan(), design: { primary: "#1E40D8" } }).success, false, "colors are bare 6-digit hex");
+  assert.equal(planInputSchema.safeParse({ ...plan(), design: { seed: 5 } }).success, false, "the seed is chosen by the server");
   assert.equal(planInputSchema.safeParse({ ...plan(), slides: Array.from({ length: MAX_CHAT_SLIDES + 1 }, () => plan().slides[0]) }).success, false);
   assert.equal(planInputSchema.safeParse({ ...plan(), images: Array.from({ length: 9 }, () => ({ slide: 1, prompt: "Ilustrasi jaringan", role: "hero" })) }).success, false);
   assert.equal(planInputSchema.safeParse({ ...plan(), unknown: true }).success, false);
@@ -120,7 +123,9 @@ test("chat prompt carries the consultation rules, density guide, templates and u
   assert.match(prompt, /DATA_PENGGUNA id=/);
   assert.match(prompt, /owned-art/);
   assert.doesNotMatch(prompt, /<<AKHIR_DATA>>/);
-  for (const preset of DESIGN_PRESETS) assert.ok(prompt.includes(preset.id), `template ${preset.id} is offered`);
+  for (const style of STYLE_EXAMPLES) assert.ok(prompt.includes(style.id), `style ${style.id} is offered`);
+  assert.match(prompt, /figure/);
+  assert.match(prompt, /TANYAKAN dulu/);
   for (const density of ["ringkas", "seimbang", "padat"]) assert.match(prompt, new RegExp(density));
   assert.match(prompt, /Jangan mengarang/i);
   const pending = chatSystemPrompt({ state, availableArt: [], proposalPending: true });

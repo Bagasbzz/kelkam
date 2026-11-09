@@ -2,17 +2,34 @@ import { z } from "zod";
 
 export const THEME_IDS = ["playful", "editorial", "product"] as const;
 export const LAYOUT_IDS = ["title", "split", "cards", "timeline", "statement"] as const;
+/** Compositions of the designed renderer (decks with `design`). Legacy decks map them back to LAYOUT_IDS. */
+export const DESIGN_LAYOUT_IDS = ["cover", "section", "agenda", "bullets", "photo", "quote", "stats", "process", "compare", "figure", "closing"] as const;
+export const ALL_LAYOUT_IDS = [...LAYOUT_IDS, ...DESIGN_LAYOUT_IDS] as const;
+/** Decorative "chrome" families that frame every slide of a designed deck. */
+export const FRAME_STYLES = ["diagonal", "blob", "wave", "geometric", "grid", "halftone", "minimal", "gradient"] as const;
+/** Font pairs limited to faces installed with Microsoft Office, so the PPTX opens as designed. */
+export const FONT_PAIRS = {
+  tegas: { heading: "Arial Black", body: "Arial" },
+  kondensasi: { heading: "Impact", body: "Arial" },
+  elegan: { heading: "Georgia", body: "Arial" },
+  geometris: { heading: "Century Gothic", body: "Century Gothic" },
+  ramah: { heading: "Trebuchet MS", body: "Trebuchet MS" },
+  bersih: { heading: "Tahoma", body: "Tahoma" },
+} as const;
+export const FONT_PAIR_IDS = Object.keys(FONT_PAIRS) as [keyof typeof FONT_PAIRS, ...(keyof typeof FONT_PAIRS)[]];
 export const ART_STYLES = ["geometric", "zine", "kinetic", "blueprint", "minimal"] as const;
 export const VISUAL_MOTIFS = ["network", "campus", "botanical", "megaphone", "orbit", "none"] as const;
 export const VISUAL_BACKGROUNDS = ["solid", "halftone", "grid", "spotlight"] as const;
 export const SLIDE_MOTIONS = ["none", "fade", "push", "reveal"] as const;
 export const PALETTE_IDS = ["original", "ocean", "sunset", "lavender", "forest", "mono", "cobalt", "rose"] as const;
 export const EDIT_TARGETS = ["title", "eyebrow", "body-0", "body-1", "body-2", "body-3", "art"] as const;
-export type PresentationFont = "Arial" | "Arial Black" | "Impact" | "Georgia";
+export type PresentationFont = "Arial" | "Arial Black" | "Impact" | "Georgia" | "Century Gothic" | "Trebuchet MS" | "Tahoma";
 export type PresentationTheme = (typeof THEME_IDS)[number];
 export type PresentationPalette = (typeof PALETTE_IDS)[number];
 export type SlideEditTarget = (typeof EDIT_TARGETS)[number];
-export type SlideLayout = (typeof LAYOUT_IDS)[number];
+export type SlideLayout = (typeof ALL_LAYOUT_IDS)[number];
+export type FrameStyle = (typeof FRAME_STYLES)[number];
+export type FontPairId = keyof typeof FONT_PAIRS;
 
 export interface ThemeDefinition {
   id: PresentationTheme;
@@ -85,12 +102,24 @@ export const slideSchema = z.object({
   body: z.array(text(220).min(1)).max(4),
   notes: text(2000),
   source: text(350),
-  layout: z.enum(LAYOUT_IDS),
+  layout: z.enum(ALL_LAYOUT_IDS),
   locked: z.boolean(),
   visual: slideVisualSchema.optional(),
   art: slideArtSchema.optional(),
   adjustments: slideAdjustmentsSchema.optional(),
 }).strict();
+
+const hexColor = z.string().regex(/^[0-9A-Fa-f]{6}$/u, "Warna harus 6 digit heksadesimal tanpa #.");
+/** Per-deck visual identity chosen for the topic; the renderer guarantees readable contrast. */
+export const deckDesignSchema = z.object({
+  primary: hexColor, accent: hexColor, background: hexColor, surface: hexColor, text: hexColor,
+  frame: z.enum(FRAME_STYLES),
+  fonts: z.enum(FONT_PAIR_IDS),
+  seed: z.number().int().min(0).max(999_999),
+  institution: text(80).optional(),
+  logo: slideArtSchema.shape.fileId.optional(),
+}).strict();
+export type DeckDesign = z.infer<typeof deckDesignSchema>;
 
 export const deckSchema = z.object({
   id: z.string().uuid(),
@@ -99,6 +128,7 @@ export const deckSchema = z.object({
   slides: z.array(slideSchema).min(1).max(20),
   artDirection: artDirectionSchema.optional(),
   palette: z.enum(PALETTE_IDS).optional(),
+  design: deckDesignSchema.optional(),
 }).strict().superRefine((deck, ctx) => {
   const seen = new Set<string>();
   deck.slides.forEach((slide, index) => {

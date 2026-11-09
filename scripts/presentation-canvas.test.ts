@@ -9,6 +9,7 @@ import ts from "typescript";
 import * as layout from "../src/lib/presentation/layout";
 import * as model from "../src/lib/presentation/model";
 import * as presets from "../src/lib/presentation/presets";
+import * as design from "../src/lib/presentation/design";
 
 type Props = Record<string, unknown>;
 type Element = { type: unknown; props: Props; key?: unknown };
@@ -117,6 +118,7 @@ async function loadComponent(file: string, react: unknown, overrides: Props = {}
     "@/lib/presentation/layout": layout,
     "@/lib/presentation/model": model,
     "@/lib/presentation/presets": presets,
+    "@/lib/presentation/design": design,
     "./presentation.module.css": { default: new Proxy({}, { get: (_, name) => String(name) }) },
     ...overrides,
   };

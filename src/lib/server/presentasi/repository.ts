@@ -4,7 +4,10 @@ import { prisma } from "@/lib/db/prisma";
 import { createStarterDeck, slideSchema, type PresentationDeck, type PresentationSlide, type PresentationTheme } from "@/lib/presentation/model";
 import { assertRevision, enforceAiDeck, generateSchema, reviseSchema, chatTurnSchema, nextEnvelope, PresentationError, projectPayload, readEnvelope, planInputSchema, MAX_CHAT_CONTENT, MAX_CHAT_MESSAGES, MAX_CHAT_SLIDES, MAX_PRESENTATION_MATERIALS, type PresentationChatMessage, type PresentationEnvelope, type PresentationPlanInput, type RunOperation } from "./state";
 import { validatePresentationArt } from "./art";
-import { DESIGN_PRESETS } from "@/lib/presentation/presets";
+import { STYLE_EXAMPLES } from "@/lib/presentation/design";
+import { deckDesignSchema, type DeckDesign } from "@/lib/presentation/model";
+import { saveUpload } from "@/lib/storage/upload";
+import { svgToPngServer } from "@/lib/server/laporan/svg-raster";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -203,11 +206,42 @@ export async function recordPlanImageJob(ownerId: string, projectId: string, ind
   });
 }
 
+/** Per-deck identity: a style example adjusted by the AI's colors, with a fresh seed so every generate differs. */
+export function planDesign(state: PresentationEnvelope, seed = Math.floor(Math.random() * 1_000_000)): DeckDesign | undefined {
+  const plan = state.plan;
+  if (!plan || (!plan.templateId && !plan.design)) return undefined;
+  const base = STYLE_EXAMPLES.find((style) => style.id === plan.templateId) ?? STYLE_EXAMPLES[0];
+  const candidate = { ...base.design, ...plan.design, seed };
+  const parsed = deckDesignSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : { ...base.design, seed };
+}
+
+const MAX_REPORT_DIAGRAMS = 8;
+
+/** Approved report diagrams become owned PNG files so slides and the PPTX can show them. */
+async function rasterizeReportDiagrams(ownerId: string, plan: Record<string, unknown>) {
+  const diagrams = (Array.isArray(plan.diagrams) ? plan.diagrams : []).flatMap((item) => {
+    const diagram = item as { svg?: unknown; title?: unknown; status?: unknown };
+    return typeof diagram.svg === "string" && diagram.svg.length < 2_000_000 && diagram.status === "approved"
+      ? [{ svg: diagram.svg, title: typeof diagram.title === "string" ? diagram.title.slice(0, 200) : "Diagram laporan" }] : [];
+  }).slice(0, MAX_REPORT_DIAGRAMS);
+  const figures: { fileId: string; title: string }[] = [];
+  for (const diagram of diagrams) {
+    try {
+      const png = Buffer.from(await svgToPngServer(diagram.svg));
+      if (png.length > 4 * 1024 * 1024) continue;
+      const saved = await saveUpload({ ownerId, buffer: png, originalName: `${diagram.title.replace(/[^\p{L}\p{N} _-]/gu, "").slice(0, 60) || "diagram"}.png`, mime: "image/png" });
+      figures.push({ fileId: saved.id, title: `Diagram: ${diagram.title}` });
+    } catch { /* A diagram that cannot be drawn is skipped; the text report still links. */ }
+  }
+  return figures;
+}
+
 async function buildReportSource(ownerId: string, sessionId: string) {
   const report = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId }, select: { id: true, title: true, draft: true, plan: true } });
   if (!report) throw new PresentationError(404, "Laporan tidak ditemukan.");
   if (!report.draft?.trim()) throw new PresentationError(409, "Laporan belum mempunyai draft. Selesaikan laporan sebelum membuat presentasi.");
-  const plan = report.plan && typeof report.plan === "object" && !Array.isArray(report.plan) ? report.plan as { figures?: unknown } : {};
+  const plan = report.plan && typeof report.plan === "object" && !Array.isArray(report.plan) ? report.plan as { figures?: unknown; diagrams?: unknown } : {};
   const candidates = (Array.isArray(plan.figures) ? plan.figures : []).flatMap((item) => {
     const figure = item as { fileId?: unknown; title?: unknown };
     return typeof figure.fileId === "string" && figure.fileId && figure.fileId.length <= 100 && !/[:/\\?#]/u.test(figure.fileId)
@@ -215,7 +249,8 @@ async function buildReportSource(ownerId: string, sessionId: string) {
   }).slice(0, 20);
   const owned = candidates.length ? await prisma.fileUpload.findMany({ where: { ownerId, id: { in: candidates.map((item) => item.fileId) } }, select: { id: true } }) : [];
   const ownedIds = new Set(owned.map((item) => item.id));
-  return { kind: "report" as const, sessionId: report.id, linkedAt: nowIso(), title: (report.title ?? "Laporan").slice(0, 200), draftChars: report.draft.length, figures: candidates.filter((item) => ownedIds.has(item.fileId)) };
+  const diagrams = await rasterizeReportDiagrams(ownerId, plan as Record<string, unknown>);
+  return { kind: "report" as const, sessionId: report.id, linkedAt: nowIso(), title: (report.title ?? "Laporan").slice(0, 200), draftChars: report.draft.length, figures: [...candidates.filter((item) => ownedIds.has(item.fileId)), ...diagrams].slice(0, 20) };
 }
 
 /**
@@ -354,10 +389,10 @@ export async function commitPresentationRun(ownerId: string, projectId: string, 
       ? { ...state.deck, slides: state.deck.slides.map((slide) => slide.id === operation.slideId ? slideSchema.parse(output) : slide) }
       : output;
     let deck = enforceAiDeck(state.deck, candidate, operation, evidenceText);
-    // The template chosen in the plan is applied by the server, not left to model wording.
-    const preset = operation.operation === "chat" && state.plan?.templateId && !state.deck.slides.some((slide) => slide.locked)
-      ? DESIGN_PRESETS.find((item) => item.id === state.plan!.templateId) : undefined;
-    if (preset) deck = { ...deck, theme: preset.theme, palette: preset.palette, artDirection: preset.artDirection };
+    // The look is applied by the server from the plan, never taken from model-written deck fields.
+    const locked = state.deck.slides.some((slide) => slide.locked);
+    deck = { ...deck, design: operation.operation === "chat" && !locked ? planDesign(state) ?? state.deck.design : state.deck.design };
+    if (!deck.design) delete deck.design;
     await validatePresentationArt(ownerId, projectId, deck, state.deck, tx, "generated", attachedArt(state));
     const proposedRevision = state.revision + 1;
     await writeProject(tx, ownerId, { ...state, proposal: { runId, baseRevision: state.revision, deck } });

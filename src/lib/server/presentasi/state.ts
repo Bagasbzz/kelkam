@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { deckSchema, SLIDE_MOTIONS, type PresentationDeck, type PresentationSlide } from "@/lib/presentation/model";
-import { DESIGN_PRESETS } from "@/lib/presentation/presets";
+import { deckDesignSchema } from "@/lib/presentation/model";
+import { STYLE_EXAMPLES } from "@/lib/presentation/design";
 
 export const revisionSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER - 1);
 export const generateSchema = z.object({
@@ -67,7 +68,9 @@ export const planInputSchema = z.object({
   goal: short(600).min(1), audience: short(200).min(1),
   minutes: z.number().int().min(1).max(180),
   density: z.enum(PLAN_DENSITIES),
-  templateId: z.enum(DESIGN_PRESETS.map((preset) => preset.id) as [string, ...string[]]).optional(),
+  templateId: z.enum(STYLE_EXAMPLES.map((style) => style.id) as [string, ...string[]]).optional(),
+  // Colors, frame and fonts chosen for this topic; the server adds the seed and checks the logo file.
+  design: deckDesignSchema.omit({ seed: true }).partial().optional(),
   slides: z.array(planSlideSchema).min(1).max(MAX_CHAT_SLIDES),
   images: z.array(planImageSchema).max(8).optional(),
   omitted: short(800).optional(),

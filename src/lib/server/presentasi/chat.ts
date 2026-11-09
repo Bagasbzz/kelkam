@@ -1,7 +1,8 @@
 import type OpenAI from "openai";
 import { z } from "zod";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
-import { DESIGN_PRESETS } from "@/lib/presentation/presets";
+import { STYLE_EXAMPLES } from "@/lib/presentation/design";
+import { FONT_PAIRS, FRAME_STYLES } from "@/lib/presentation/model";
 import { slideSchema } from "@/lib/presentation/model";
 import type { AgentToolContext, Msg } from "@/lib/server/agent-runs/engine";
 import { MATERIAL_TOOL_DEFS, MATERIAL_TOOL_IMPL, type MaterialRef } from "@/lib/server/laporan/material-tools";
@@ -160,9 +161,22 @@ const DENSITY_RULES = [
   "padat: sampai 4 butir per slide (maksimum 220 karakter), cocok untuk dokumen yang dibaca sendiri. Tetap jangan menempel paragraf utuh.",
 ].join("\n- ");
 
-const templateList = () => DESIGN_PRESETS.map((preset) => `${preset.id}: ${preset.label} (tema ${preset.theme}), ${preset.description}`).join("\n- ");
+const templateList = () => STYLE_EXAMPLES.map((style) => `${style.id} ("${style.label}"): ${style.description}`).join("\n- ");
+const LAYOUT_GUIDE = [
+  'cover: sampul; body[0] subjudul, body[1..3] baris info "Label: isi" (mis. "Disusun oleh: Nama")',
+  'section: pembatas bagian; eyebrow nomor bagian ("01"), body[0] satu kalimat',
+  "agenda: daftar isi 3-6 butir",
+  "bullets: 2-4 poin bernomor; bisa dengan foto (art)",
+  "photo: foto besar + judul + 1-2 kalimat; dipakai bila slide punya art",
+  'cards: 2-4 kartu "Label: isi"',
+  'stats: 2-4 angka "Angka: keterangan" (hanya angka yang ada di bahan)',
+  'process: 3-5 tahap "Tahap: isi"',
+  'compare: 2 atau 4 kotak "Sisi: isi" untuk perbandingan',
+  'figure: satu gambar/diagram dari laporan atau bahan (art wajib), body[0] keterangan "Gambar x.y ...", body[1..2] penjelasan singkat',
+  "quote: kutipan atau pesan kunci di judul, body[0] sumbernya",
+  "closing: penutup atau terima kasih",
+].join("\n- ");
 
-const MOTIF_GUIDE = "network untuk sistem, data, atau teknologi; campus untuk pendidikan dan organisasi kampus; botanical untuk lingkungan dan kesehatan; megaphone untuk kampanye dan komunikasi; orbit untuk proses dan siklus; none bila slide cukup dengan teks";
 
 /** A project that never received an AI deck still holds the demo starter slides. */
 const isFresh = (state: PresentationEnvelope) => state.revision === 1 && !state.history.length;
@@ -185,9 +199,9 @@ export function chatSystemPrompt(input: {
     "MEMILIH ISI. Presentasi bukan ringkasan dokumen. Pilih temuan dan pesan yang paling berguna bagi audiens dan durasi, urutkan sebagai cerita (pembuka, konteks, inti, bukti, penutup atau keputusan). Satu gagasan per slide. Jumlah slide kira-kira satu slide per 1,5 sampai 2 menit, maksimum " + `${MAX_CHAT_SLIDES}.`,
     `KEPADATAN TEKS. Ikuti pilihan pengguna; bila belum dipilih, tanyakan satu kali.\n- ${DENSITY_RULES}`,
     `TEMPLATE. Pilih satu templateId di setPlan yang cocok dengan topik dan audiens. Jika pengguna sudah memilih tampilan (misalnya pesan "Tampilan: Coral Zine"), gunakan template itu. Server menerapkan tema, palet, dan arah seni dari template itu. Pilihan:\n- ${templateList()}`,
-    `ELEMEN DESAIN. Setiap slide boleh punya visual {motif, background, motion}. Pilih motif sesuai isi: ${MOTIF_GUIDE}. Variasikan background (solid, halftone, grid, spotlight) agar deck tidak monoton, tetapi tetap konsisten dengan template. Animasi (motion) mengikuti keinginan pengguna: bila pengguna tidak ingin animasi, semua motion none; bila belum dibahas, pakai fade atau reveal yang halus.`,
-    "FORMAT SLIDE. Kirim slide lewat writeSlides (judul deck di title pada panggilan pertama). Jangan memakai commit_deck pada percakapan ini. Layout hanya title/split/cards/timeline/statement; variasikan layout dan ritme. Judul maksimum 120, eyebrow 60, body maksimum 4 string masing-masing maksimum 220, notes ringkas sekitar 300 sampai 500 karakter (batas 2000), source maksimum 350. Semua ID slide adalah UUID baru, kecuali slide yang sudah ada; untuk revisi, pertahankan slide yang tidak berubah dengan keepSlideIds alih-alih menulis ulang. Tidak ada HTML, URL, atau field tambahan. Slide.visual opsional {motif: network|campus|botanical|megaphone|orbit|none, background: solid|halftone|grid|spotlight, motion: none|fade|push|reveal}. Jangan membuat koordinat atau adjustments pada slide baru; pertahankan persis pada slide lama dan slide terkunci.",
-    "GAMBAR. Anda tidak membuat gambar sendiri. Slide.art {fileId, role: hero|background|cutout, alt} hanya boleh memakai fileId dari daftar 'Gambar tersedia'; gambar dan diagram dari laporan atau bahan pengguna lebih diutamakan bila relevan. Untuk slide yang paling terbantu ilustrasi (pembuka, konsep utama, penutup), usulkan 2 sampai 5 gambar baru di setPlan.images (slide, prompt, role). Pengguna menyetujui pembuatannya dari panel Rencana, jadi sebutkan usulan itu di jawaban akhir. Prompt gambar menjelaskan objek dan suasana, tanpa teks di dalam gambar. Jangan mengarang fileId.",
+    `DESAIN KHUSUS. Setiap presentasi dibuat unik. Di setPlan pilih templateId sebagai titik awal, lalu isi setPlan.design sesuai topik dan institusi: primary, accent, background, surface, text (hex 6 digit tanpa #, serasi dan kontras), frame (${FRAME_STYLES.join("|")}), fonts (${Object.keys(FONT_PAIRS).join("|")}), institution (nama kampus bila diketahui), logo (fileId gambar logo kampus dari 'Gambar tersedia' bila pengguna melampirkannya). Contoh: topik lingkungan memakai hijau, teknologi biru atau gelap, kampanye warna berani. Animasi (motion) mengikuti keinginan pengguna: bila pengguna tidak ingin animasi, semua motion none; bila belum dibahas, pakai fade atau reveal yang halus.`,
+    "FORMAT SLIDE. Kirim slide lewat writeSlides (judul deck di title pada panggilan pertama). Jangan memakai commit_deck pada percakapan ini. Pakai layout berikut dan variasikan ritmenya (hindari layout sama berturut-turut):\n- ${LAYOUT_GUIDE}\n Judul maksimum 120, eyebrow 60, body maksimum 4 string masing-masing maksimum 220, notes ringkas sekitar 300 sampai 500 karakter (batas 2000), source maksimum 350. Semua ID slide adalah UUID baru, kecuali slide yang sudah ada; untuk revisi, pertahankan slide yang tidak berubah dengan keepSlideIds alih-alih menulis ulang. Tidak ada HTML, URL, atau field tambahan. Slide.visual opsional {motif: network|campus|botanical|megaphone|orbit|none, background: solid|halftone|grid|spotlight, motion: none|fade|push|reveal}. Jangan membuat koordinat atau adjustments pada slide baru; pertahankan persis pada slide lama dan slide terkunci.",
+    "GAMBAR. Anda tidak membuat gambar sendiri. Slide.art {fileId, role: hero|background|cutout, alt} hanya boleh memakai fileId dari daftar 'Gambar tersedia'. Bila daftar itu berisi diagram atau gambar dari laporan/bahan, TANYAKAN dulu lewat askUser apakah ingin dimasukkan ke slide (sebut judulnya, beri pilihan), lalu masukkan yang disetujui dengan layout figure. Untuk slide yang paling terbantu ilustrasi (pembuka, konsep utama, penutup), usulkan 2 sampai 5 gambar baru di setPlan.images (slide, prompt, role). Pengguna menyetujui pembuatannya dari panel Rencana, jadi sebutkan usulan itu di jawaban akhir. Prompt gambar menjelaskan objek dan suasana, tanpa teks di dalam gambar. Jangan mengarang fileId.",
     isFresh(state)
       ? "PROYEK BARU. Deck saat ini hanya contoh awal agar editor tidak kosong. Jangan pakai isi atau judulnya; susun deck baru dengan judul sesuai topik pengguna."
       : "PROYEK BERJALAN. Deck saat ini adalah hasil yang sudah dipakai pengguna. Untuk permintaan revisi, ubah seperlunya dan pertahankan bagian yang tidak diminta berubah.",

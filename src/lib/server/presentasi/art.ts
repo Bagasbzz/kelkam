@@ -10,9 +10,9 @@ import { listImageJobs, startImageJob } from "@/lib/server/image-jobs";
 import { snapshotPresentation, getPresentation, readPresentationState, recordPlanImageJob } from "./repository";
 import { PresentationError, revisionSchema } from "./state";
 
-export const MAX_ART_ASSETS = 8;
+export const MAX_ART_ASSETS = 12;
 export const MAX_ART_BYTES = 4 * 1024 * 1024;
-export const MAX_TOTAL_ART_BYTES = 24 * 1024 * 1024;
+export const MAX_TOTAL_ART_BYTES = 32 * 1024 * 1024;
 export const artJobSchema = z.object({
   baseRevision: revisionSchema, slideId: z.string().uuid(),
   prompt: z.string().trim().min(8).max(2000), role: z.enum(["hero", "background", "cutout"]),
@@ -21,12 +21,13 @@ export const artJobSchema = z.object({
 export const planArtSchema = z.object({ baseRevision: revisionSchema, planImage: z.number().int().min(0).max(7) }).strict();
 
 type ArtDatabase = Pick<Prisma.TransactionClient, "fileUpload" | "imageJob">;
-const artIds = (deck: PresentationDeck) => [...new Set(deck.slides.flatMap((slide) => slide.art ? [slide.art.fileId] : []))];
+// The deck logo is an image like slide art: same ownership, type, size and provenance checks.
+const artIds = (deck: PresentationDeck) => [...new Set([...deck.slides.flatMap((slide) => slide.art ? [slide.art.fileId] : []), ...(deck.design?.logo ? [deck.design.logo] : [])])];
 
 /** Manual selection permits owned uploads; AI may only reuse explicitly scoped assets. `allowed` lists files the user already attached (report figures, image materials). */
 export async function validatePresentationArt(ownerId: string, projectId: string, deck: PresentationDeck, existing: PresentationDeck, db: ArtDatabase = prisma, mode: "generated" | "manual" = "generated", allowed: ReadonlySet<string> = new Set()) {
   const ids = artIds(deck);
-  if (ids.length > MAX_ART_ASSETS) throw new PresentationError(413, "Maksimum delapan aset gambar per presentasi.");
+  if (ids.length > MAX_ART_ASSETS) throw new PresentationError(413, "Maksimum 12 aset gambar per presentasi.");
   const existingIds = new Set(artIds(existing));
   let total = 0;
   for (const id of ids) {
@@ -35,7 +36,7 @@ export async function validatePresentationArt(ownerId: string, projectId: string
     if (file.mime !== "image/png" && file.mime !== "image/jpeg") throw new PresentationError(400, "Aset presentasi harus PNG atau JPEG.");
     if (file.size < 1 || file.size > MAX_ART_BYTES) throw new PresentationError(413, "Setiap aset gambar maksimum 4 MB.");
     total += file.size;
-    if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total aset gambar maksimum 24 MB.");
+    if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total aset gambar maksimum 32 MB.");
     if (mode === "generated" && !existingIds.has(id) && !allowed.has(id)) {
       const job = await db.imageJob.findFirst({ where: { ownerId, sessionId: projectId, status: "done", fileUploadId: id }, select: { id: true } });
       if (!job) throw new PresentationError(400, "Gunakan aset yang sudah ada atau hasil gambar selesai untuk presentasi ini.");
@@ -57,7 +58,7 @@ export async function loadPresentationAssets(ownerId: string, deck: Presentation
       const png = await toPng(bytes, { maxWidth: 1600, maxBytesPassthrough: 0, preserveAlpha: true });
       if (png.width > 1600 || png.height > 4096 || png.bytes.length > MAX_ART_BYTES) throw new PresentationError(413, "Gambar hasil konversi melewati batas ekspor.");
       total += png.bytes.length;
-      if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total gambar hasil konversi maksimum 24 MB.");
+      if (total > MAX_TOTAL_ART_BYTES) throw new PresentationError(413, "Total gambar hasil konversi maksimum 32 MB.");
       assets[id] = { data: png.bytes, mime: "image/png" };
     } catch (error) {
       if (error instanceof PresentationError) throw error;

@@ -187,3 +187,11 @@ warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta log
   - File: `laporan/assistant.ts`, `report/report-intent.ts`, `report/generate-report.ts`, `agent-runs/engine.ts`.
 - Desain presentasi baru (bagian 8) sedang dikerjakan di lokal: `src/lib/presentation/design.ts` (renderer 12 komposisi,
   10 gaya contoh, warna/font per deck, bingkai foto, logo). Belum di-commit; integrasi AI (`setPlan.design`) belum.
+- **Desain presentasi baru dirilis** (bagian 8, tahap a): renderer `src/lib/presentation/design.ts` dengan 11 komposisi
+  (cover, section, agenda, bullets, photo, quote, stats, process, compare, figure, closing), 10 gaya contoh,
+  warna/font/bingkai per deck dari `setPlan.design`, seed acak tiap generate, logo kampus, foto berbingkai
+  (ellipse/poligon, juga di PPTX). Diagram laporan yang disetujui dijadikan PNG saat "Buat presentasi dari laporan"
+  dan AI menanyakan dulu sebelum memasukkannya (layout figure). Tab Tampilan: pilih gaya + "Variasi tata letak lain".
+  Belum: gambar AI otomatis tanpa klik (masih lewat tombol "Buat gambar" di Rencana).
+- Catatan biaya: sesi Claude Code yang panjang (konteks ±685 ribu token) mahal per langkah; mulai sesi baru per tugas
+  dan jangan ganti model di tengah sesi.

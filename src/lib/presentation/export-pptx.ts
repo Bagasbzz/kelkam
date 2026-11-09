@@ -1,7 +1,8 @@
 import PptxGenJS from "pptxgenjs";
 import JSZip from "jszip";
-import { deckSchema, THEMES } from "./model";
-import { layoutSlide, SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement } from "./layout";
+import { deckSchema, FONT_PAIRS, THEMES } from "./model";
+import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement } from "./layout";
+import { sceneFor } from "./design";
 
 export interface PresentationAsset { data: Buffer; mime: "image/png" | "image/jpeg" }
 export interface PresentationExportOptions { assets?: Record<string, PresentationAsset> }
@@ -36,11 +37,14 @@ function imageDimensions(asset: PresentationAsset): { width: number; height: num
 export async function exportDeckPptx(input: unknown, options: PresentationExportOptions = {}): Promise<Buffer> {
   const deck = deckSchema.parse(input);
   const palette = THEMES[deck.theme];
+  const fonts = deck.design ? FONT_PAIRS[deck.design.fonts] : { heading: palette.headingFont, body: palette.bodyFont };
+  const scenes = deck.slides.map((_, index) => sceneFor(deck, index));
   const assets = new Map<string, { asset: PresentationAsset; width: number; height: number }>();
   let assetBytes = 0;
-  for (const slide of deck.slides) {
-    if (!slide.art || assets.has(slide.art.fileId)) continue;
-    const id = slide.art.fileId;
+  // Every image the scenes draw (slide art and the deck logo) must be supplied by the caller.
+  for (const element of scenes.flatMap((scene) => scene.elements)) {
+    if (element.type !== "image" || assets.has(element.fileId)) continue;
+    const id = element.fileId;
     if (!options.assets || !Object.hasOwn(options.assets, id)) throw new Error(`Aset gambar slide tidak tersedia: ${id}. Muat aset sebelum mengekspor.`);
     const asset = options.assets[id];
     const dimensions = imageDimensions(asset);
@@ -55,8 +59,7 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
   pptx.subject = "Presentasi dengan elemen native yang dapat diedit";
   pptx.title = deck.title;
   pptx.company = "KeluhKampus";
-  pptx.theme = { headFontFace: palette.headingFont, bodyFontFace: palette.bodyFont };
-  const scenes = deck.slides.map((slide, index) => layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette));
+  pptx.theme = { headFontFace: fonts.heading, bodyFontFace: fonts.body };
 
   deck.slides.forEach((slide, index) => {
     const page = pptx.addSlide();
@@ -109,9 +112,16 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
     xml = xml.replace(/<p:pic>[\s\S]*?<\/p:pic>/g, (node) => {
       const elementIndex = /name="studio-(\d+)"/.exec(node)?.[1];
       const element = elementIndex === undefined ? undefined : scenes[index].elements[Number(elementIndex)];
-      if (element?.type !== "image" || element.crop !== "cover") return node;
-      const dimensions = assets.get(element.fileId)!;
-      return node.replace(/<a:stretch>/, `${imageCropXml(element, dimensions.width, dimensions.height)}<a:stretch>`);
+      if (element?.type !== "image") return node;
+      let picture = node;
+      if (element.crop === "cover") {
+        const dimensions = assets.get(element.fileId)!;
+        picture = picture.replace(/<a:stretch>/, `${imageCropXml(element, dimensions.width, dimensions.height)}<a:stretch>`);
+      }
+      // Framed photos are clipped by the picture geometry itself, so they stay real, replaceable pictures.
+      if (element.mask === "ellipse") picture = picture.replace(/<a:prstGeom prst="rect">/, '<a:prstGeom prst="ellipse">');
+      else if (element.mask) picture = picture.replace(/<a:prstGeom[\s\S]*?<\/a:prstGeom>/, pathGeometry(element.mask));
+      return picture;
     });
     const motion = deck.slides[index].visual?.motion ?? "none";
     if (motion !== "none") {
@@ -130,7 +140,10 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
 }
 
 function polygonGeometry(element: ShapeElement): string {
-  const points = element.points!;
+  return pathGeometry(element.points!);
+}
+
+function pathGeometry(points: readonly (readonly [number, number])[]): string {
   const point = ([x, y]: readonly [number, number]) => `<a:pt x="${Math.round(x * 100000)}" y="${Math.round(y * 100000)}"/>`;
   return `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="100000" h="100000"><a:moveTo>${point(points[0])}</a:moveTo>${points.slice(1).map((p) => `<a:lnTo>${point(p)}</a:lnTo>`).join("")}<a:close/></a:path></a:pathLst></a:custGeom>`;
 }

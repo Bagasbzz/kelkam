@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, type PointerEvent, type KeyboardEvent } from "react";
-import { adjustSlideElement, constrainBounds, layoutSlide, renderSlideSvg, SLIDE_HEIGHT, SLIDE_WIDTH, type Bounds } from "@/lib/presentation/layout";
+import { adjustSlideElement, constrainBounds, renderSlideSvg, SLIDE_HEIGHT, SLIDE_WIDTH, type Bounds } from "@/lib/presentation/layout";
+import { sceneFor } from "@/lib/presentation/design";
 import type { PresentationDeck, PresentationSlide } from "@/lib/presentation/model";
 import styles from "./presentation.module.css";
 
@@ -17,7 +18,7 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
   onSelect: (target: EditTarget) => void; onChange: (slide: PresentationSlide) => void;
 }) {
   const slide = deck.slides[index];
-  const scene = layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette);
+  const scene = sceneFor(deck, index, slide);
   const svg = renderSlideSvg(scene);
   const surface = useRef<HTMLDivElement>(null);
   const gesture = useRef<{ pointer: number; target: EditTarget; mode: "move" | "resize"; origin: Bounds; left: number; top: number; width: number; height: number; startX: number; startY: number } | null>(null);
@@ -67,7 +68,7 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
   }
 
   const previewSlide = draft ? setObjectBounds(slide, draft.target, draft.bounds) : slide;
-  const previewSvg = draft ? renderSlideSvg(layoutSlide(previewSlide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette)) : svg;
+  const previewSvg = draft ? renderSlideSvg(sceneFor(deck, index, previewSlide)) : svg;
   return <div className={styles.canvasWrap} ref={surface}>
     <div className={styles.preview} role="img" aria-label={`Slide ${index + 1}: ${slide.title}`} dangerouslySetInnerHTML={{ __html: previewSvg }} />
     {elements.map((element) => {

@@ -1427,3 +1427,16 @@
     transition: none;
   }
 }
+.planMeta .swatchRow {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  background: transparent;
+  padding: 3px 0;
+}
+.swatchRow i {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid #0f172a26;
+}

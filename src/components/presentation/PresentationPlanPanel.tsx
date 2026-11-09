@@ -4,15 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, FileText, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { getErrorMessage } from "@/lib/errors";
-import { layoutSlide, renderSlideSvg } from "@/lib/presentation/layout";
-import type { PresentationDeck, PresentationSlide, SlideVisual } from "@/lib/presentation/model";
-import { DESIGN_PRESETS, type DesignPreset } from "@/lib/presentation/presets";
+import { renderSlideSvg } from "@/lib/presentation/layout";
+import { layoutDesignedSlide, sceneFor, STYLE_EXAMPLES } from "@/lib/presentation/design";
+import type { DeckDesign, PresentationDeck, PresentationSlide } from "@/lib/presentation/model";
 import styles from "./presentation.module.css";
 
 export interface ChatMaterial { id: string; fileId: string; title: string; fileName: string; kind: string }
 export interface PlanImage { slide: number; prompt: string; role: "hero" | "background" | "cutout"; slideId?: string; jobId?: string }
 export interface ChatPlan {
-  goal: string; audience: string; minutes: number; density: "ringkas" | "seimbang" | "padat"; templateId?: string;
+  goal: string; audience: string; minutes: number; density: "ringkas" | "seimbang" | "padat"; templateId?: string; design?: Partial<DeckDesign>;
   slides: { role: string; title: string; point: string; material?: string; visual?: string }[];
   images?: PlanImage[]; omitted?: string;
 }
@@ -22,27 +22,24 @@ interface ArtJob { id: string; status: "queued" | "running" | "done" | "failed";
 
 const DENSITY_LABEL = { ringkas: "Teks ringkas", seimbang: "Teks seimbang", padat: "Teks padat" } as const;
 const ROLE_LABEL = { hero: "Gambar utama", background: "Latar belakang", cutout: "Ilustrasi terpisah" } as const;
-const MOTIF_BY_STYLE: Record<string, SlideVisual["motif"]> = { geometric: "botanical", zine: "megaphone", kinetic: "orbit", blueprint: "network", minimal: "none" };
-const BACKGROUND_BY_STYLE: Record<string, SlideVisual["background"]> = { geometric: "solid", zine: "halftone", kinetic: "spotlight", blueprint: "grid", minimal: "solid" };
 const SAMPLE_ID = "00000000-0000-4000-8000-000000000001";
 
 /** Labels the AI may offer as answer options; a match shows the picture instead of a plain chip. */
-export const TEMPLATE_LABELS = new Set(DESIGN_PRESETS.map((preset) => preset.label.toLowerCase()));
+export const TEMPLATE_LABELS = new Set(STYLE_EXAMPLES.map((style) => style.label.toLowerCase()));
 
-function sampleSvg(preset: DesignPreset) {
+function sampleSvg(style: (typeof STYLE_EXAMPLES)[number], index: number) {
   const slide: PresentationSlide = {
-    id: SAMPLE_ID, title: preset.label, eyebrow: "CONTOH TAMPILAN", body: ["Judul jelas, poin singkat, dan visual yang mendukung pesan."],
-    notes: "", source: "", layout: "title", locked: false,
-    visual: { motif: MOTIF_BY_STYLE[preset.artDirection.style] ?? "none", background: BACKGROUND_BY_STYLE[preset.artDirection.style] ?? "solid", motion: "none" },
+    id: SAMPLE_ID, title: style.label, eyebrow: "CONTOH TAMPILAN", body: [style.description],
+    notes: "", source: "", layout: "cover", locked: false,
   };
-  return renderSlideSvg(layoutSlide(slide, preset.theme, 0, 1, preset.artDirection, preset.palette));
+  return renderSlideSvg(layoutDesignedSlide(slide, { ...style.design, seed: 4000 + index * 7 }, 0, 1));
 }
 
 /** Visual template choices. Picking one sends a normal chat message, so the AI keeps the full context. */
 export function TemplatePicker({ onPick, disabled, only, compact }: { onPick: (label: string) => void; disabled?: boolean; only?: readonly string[]; compact?: boolean }) {
   const presets = useMemo(() => {
     const wanted = only?.map((label) => label.toLowerCase());
-    return DESIGN_PRESETS.filter((preset) => !wanted || wanted.includes(preset.label.toLowerCase())).map((preset) => ({ preset, svg: sampleSvg(preset) }));
+    return STYLE_EXAMPLES.map((preset, i) => ({ preset, i })).filter(({ preset }) => !wanted || wanted.includes(preset.label.toLowerCase())).map(({ preset, i }) => ({ preset, svg: sampleSvg(preset, i) }));
   }, [only]);
   return <div className={`${styles.templateGrid} ${compact ? styles.templateCompact : ""}`}>
     {presets.map(({ preset, svg }) => <button key={preset.id} type="button" disabled={disabled} onClick={() => onPick(preset.label)} title={preset.description}>
@@ -54,7 +51,7 @@ export function TemplatePicker({ onPick, disabled, only, compact }: { onPick: (l
 
 function SlideThumb({ deck, index, onOpen }: { deck: PresentationDeck; index: number; onOpen: () => void }) {
   const slide = deck.slides[index];
-  const svg = renderSlideSvg(layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette));
+  const svg = renderSlideSvg(sceneFor(deck, index));
   return <button type="button" className={styles.thumb} onClick={onOpen} aria-label={`Buka slide ${index + 1} di editor: ${slide.title}`}>
     <span className={styles.mini} aria-hidden="true" dangerouslySetInnerHTML={{ __html: svg }} />
     <span><b>{String(index + 1).padStart(2, "0")}</b> {slide.title}</span>
@@ -153,7 +150,7 @@ interface PanelProps {
 
 export default function PresentationPlanPanel({ root, revision, deck, shownDeck, showingProposal, fresh, plan, materials, source, working, canPickTemplate, canStartImages, onOpenSlide, onPickTemplate, onApplyArt, onProject, onError }: PanelProps) {
   const [removing, setRemoving] = useState("");
-  const template = plan?.templateId ? DESIGN_PRESETS.find((preset) => preset.id === plan.templateId) : undefined;
+  const swatches = plan?.design ? [plan.design.primary, plan.design.accent, plan.design.background].filter((value): value is string => !!value && /^[0-9A-Fa-f]{6}$/.test(value)) : [];
 
   async function remove(materialId: string) {
     setRemoving(materialId);
@@ -180,7 +177,7 @@ export default function PresentationPlanPanel({ root, revision, deck, shownDeck,
     {plan && <section>
       <h3>Rencana presentasi</h3>
       <p className={styles.planGoal}>{plan.goal}</p>
-      <div className={styles.planMeta}><span>{plan.audience}</span><span>{plan.minutes} menit</span><span>{DENSITY_LABEL[plan.density]}</span>{template && <span>{template.label}</span>}</div>
+      <div className={styles.planMeta}><span>{plan.audience}</span><span>{plan.minutes} menit</span><span>{DENSITY_LABEL[plan.density]}</span>{swatches.length > 0 && <span className={styles.swatchRow} title="Warna yang dipilih AI">{swatches.map((color) => <i key={color} style={{ background: `#${color}` }} />)}</span>}</div>
       <details className={styles.planOutline}>
         <summary>Urutan {plan.slides.length} slide</summary>
         <ol>{plan.slides.map((slide, index) => <li key={`${index}-${slide.title}`}><strong>{slide.title}</strong><span>{slide.point}</span>{slide.material && <small>Bahan: {slide.material}</small>}</li>)}</ol>

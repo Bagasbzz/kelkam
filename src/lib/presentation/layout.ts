@@ -19,6 +19,8 @@ export interface ShapeElement extends Bounds, EditableElement {
 export interface LineElement extends Bounds, EditableElement { type: "line"; color: string; lineWidth: number; opacity?: number; flipV?: boolean }
 export interface ImageElement extends Bounds, EditableElement {
   type: "image"; fileId: string; role: "hero" | "background" | "cutout"; alt: string; crop: "cover" | "contain"; opacity?: number;
+  /** Optional frame: an ellipse or normalized internally authored polygon the photo is clipped to. */
+  mask?: "ellipse" | readonly (readonly [number, number])[];
 }
 export type SlideElement = TextElement | ShapeElement | LineElement | ImageElement;
 export interface SlideScene { width: number; height: number; background: string; elements: SlideElement[]; issues: PresentationIssue[] }
@@ -42,8 +44,10 @@ export function adjustSlideElement(slide: PresentationSlide, target: SlideEditTa
   return { ...slide, adjustments: [...(slide.adjustments ?? []).filter((item) => item.target !== target), adjustment] };
 }
 
+const FONT_WIDTH: Partial<Record<PresentationFont, number>> = { "Arial Black": 1.13, Impact: 0.91, Georgia: 1.04, "Century Gothic": 1.1, "Trebuchet MS": 1.02, Tahoma: 0.99 };
+
 // Conservative system-font width estimates keep wrapping deterministic and offline.
-function textWidth(value: string, fontSize: number, fontFace: PresentationFont): number {
+export function textWidth(value: string, fontSize: number, fontFace: PresentationFont): number {
   let units = 0;
   for (const char of value) {
     if (/\s/u.test(char)) units += 0.34;
@@ -53,10 +57,10 @@ function textWidth(value: string, fontSize: number, fontFace: PresentationFont):
     else if (char.codePointAt(0)! > 0x2ff) units += 1.12;
     else units += 0.63;
   }
-  return units * fontSize / 72 * (fontFace === "Arial Black" ? 1.13 : fontFace === "Impact" ? 0.91 : 1);
+  return units * fontSize / 72 * (FONT_WIDTH[fontFace] ?? 1);
 }
 
-function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont): string[] {
+export function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont): string[] {
   const lines: string[] = [];
   let line = "";
   for (const word of value.split(/\s+/u).filter(Boolean)) {
@@ -71,7 +75,7 @@ function wrapText(value: string, width: number, fontSize: number, fontFace: Pres
   return lines;
 }
 
-function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9) {
+export function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9) {
   const officeLeading = fontFace === "Impact" ? 1.35 : 1.17;
   let fontSize = size;
   let lines = wrapText(value, bounds.w, fontSize, fontFace);
@@ -83,7 +87,14 @@ function fitText(value: string, bounds: Bounds, size: number, fontFace: Presenta
 }
 
 /** Pure, authoritative inch geometry for both browser previews and native PPTX. */
-export function layoutSlide(slide: PresentationSlide, theme: PresentationTheme, index = 0, total = 1, artDirection?: ArtDirection, paletteId?: PresentationPalette): SlideScene {
+const LEGACY_LAYOUT: Record<string, PresentationSlide["layout"]> = {
+  cover: "title", section: "statement", agenda: "split", bullets: "split", photo: "split", quote: "statement",
+  stats: "cards", process: "timeline", compare: "cards", figure: "split", closing: "statement",
+};
+
+export function layoutSlide(input: PresentationSlide, theme: PresentationTheme, index = 0, total = 1, artDirection?: ArtDirection, paletteId?: PresentationPalette): SlideScene {
+  // Designed compositions fall back to the closest classic layout on decks without a design.
+  const slide = LEGACY_LAYOUT[input.layout] ? { ...input, layout: LEGACY_LAYOUT[input.layout] } : input;
   const style = artDirection?.style ?? ({ playful: "zine", editorial: "geometric", product: "kinetic" } as const)[theme];
   const originalPalette = style === "blueprint"
     ? { ...THEMES[theme], background: "102E50", foreground: "F1F7FA", muted: "B0CADD", accent: "8BD9EA", secondary: "315877", surface: "193D60", headingFont: "Arial" as const }
@@ -286,9 +297,25 @@ function escapeXml(value: string): string {
 }
 
 /** Fixed line breaks and image cropping match the editable PPTX. */
+const FONT_STACK: Record<PresentationFont, string> = {
+  Arial: "Arial, Helvetica, sans-serif",
+  "Arial Black": "'Arial Black', 'Arial Bold', Gadget, sans-serif",
+  Impact: "Impact, 'Arial Narrow Bold', sans-serif",
+  Georgia: "Georgia, 'Times New Roman', serif",
+  "Century Gothic": "'Century Gothic', Futura, 'Avenir Next', Arial, sans-serif",
+  "Trebuchet MS": "'Trebuchet MS', 'Segoe UI', Arial, sans-serif",
+  Tahoma: "Tahoma, Verdana, 'Segoe UI', sans-serif",
+};
+
+function clipHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619);
+  return (hash >>> 0).toString(36);
+}
+
 export function renderSlideSvg(scene: SlideScene): string {
   const scale = 96;
-  const elements = scene.elements.map((element) => {
+  const elements = scene.elements.map((element, elementIndex) => {
     const { x, y, w, h } = element;
     const editAttribute = element.editKey && (EDIT_TARGETS as readonly string[]).includes(element.editKey) ? ` data-edit-key="${element.editKey}"` : "";
     if (element.type === "shape") {
@@ -300,12 +327,17 @@ export function renderSlideSvg(scene: SlideScene): string {
     }
     if (element.type === "line") return `<line x1="${x * scale}" y1="${(y + (element.flipV ? h : 0)) * scale}" x2="${(x + w) * scale}" y2="${(y + (element.flipV ? 0 : h)) * scale}" stroke="#${element.color}" stroke-opacity="${element.opacity ?? 1}" stroke-width="${element.lineWidth * scale / 72}"/>`;
     if (element.type === "image") {
-      return `<svg${editAttribute} x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" overflow="hidden"><image href="/api/files/${escapeXml(encodeURIComponent(element.fileId))}" width="100%" height="100%" preserveAspectRatio="xMidYMid ${element.crop === "cover" ? "slice" : "meet"}" opacity="${element.opacity ?? 1}"><title>${escapeXml(element.alt)}</title></image></svg>`;
+      // Deterministic id: identical frames on one page (thumbnail and stage) share identical geometry.
+      const clipId = `clip-${clipHash(`${element.fileId}|${w.toFixed(3)}|${h.toFixed(3)}|${JSON.stringify(element.mask ?? "")}|${elementIndex}`)}`;
+      const mask = element.mask === "ellipse"
+        ? `<clipPath id="${clipId}"><ellipse cx="${w * scale / 2}" cy="${h * scale / 2}" rx="${w * scale / 2}" ry="${h * scale / 2}"/></clipPath>`
+        : element.mask ? `<clipPath id="${clipId}"><polygon points="${element.mask.map(([a, b]) => `${a * w * scale},${b * h * scale}`).join(" ")}"/></clipPath>` : "";
+      return `<svg${editAttribute} x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" overflow="hidden">${mask}<image href="/api/files/${escapeXml(encodeURIComponent(element.fileId))}" width="100%" height="100%" preserveAspectRatio="xMidYMid ${element.crop === "cover" ? "slice" : "meet"}" opacity="${element.opacity ?? 1}"${mask ? ` clip-path="url(#${clipId})"` : ""}><title>${escapeXml(element.alt)}</title></image></svg>`;
     }
     const anchor = element.align === "center" ? "middle" : element.align === "right" ? "end" : "start";
     const tx = (x + (element.align === "center" ? w / 2 : element.align === "right" ? w : 0)) * scale;
     const spans = element.lines.map((value, i) => `<tspan x="${tx}" y="${y * scale + (i * element.lineHeight + 1) * element.fontSize * scale / 72}">${escapeXml(value)}</tspan>`).join("");
-    return `<text${editAttribute} font-family="${element.fontFace}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" fill="#${element.color}" text-anchor="${anchor}" xml:space="preserve">${spans}</text>`;
+    return `<text${editAttribute} font-family="${escapeXml(FONT_STACK[element.fontFace] ?? element.fontFace)}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" fill="#${element.color}" text-anchor="${anchor}" xml:space="preserve">${spans}</text>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width * scale}" height="${scene.height * scale}" viewBox="0 0 ${scene.width * scale} ${scene.height * scale}" role="img" aria-label="Pratinjau slide"><rect width="100%" height="100%" fill="#${scene.background}"/>${elements}</svg>`;
 }

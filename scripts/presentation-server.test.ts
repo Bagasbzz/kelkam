@@ -228,11 +228,11 @@ test("art references require owned PNG/JPEG and existing deck or completed proje
   file = { mime: "image/jpeg", size: MAX_ART_BYTES + 1 };
   await assert.rejects(validatePresentationArt("owner-a", deck.id, deck, deck, db), /4 MB/);
   file = { mime: "image/jpeg", size: MAX_ART_BYTES };
-  const many = { ...deck, slides: Array.from({ length: 9 }, (_, i) => ({ ...deck.slides[0], id: randomUUID(), art: { ...deck.slides[0].art!, fileId: `art-${i}` } })) };
-  await assert.rejects(validatePresentationArt("owner-a", deck.id, many, many, db), /delapan/);
-  many.slides = many.slides.slice(0, 7);
-  await assert.rejects(validatePresentationArt("owner-a", deck.id, many, many, db), /24 MB/);
-  many.slides = many.slides.slice(0, 6);
+  const many = { ...deck, slides: Array.from({ length: 13 }, (_, i) => ({ ...deck.slides[0], id: randomUUID(), art: { ...deck.slides[0].art!, fileId: `art-${i}` } })) };
+  await assert.rejects(validatePresentationArt("owner-a", deck.id, many, many, db), /Maksimum 12 aset/);
+  many.slides = many.slides.slice(0, 9);
+  await assert.rejects(validatePresentationArt("owner-a", deck.id, many, many, db), /32 MB/);
+  many.slides = many.slides.slice(0, 8);
   await validatePresentationArt("owner-a", deck.id, many, many, db);
 });
 
