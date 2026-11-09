@@ -88,7 +88,7 @@ Instruksi Khusus untuk Data Catatan Observasi (Kualitatif/Lapangan):
       ],
       temperature: 0.3,
       max_tokens: 3500,
-    }, { timeout: 35000 });
+    }, { timeout: 100_000 });
 
     const aiResponse = stripThinking(response.choices[0].message.content);
 

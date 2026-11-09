@@ -12,7 +12,7 @@ function load<T>(relative: string, dependencies: Record<string, unknown>): T {
   const exports: Record<string, unknown> = {};
   const code = ts.transpileModule(readFileSync(new URL(relative, import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   vm.runInNewContext(code, {
-    exports, process: { env: {} },
+    exports, process: { env: {} }, AbortController, setTimeout, clearTimeout,
     require(id: string) { if (Object.hasOwn(dependencies, id)) return dependencies[id]; throw new Error(`Unexpected import ${id}`); },
   });
   return exports as T;
@@ -95,6 +95,33 @@ test("only light issues still pass, and an unavailable auditor falls back to loc
   const clean = await down.reviewReport(project, { chapters, round: 1, localIssues: [] });
   assert.equal(clean.verdict, "lulus");
   assert.equal(clean.aiUnavailable, true);
+});
+
+test("chapter writing survives a gateway that rejects streaming and gives the plain request the chapter budget", async () => {
+  const calls: Array<{ stream: boolean; timeout?: number; extra: boolean }> = [];
+  const writer = load<typeof Report>("../src/lib/report/generate-report.ts", {
+    "@/lib/report/report-intent": intent,
+    "@/lib/report/figure-placeholders": figures,
+    "@/lib/ai/client": {
+      AI_MODEL: "writer", AI_MODEL_FAST: "writer", AI_MODEL_REVIEW: "review-model",
+      assertAiConfigured: () => undefined,
+      stripThinking: (value: string) => value || "",
+      stripDashes: (value: string) => value,
+      aiClient: { chat: { completions: { create: async (body: Record<string, unknown>, options: { timeout?: number }) => {
+        calls.push({ stream: Boolean(body.stream), timeout: options?.timeout, extra: "stream_options" in body });
+        if (body.stream) throw Object.assign(new Error("400 unsupported parameter"), { status: 400 });
+        return { choices: [{ message: { content: `## Pendahuluan\n\n${"Kalimat lengkap tentang topik ini. ".repeat(40)}` }, finish_reason: "stop" }], usage: { total_tokens: 10 } };
+      } } } },
+    },
+    "@/lib/ai/guard": guard,
+    "@/lib/errors": { isAbortLikeError: (error: unknown) => /timeout|timed out|aborted/i.test(String((error as Error)?.message)) },
+  });
+  const notes: string[] = [];
+  const result = await writer.generateChapter(project, { index: 0, total: 3, section: { id: "intro", title: "Pendahuluan", purpose: "Latar belakang", requiredDiagrams: [] }, previousSummaries: [], mode: "lengkap", onEvent: (note: string) => notes.push(note) });
+  assert.equal(result.source, "ai");
+  assert.deepEqual(calls.map((call) => [call.stream, call.extra]), [[true, true], [true, false], [false, false]]);
+  assert.ok((calls[2].timeout ?? 0) > 35_000, "plain request must not inherit the 35 s client default");
+  assert.ok(notes.some((note) => /HTTP 400/.test(note)));
 });
 
 test("chapter title matching tolerates numbering and case", () => {

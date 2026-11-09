@@ -204,7 +204,7 @@ Aturan ketat:
       ],
       temperature: 0.18,
       max_tokens: 3600,
-    }, { timeout: 35000, signal: req.signal }), req.signal);
+    }, { timeout: 100_000, signal: req.signal }), req.signal);
 
     const data = stripDashes(stripThinking(response.choices[0]?.message.content));
     if (!data) {

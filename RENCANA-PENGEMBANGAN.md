@@ -286,3 +286,17 @@ Yang dikerjakan (selesai 2026-11-09):
   sudut membulat dan penanda aktif, kanvas lebih menonjol.
 - Belum dicek di browser (butuh login + DB); render dicek lewat contact sheet lokal untuk 3 seed berbeda.
 - Belum: audit AI untuk Presentasi (K20), gambar otomatis hanya terpasang saat panel Rencana (mode Chat AI) terbuka.
+
+## 11. Perbaikan: semua bab Laporan "respons AI gagal" (2026-11-09, kedua kali)
+
+- Gejala: DOCX berisi sampul + judul bab saja, setiap bab "[ISI BAB ...: respons AI gagal]", tanpa daftar pustaka.
+- Penyebab yang ditemukan di kode: client OpenAI dibuat dengan `timeout: 35_000`. Penulisan bab (`streamChapter`) tidak
+  memberi timeout sendiri, jadi permintaan biasa (cadangan bila streaming ditolak/kosong) selalu terputus di 35 detik,
+  padahal satu bab 1500-2500 kata butuh jauh lebih lama. Cadangan streaming kedua juga masih mengirim `stream_options`
+  yang sering ditolak gateway (HTTP 400). Hasilnya dua percobaan gagal lalu bab diisi placeholder.
+- Perbaikan: semua panggilan penulisan bab memakai batas waktu bab (maks. 200 detik); urutan coba: streaming lengkap →
+  streaming polos (tanpa `stream_options`/`reasoning_effort`) → permintaan biasa. Penyebab dari provider kini tercatat
+  di log job ("Streaming ... ditolak provider: HTTP ...", "Permintaan AI gagal: ...") dan disebut di pesan selesai.
+  Timeout juga dinaikkan untuk revisi laporan (100 dtk), olah data (100 dtk), dan diagram UML/konsep (90 dtk).
+- Belum terverifikasi langsung di server (kunci AI hanya ada di server). Bila masih gagal, baca log job: pesan provider
+  di sana menunjukkan apakah masalahnya model/kunci/kuota di sisi Mindaku.

@@ -770,7 +770,7 @@ async function streamChat(params: ChatParams, timeoutMs: number, onDelta: (fullT
   try {
     const stream = await aiClient.chat.completions.create(
       { ...params, stream: true, stream_options: { include_usage: true } },
-      { signal: controller.signal, maxRetries: 0 },
+      { signal: controller.signal, maxRetries: 0, timeout: 90_000 },
     );
     let text = "";
     let usage: number | undefined;

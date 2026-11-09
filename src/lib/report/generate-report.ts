@@ -401,11 +401,15 @@ async function streamChapter(
   params: { model: string; messages: ChatMessage[]; maxTokens: number; temperature: number },
   timeoutMs: number,
   onDelta: (fullText: string) => void,
+  onNote: (text: string) => void = () => {},
 ) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // The SDK client defaults to 35 s per request. A non-streamed chapter (or a gateway that buffers
+  // the stream) needs far longer, so every call here carries the chapter's own time budget.
+  const requestOptions = () => ({ signal: controller.signal, maxRetries: 0, timeout: Math.max(5_000, timeoutMs) });
   let text = "";
-  const run = async (withReasoning: boolean) => {
+  const run = async (variant: "full" | "bare") => {
     const stream = await aiClient.chat.completions.create(
       {
         model: params.model,
@@ -413,11 +417,10 @@ async function streamChapter(
         temperature: params.temperature,
         max_tokens: params.maxTokens,
         stream: true,
-        stream_options: { include_usage: true },
-        // Penulisan naratif tidak butuh reasoning panjang; hemat token & waktu.
-        ...(withReasoning ? { reasoning_effort: "low" as const } : {}),
+        // Some OpenAI-compatible gateways reject stream_options/reasoning_effort with HTTP 400; "bare" omits both.
+        ...(variant === "full" ? { stream_options: { include_usage: true }, reasoning_effort: "low" as const } : {}),
       },
-      { signal: controller.signal, maxRetries: 0 },
+      requestOptions(),
     );
     let finishReason = "unknown";
     let usage = 0;
@@ -436,38 +439,41 @@ async function streamChapter(
     onDelta(text);
     return { text, finishReason, usage };
   };
-  /**
-   * Some OpenAI-compatible gateways reject stream options or stream only hidden reasoning,
-   * which leaves no chapter text. The plain request is the same shape the chat agent uses.
-   */
   const plain = async () => {
     const completion = await aiClient.chat.completions.create(
       { model: params.model, messages: params.messages, temperature: params.temperature, max_tokens: params.maxTokens },
-      { signal: controller.signal, maxRetries: 0 },
+      requestOptions(),
     );
     const choice = completion.choices?.[0];
     text = typeof choice?.message?.content === "string" ? choice.message.content : "";
     onDelta(text);
     return { text, finishReason: choice?.finish_reason || "unknown", usage: completion.usage?.total_tokens ?? 0 };
   };
+  const describe = (error: unknown) => {
+    const status = (error as { status?: unknown })?.status;
+    return `${typeof status === "number" ? `HTTP ${status} ` : ""}${error instanceof Error ? error.message.slice(0, 160) : "gagal"}`;
+  };
   try {
     let result: { text: string; finishReason: string; usage: number } | undefined;
-    try {
-      result = await run(true);
-    } catch (error) {
-      if (controller.signal.aborted || isAbortLikeError(error) || text) throw error;
-      const status = (error as { status?: unknown })?.status;
-      // Provider tidak kenal reasoning_effort → ulang polos (hanya kalau belum ada teks).
-      if (status === 400) {
-        try { result = await run(false); } catch (retry) { if (controller.signal.aborted || isAbortLikeError(retry) || text) throw retry; }
+    for (const variant of ["full", "bare"] as const) {
+      try {
+        result = await run(variant);
+        break;
+      } catch (error) {
+        if (controller.signal.aborted || text) throw error;
+        onNote(`Streaming (${variant}) ditolak provider: ${describe(error)}`);
+        // Only a rejected request shape is worth another shape; timeouts/network go straight to the plain request.
+        if ((error as { status?: unknown })?.status !== 400) break;
       }
     }
     if (!result || !stripThinking(result.text).trim()) {
       if (controller.signal.aborted) throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);
+      if (result) onNote("Streaming tidak menghasilkan teks, mencoba permintaan biasa");
       result = await plain();
     }
     return result;
   } catch (error) {
+    onNote(`Permintaan AI gagal: ${describe(error)}`);
     if (controller.signal.aborted || isAbortLikeError(error)) {
       throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);
     }
@@ -777,7 +783,7 @@ ATURAN TIPOGRAFI:
       emit(`Melanjutkan dari teks sebelumnya (${countWordsLocal(content)} kata)…`);
     } else {
       emit("Menulis isi bab…");
-      const first = await streamChapter({ model, messages: baseMessages, maxTokens, temperature: 0.15 }, Math.min(CHAPTER_TIMEOUT_MS, remaining()), reportDelta(""));
+      const first = await streamChapter({ model, messages: baseMessages, maxTokens, temperature: 0.15 }, Math.min(CHAPTER_TIMEOUT_MS, remaining()), reportDelta(""), emit);
       content = cleanChapterOutput(stripThinking(first.text));
       finishReason = first.finishReason;
       tokensUsed += first.usage;
@@ -797,6 +803,7 @@ ATURAN TIPOGRAFI:
         { model, messages: continuationMessages(content), maxTokens: Math.round(maxTokens / 2), temperature: 0.15 },
         Math.min(CONTINUATION_TIMEOUT_MS, remaining()),
         reportDelta(content),
+        emit,
       );
       const extra = cleanChapterOutput(stripThinking(cont.text));
       if (!extra) break;

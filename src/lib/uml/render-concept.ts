@@ -239,10 +239,10 @@ Aturan: 3-8 groups; tiap group 2-6 items singkat (≤6 kata); label ≤5 kata; r
       const base = { model, messages: [{ role: "system" as const, content: system }, { role: "user" as const, content: user }], temperature: 0.2, max_tokens: 1800 };
       let res;
       try {
-        res = await aiClient.chat.completions.create({ ...base, reasoning_effort: "low", response_format: { type: "json_object" } }, { signal: controller.signal, maxRetries: 0 });
+        res = await aiClient.chat.completions.create({ ...base, reasoning_effort: "low", response_format: { type: "json_object" } }, { signal: controller.signal, maxRetries: 0, timeout: 90_000 });
       } catch (err) {
         if ((err as { status?: number })?.status !== 400) throw err;
-        res = await aiClient.chat.completions.create(base, { signal: controller.signal, maxRetries: 0 });
+        res = await aiClient.chat.completions.create(base, { signal: controller.signal, maxRetries: 0, timeout: 90_000 });
       }
       return stripThinking(res.choices?.[0]?.message?.content || "");
     } finally { clearTimeout(timer); }

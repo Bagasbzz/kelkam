@@ -929,7 +929,7 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
       "",
       "Catatan:",
       `- Daftar isi/gambar/tabel di Word perlu *update field* (klik kanan → Update Field) saat pertama dibuka.`,
-      ...(placeholderChapters.length ? [`- Bab yang belum lengkap dan perlu revisi: ${placeholderChapters.join(", ")}.`] : []),
+      ...(placeholderChapters.length ? [`- Bab yang belum lengkap dan perlu revisi: ${placeholderChapters.join(", ")}.${chapters.find((s) => s.status === "fallback" && s.error)?.error ? ` Penyebab dari layanan AI: ${chapters.find((s) => s.status === "fallback" && s.error)!.error}` : ""}`] : []),
       ...(pendingNote ? [pendingNote.trim().split("\n").map((l) => l.trim()).join("\n")] : []),
       "",
       "Ada bagian yang mau direvisi? Sebutkan bab + instruksinya (misal: \"perdalam metode penelitian, tambah justifikasi sampel\"), nanti saya tulis ulang bagian itu dan kirim file terbaru.",
