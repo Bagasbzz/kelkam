@@ -176,3 +176,14 @@ warna dan latar yang disesuaikan, gambar dari laporan dimasukkan rapi, serta log
   ke PPTX yang bisa diedit, risiko keamanan).
 - Usulan urutan: (a) gaya per deck + layout & dekorasi baru + slide gambar laporan + logo,
   (b) gambar AI otomatis, (c) kesamaan ekspor PPTX.
+
+### 2026-11-09
+- **Perbaikan Laporan rusak** (semua bab berisi "respons AI gagal", sumber 0, tanpa gambar):
+  - Asisten kembali wajib mencari sumber (`findSources` tiap query, lalu `selectSources`) setelah membuat rencana;
+    `startExecution` ditolak bila belum ada sumber tercentang. Panduan jumlah bab per jenis dokumen dikembalikan.
+  - Laporan penuh kembali memakai diagram/ilustrasi secara bawaan (`diagrams: include`), kecuali pengguna menolak.
+  - Penulisan bab: bila streaming gagal/kosong di provider, otomatis mencoba permintaan biasa (tanpa stream).
+  - Penanda lama `[SISTEM] ... Tulis jawaban akhir SEKARANG` di riwayat run dibuang agar AI tidak menganggapnya injeksi.
+  - File: `laporan/assistant.ts`, `report/report-intent.ts`, `report/generate-report.ts`, `agent-runs/engine.ts`.
+- Desain presentasi baru (bagian 8) sedang dikerjakan di lokal: `src/lib/presentation/design.ts` (renderer 12 komposisi,
+  10 gaya contoh, warna/font per deck, bingkai foto, logo). Belum di-commit; integrasi AI (`setPlan.design`) belum.

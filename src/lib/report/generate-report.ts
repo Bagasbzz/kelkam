@@ -433,15 +433,37 @@ async function streamChapter(
     onDelta(text);
     return { text, finishReason, usage };
   };
+  /**
+   * Some OpenAI-compatible gateways reject stream options or stream only hidden reasoning,
+   * which leaves no chapter text. The plain request is the same shape the chat agent uses.
+   */
+  const plain = async () => {
+    const completion = await aiClient.chat.completions.create(
+      { model: params.model, messages: params.messages, temperature: params.temperature, max_tokens: params.maxTokens },
+      { signal: controller.signal, maxRetries: 0 },
+    );
+    const choice = completion.choices?.[0];
+    text = typeof choice?.message?.content === "string" ? choice.message.content : "";
+    onDelta(text);
+    return { text, finishReason: choice?.finish_reason || "unknown", usage: completion.usage?.total_tokens ?? 0 };
+  };
   try {
+    let result: { text: string; finishReason: string; usage: number } | undefined;
     try {
-      return await run(true);
+      result = await run(true);
     } catch (error) {
-      // Provider tidak kenal reasoning_effort → ulang polos (hanya kalau belum ada teks).
+      if (controller.signal.aborted || isAbortLikeError(error) || text) throw error;
       const status = (error as { status?: unknown })?.status;
-      if (status === 400 && !text && !controller.signal.aborted) return await run(false);
-      throw error;
+      // Provider tidak kenal reasoning_effort → ulang polos (hanya kalau belum ada teks).
+      if (status === 400) {
+        try { result = await run(false); } catch (retry) { if (controller.signal.aborted || isAbortLikeError(retry) || text) throw retry; }
+      }
     }
+    if (!result || !stripThinking(result.text).trim()) {
+      if (controller.signal.aborted) throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);
+      result = await plain();
+    }
+    return result;
   } catch (error) {
     if (controller.signal.aborted || isAbortLikeError(error)) {
       throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);

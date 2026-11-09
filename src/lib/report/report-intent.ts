@@ -33,7 +33,10 @@ export function normalizeReportIntent(value: unknown): ReportIntent {
   return {
     outputMode,
     novelty: ["required", "optional", "omit"].includes(String(raw.novelty)) ? raw.novelty as NoveltyPolicy : "optional",
-    diagrams: ["include", "omit", "only_if_requested"].includes(String(raw.diagrams)) ? raw.diagrams as DiagramPolicy : "only_if_requested",
+    // A full report is planned with diagrams and illustrations unless the user declined them; other modes stay text-only by default.
+    // Sessions saved with the old implicit "only_if_requested" default are upgraded the same way.
+    diagrams: ["include", "omit"].includes(String(raw.diagrams)) || (raw.diagrams === "only_if_requested" && (explicit.diagrams === true || outputMode !== "full_report"))
+      ? raw.diagrams as DiagramPolicy : outputMode === "full_report" ? "include" : "only_if_requested",
     citations: {
       inline: outputMode !== "citations_only" && citations.inline !== false,
       bibliography: typeof citations.bibliography === "boolean" ? citations.bibliography : outputMode !== "answer",

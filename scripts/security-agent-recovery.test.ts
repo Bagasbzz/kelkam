@@ -446,6 +446,7 @@ test("resumed legacy continuation is removed narrowly and arbitrary user role-sp
     { role: "user", content: legacy },
     { role: "user", content: attack },
     { role: "user", content: `${legacy} Extra user-controlled instructions` },
+    { role: "user", content: "[SISTEM] Batas langkah tercapai. Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool. Langsung tulis jawabannya tanpa berpikir panjang." },
   ] });
   await h.serve();
   const messages = h.requests[0].messages as Msg[];
@@ -454,6 +455,7 @@ test("resumed legacy continuation is removed narrowly and arbitrary user role-sp
   assert.ok(messages.some((message) => message.role === "user" && message.content === attack));
   assert.ok(messages.some((message) => message.content === `${legacy} Extra user-controlled instructions`));
   assert.ok(!messages.some((message) => message.content === legacy));
+  assert.ok(!messages.some((message) => typeof message.content === "string" && message.content.includes("Tulis jawaban akhir SEKARANG")), "old final-answer marker is dropped");
   assert.ok(!h.row.messages.some((message) => message.content === legacy));
 });
 

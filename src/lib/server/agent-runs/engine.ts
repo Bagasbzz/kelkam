@@ -123,6 +123,10 @@ const FINAL_ANSWER_MAX_TOKENS = 4_000;
 /** Respons kosong/terpotong juga dibatasi, bukan dianggap pekerjaan selesai. */
 const MAX_EMPTY_REPLIES = 3;
 const LEGACY_CONTINUATION = "[SISTEM] Respons sebelumnya kosong atau terpotong. Lanjutkan pekerjaan: panggil tool berikutnya yang dibutuhkan, atau bila data sudah cukup tulis kesimpulan ringkas langsung tanpa berpikir panjang.";
+const LEGACY_FINAL_TAIL = " Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool. Langsung tulis jawabannya tanpa berpikir panjang.";
+/** Exact markers older engines stored as user turns; anything with extra text stays untrusted user content. */
+const isLegacyEngineMarker = (message: Msg) => message.role === "user" && typeof message.content === "string"
+  && (message.content === LEGACY_CONTINUATION || (message.content.startsWith("[SISTEM] ") && message.content.endsWith(LEGACY_FINAL_TAIL) && message.content.length < LEGACY_FINAL_TAIL.length + 300));
 const CONTINUATION_GUIDANCE = "Pemulihan runtime: respons sebelumnya kosong atau terpotong, bukan jawaban akhir. Lanjutkan pekerjaan dengan tool yang diperlukan. Jika data sudah cukup, tulis jawaban ringkas yang lengkap. Jangan mengaku telah mengerjakan tindakan tanpa hasil tool yang membuktikannya.";
 const FINAL_GUIDANCE = "Batas kerja runtime hampir tercapai. Tulis jawaban akhir berdasarkan hasil tool yang benar-benar berhasil: temuan, pekerjaan yang selesai, dan bagian yang belum selesai. Jangan memanggil tool atau mengklaim keberhasilan dari percobaan gagal atau hasil yang tidak diketahui.";
 /** Jika total konteks melebihi ini, tool result lama dipangkas. */
@@ -591,8 +595,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
   const ref = toRef(row0);
   const driver = await loadDriver(ref.kind);
 
-  // Remove only the exact historical engine marker; never promote user content.
-  let messages = (asArr(row0.messages) as Msg[]).filter((message) => !(message.role === "user" && message.content === LEGACY_CONTINUATION)).map((message) => (
+  // Remove only historical engine markers; never promote user content. Older engines stored
+  // "[SISTEM] ... Tulis jawaban akhir SEKARANG ..." as a user turn, which models now flag as injection.
+  let messages = (asArr(row0.messages) as Msg[]).filter((message) => !isLegacyEngineMarker(message)).map((message) => (
     message.role === "tool" && typeof message.content === "string"
       ? { ...message, content: sanitizeToolErrorContext(message.content) }
       : message
