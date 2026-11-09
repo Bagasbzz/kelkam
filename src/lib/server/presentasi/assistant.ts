@@ -41,7 +41,11 @@ export const presentasiAgentDriver: AgentDriver = {
     if (operation.operation === "chat") {
       const state = await readPresentationState(run.ownerId, run.sessionId);
       const done = availableArt.flatMap((item) => item.fileId ? [{ fileId: item.fileId, title: item.title }] : []);
-      const attached = [...(state.source?.figures ?? []), ...(state.materials ?? []).map((item) => ({ fileId: item.fileId, title: item.title }))];
+      // Documents themselves are not images; only the pictures embedded in them can go on slides.
+      const attached = [...(state.source?.figures ?? []), ...(state.materials ?? []).flatMap((item) => [
+        ...(/\.(png|jpe?g)$/i.test(item.fileName) ? [{ fileId: item.fileId, title: item.title }] : []),
+        ...(item.images ?? []).map((image) => ({ fileId: image.fileId, title: image.title })),
+      ])];
       const art = [...done, ...attached.filter((item) => !done.some((known) => known.fileId === item.fileId))];
       return chatSystemPrompt({ state, availableArt: art, proposalPending: !!proposed || !!state.proposal });
     }

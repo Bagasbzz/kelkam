@@ -10,7 +10,7 @@ import { deckSchema, THEME_IDS } from "@/lib/presentation/model";
 import { startPresentationChatRun, startPresentationRun } from "./assistant";
 import { addPresentationMaterial, createPresentation, createPresentationFromReport, deletePresentation, getPresentation, importReportText, linkReportSession, listPresentations, removePresentationMaterial, resolvePresentationProposal, restorePresentation, savePresentation, snapshotPresentation } from "./repository";
 import { chatTurnSchema, generateSchema, PresentationError, reviseSchema, revisionSchema } from "./state";
-import { artJobSchema, listPresentationArt, loadPresentationAssets, planArtSchema, startPlannedArt, startPresentationArt } from "./art";
+import { artJobSchema, autoStartDeckImages, listPresentationArt, loadPresentationAssets, planArtSchema, startPlannedArt, startPresentationArt } from "./art";
 
 const privateHeaders = { "Cache-Control": "private, no-store" };
 const json = (value: unknown, status = 200) => NextResponse.json(value, { status, headers: privateHeaders });
@@ -86,7 +86,11 @@ export async function presentationRequest(req: Request, action: PresentationActi
     }
     if (action === "proposal") {
       const input = await body(req, proposalSchema, 1024);
-      return json({ success: true, project: await resolvePresentationProposal(ownerId, id, input.baseRevision, input.action, input.runId) });
+      const resolved = await resolvePresentationProposal(ownerId, id, input.baseRevision, input.action, input.runId);
+      if (input.action !== "accept") return json({ success: true, project: resolved });
+      // Accepted AI deck: start the cover (and up to two key slides) images right away; the editor places them when done.
+      await autoStartDeckImages(ownerId, id).catch((error) => console.error("[presentasi] gambar otomatis gagal dimulai:", error instanceof Error ? error.message : error));
+      return json({ success: true, project: await getPresentation(ownerId, id) });
     }
     if (action === "export") {
       const input = await body(req, baseSchema, 1024);

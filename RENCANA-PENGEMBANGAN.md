@@ -240,7 +240,7 @@ Usulan (disetujui arahnya 2026-11-09, K17–K20; implementasi belum dimulai):
 5. Urutan: Laporan dulu (perluas `auditChapter` + step audit akhir di `report-jobs.ts`), lalu Presentasi (K20).
 
 ### Status
-- **Laporan: selesai dibangun 2026-11-09 (belum di-commit/deploy).**
+- **Laporan: selesai 2026-11-09, commit `245c52c`, sudah di-push.**
   - `src/lib/report/final-review.ts`: `checkReportLocally` (bab hilang, placeholder gagal/terpotong, `[ISI DATA]`,
     heading kosong, sitasi di luar sumber terpilih, jumlah sumber dikutip) + `reviewReport` (AI_MODEL_REVIEW, JSON vonis,
     vonis dihitung dari tingkat masalah, bukan kata "lulus" dari model; bila AI gagal → vonis dari cek otomatis, ditandai).
@@ -256,3 +256,33 @@ Usulan (disetujui arahnya 2026-11-09, K17–K20; implementasi belum dimulai):
     dan DB (butuh server), tampilan belum dicek di browser.
   - Biaya: tiap laporan +1 s.d. 3 panggilan auditor (Sonnet, input = seluruh laporan) + perbaikan per bab bermasalah.
 - **Presentasi: belum mulai** (tahap berikutnya sesuai K20).
+
+## 10. Presentasi: tampilan tidak boleh mirip PPT GPT/Claude (permintaan 2026-11-09)
+
+Keluhan pemilik (dengan contoh 5 PPTX buatan GPT/Claude): elemen masih sama persis dengan PPT AI pada umumnya,
+hanya sampul yang cukup bagus dan fotonya kosong padahal Word yang dikirim berisi logo, masih ada em dash,
+latar/motif belum unik per generate, UI editor kurang rapi. Diminta hemat token.
+
+Ciri PPT AI dari contoh: agenda "01/02" dalam kotak membulat, kartu bernomor dengan bilah warna di atas + bayangan,
+label pil di atas judul, palet hijau/emas/krem, Calibri/Cambria, em dash di judul ("BAB I — ..."), tanpa foto.
+
+Yang dikerjakan (selesai 2026-11-09):
+- `src/lib/presentation/motifs.ts`: 9 keluarga motif generatif (contour, confetti, rings, mosaic, terrain, stripes,
+  orbit, grain, arcs) + 5 latar (plain, split, glow, band, corner). Seed deck memilih keluarga, latar, dan "gen" gaya
+  (kartu: tiles/columns/stagger; penanda poin: glyph/bar/ring/lead; eyebrow: caps/rule/tag; agenda: rule/stack/outline;
+  warna latar condong ke warna utama). Semua parameter (jumlah, ukuran, posisi) diacak dari seed, tetap bentuk asli PPTX.
+- `design.ts`: kartu bernomor + bilah + bayangan, nomor bulat di poin, kotak "01" di agenda, dan pil eyebrow diganti
+  varian di atas. Sampul tanpa foto menampilkan logo besar (bila ada) atau seni motif; sampul juga diberi lapisan motif.
+- Em dash: `noDash` di renderer, `stripDashes` saat hasil AI disimpan (judul/isi/catatan slide; sumber tetap kutipan asli)
+  dan pada hasil akhir Laporan; aturan "TANDA BACA" di prompt chat. Diperbaiki juga bug prompt: `${LAYOUT_GUIDE}`
+  sebelumnya terkirim sebagai teks mentah (bukan daftar layout).
+- Logo: gambar yang tertanam di bahan DOCX/PPTX/PDF diekstrak (`material-images.ts`, maks. 6, PNG/JPEG), disimpan
+  sebagai file pengguna, gambar pertama yang hampir persegi ditandai "kemungkinan logo kampus" dan otomatis dipakai
+  sebagai `design.logo`. Untuk "Buat presentasi dari laporan", gambar dari bahan DOCX/PDF Laporan ikut diekstrak.
+- Gambar AI otomatis (keputusan pemilik, mengubah aturan lama "gambar hanya setelah klik"): setelah "Gunakan hasil ini",
+  server memulai gambar sampul (usulan slide 1 dibuat bila AI tidak mengusulkan) + maks. 2 usulan lain; panel rencana
+  memasang gambar yang selesai ke slide yang masih kosong. Biaya: hingga 3 gambar per deck.
+- UI editor: bilah hasil AI dibuat ringkas (tanpa notifikasi ganda), area kerja abu lembut, thumbnail lebih rapat dengan
+  sudut membulat dan penanda aktif, kanvas lebih menonjol.
+- Belum dicek di browser (butuh login + DB); render dicek lewat contact sheet lokal untuk 3 seed berbeda.
+- Belum: audit AI untuk Presentasi (K20), gambar otomatis hanya terpasang saat panel Rencana (mode Chat AI) terbuka.

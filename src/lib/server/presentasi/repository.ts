@@ -8,11 +8,22 @@ import { STYLE_EXAMPLES } from "@/lib/presentation/design";
 import { deckDesignSchema, type DeckDesign } from "@/lib/presentation/model";
 import { saveUpload } from "@/lib/storage/upload";
 import { svgToPngServer } from "@/lib/server/laporan/svg-raster";
+import { stripDashes } from "@/lib/ai/client";
+import { extractMaterialImages, LOGO_MARKER } from "./material-images";
 
 type Transaction = Prisma.TransactionClient;
 
 /** Files the user already attached; the AI may place these on slides without a paid image job. */
-const attachedArt = (state: PresentationEnvelope) => new Set([...(state.source?.figures ?? []).map((item) => item.fileId), ...(state.materials ?? []).map((item) => item.fileId)]);
+const attachedArt = (state: PresentationEnvelope) => new Set([
+  ...(state.source?.figures ?? []).map((item) => item.fileId),
+  ...(state.materials ?? []).flatMap((item) => [item.fileId, ...(item.images ?? []).map((image) => image.fileId)]),
+]);
+
+/** Logo candidate found in the attached documents (first one wins). */
+export function detectedLogo(state: PresentationEnvelope): string | undefined {
+  return (state.materials ?? []).flatMap((item) => item.images ?? []).find((image) => image.logo)?.fileId
+    ?? (state.source?.figures ?? []).find((item) => item.title.includes(LOGO_MARKER))?.fileId;
+}
 
 async function lockedProject(tx: Transaction, ownerId: string, projectId: string) {
   // Owner predicate belongs in the lock query, not only in an earlier lookup.
@@ -178,13 +189,15 @@ export async function savePresentationPlan(ownerId: string, projectId: string, r
 export async function addPresentationMaterial(ownerId: string, projectId: string, input: { fileId: string; title: string; fileName: string; kind: string }) {
   const file = await prisma.fileUpload.findFirst({ where: { id: input.fileId, ownerId }, select: { id: true } });
   if (!file) throw new PresentationError(404, "File bahan tidak ditemukan.");
+  // Embedded pictures (logo on the cover) become usable slide images; failures never block the material.
+  const images = await extractMaterialImages(ownerId, input.fileId, input.fileName).catch(() => []);
   return prisma.$transaction(async (tx) => {
     const state = await lockedProject(tx, ownerId, projectId);
     const materials = state.materials ?? [];
     if (materials.some((item) => item.fileId === input.fileId)) return projectPayload(state);
     if (materials.length >= MAX_PRESENTATION_MATERIALS) throw new PresentationError(413, `Maksimum ${MAX_PRESENTATION_MATERIALS} bahan per presentasi.`);
     const id = `m${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
-    return writeProject(tx, ownerId, { ...state, materials: [...materials, { id, fileId: input.fileId, title: input.title.slice(0, 200) || input.fileName.slice(0, 200), fileName: input.fileName.slice(0, 200), kind: input.kind.slice(0, 40) }] });
+    return writeProject(tx, ownerId, { ...state, materials: [...materials, { id, fileId: input.fileId, title: input.title.slice(0, 200) || input.fileName.slice(0, 200), fileName: input.fileName.slice(0, 200), kind: input.kind.slice(0, 40), ...(images.length ? { images: images.map((image) => ({ ...image, title: image.title.slice(0, 200) })) } : {}) }] });
   });
 }
 
@@ -238,7 +251,7 @@ async function rasterizeReportDiagrams(ownerId: string, plan: Record<string, unk
 }
 
 async function buildReportSource(ownerId: string, sessionId: string) {
-  const report = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId }, select: { id: true, title: true, draft: true, plan: true } });
+  const report = await prisma.reportSession.findFirst({ where: { id: sessionId, ownerId }, select: { id: true, title: true, draft: true, plan: true, materials: true } });
   if (!report) throw new PresentationError(404, "Laporan tidak ditemukan.");
   if (!report.draft?.trim()) throw new PresentationError(409, "Laporan belum mempunyai draft. Selesaikan laporan sebelum membuat presentasi.");
   const plan = report.plan && typeof report.plan === "object" && !Array.isArray(report.plan) ? report.plan as { figures?: unknown; diagrams?: unknown } : {};
@@ -250,7 +263,17 @@ async function buildReportSource(ownerId: string, sessionId: string) {
   const owned = candidates.length ? await prisma.fileUpload.findMany({ where: { ownerId, id: { in: candidates.map((item) => item.fileId) } }, select: { id: true } }) : [];
   const ownedIds = new Set(owned.map((item) => item.id));
   const diagrams = await rasterizeReportDiagrams(ownerId, plan as Record<string, unknown>);
-  return { kind: "report" as const, sessionId: report.id, linkedAt: nowIso(), title: (report.title ?? "Laporan").slice(0, 200), draftChars: report.draft.length, figures: [...candidates.filter((item) => ownedIds.has(item.fileId)), ...diagrams].slice(0, 20) };
+  // Logo and pictures embedded in the documents the user uploaded to Laporan (e.g. the cover page).
+  const documents = (Array.isArray(report.materials) ? report.materials : []).flatMap((item) => {
+    const material = item as { fileId?: unknown; fileName?: unknown };
+    return typeof material.fileId === "string" && typeof material.fileName === "string" && /\.(docx|pptx|pdf)$/i.test(material.fileName) ? [{ fileId: material.fileId, fileName: material.fileName }] : [];
+  }).slice(0, 2);
+  const embedded: { fileId: string; title: string }[] = [];
+  for (const document of documents) {
+    const images = await extractMaterialImages(ownerId, document.fileId, document.fileName).catch(() => []);
+    embedded.push(...images.slice(0, 3).map((image) => ({ fileId: image.fileId, title: image.title.slice(0, 200) })));
+  }
+  return { kind: "report" as const, sessionId: report.id, linkedAt: nowIso(), title: (report.title ?? "Laporan").slice(0, 200), draftChars: report.draft.length, figures: [...embedded.filter((item) => item.title.includes(LOGO_MARKER)), ...candidates.filter((item) => ownedIds.has(item.fileId)), ...diagrams, ...embedded.filter((item) => !item.title.includes(LOGO_MARKER))].slice(0, 20) };
 }
 
 /**
@@ -389,9 +412,14 @@ export async function commitPresentationRun(ownerId: string, projectId: string, 
       ? { ...state.deck, slides: state.deck.slides.map((slide) => slide.id === operation.slideId ? slideSchema.parse(output) : slide) }
       : output;
     let deck = enforceAiDeck(state.deck, candidate, operation, evidenceText);
+    // Em/en dash are an AI hallmark: never stored in slide text (source stays an exact quote).
+    deck = { ...deck, title: stripDashes(deck.title), slides: deck.slides.map((slide) => slide.locked ? slide : { ...slide, title: stripDashes(slide.title), eyebrow: slide.eyebrow ? stripDashes(slide.eyebrow) : slide.eyebrow, body: slide.body.map((item) => stripDashes(item)), notes: slide.notes ? stripDashes(slide.notes) : slide.notes }) };
     // The look is applied by the server from the plan, never taken from model-written deck fields.
     const locked = state.deck.slides.some((slide) => slide.locked);
     deck = { ...deck, design: operation.operation === "chat" && !locked ? planDesign(state) ?? state.deck.design : state.deck.design };
+    // The campus logo from the attached document is used even when the AI did not pick it.
+    const logo = detectedLogo(state);
+    if (deck.design && !deck.design.logo && logo) deck = { ...deck, design: { ...deck.design, logo } };
     if (!deck.design) delete deck.design;
     await validatePresentationArt(ownerId, projectId, deck, state.deck, tx, "generated", attachedArt(state));
     const proposedRevision = state.revision + 1;
@@ -413,4 +441,17 @@ export function parseRunOperation(meta: Record<string, unknown>): RunOperation {
   if (operation === "revise") return { operation, ...reviseSchema.parse(input) };
   if (operation === "chat") return { operation, ...chatTurnSchema.parse(input) };
   throw new PresentationError(400, "Jenis operasi presentasi tidak valid.");
+}
+
+/** Adds a cover illustration suggestion when the AI plan has none, so every accepted deck gets a real cover picture. */
+export async function ensureCoverPlanImage(ownerId: string, projectId: string) {
+  await prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const plan = state.plan;
+    const images = plan?.images ?? [];
+    if (!plan || images.some((image) => image.slide === 1) || images.length >= 8 || state.deck.slides[0]?.art) return;
+    const colors = state.deck.design ? ` Warna dominan #${state.deck.design.primary} dengan aksen #${state.deck.design.accent}.` : "";
+    const prompt = `Ilustrasi pembuka yang kuat untuk presentasi berjudul "${state.deck.title}". Tujuan presentasi: ${plan.goal}. Tampilkan objek atau suasana nyata yang paling mewakili topik, komposisi lega dengan satu fokus.${colors}`.slice(0, 2000);
+    await writeProject(tx, ownerId, { ...state, plan: { ...plan, images: [{ slide: 1, prompt, role: "hero" as const }, ...images] } });
+  });
 }

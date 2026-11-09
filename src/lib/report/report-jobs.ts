@@ -45,6 +45,7 @@ import { generateConceptForReport, isConceptDiagramType } from "@/lib/uml/render
 import { startImageJob, listImageJobs } from "@/lib/server/image-jobs";
 import { sanitizeForPersistence } from "@/lib/security/redact-secrets";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
+import { stripDashes } from "@/lib/ai/client";
 import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
 import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
 import { blocksApproval, checkReportLocally, fixInstructions, MAX_FIX_ROUNDS, parseVerdict, reviewReport, type ReviewChapter, type ReviewSeverity } from "@/lib/report/final-review";
@@ -1263,7 +1264,10 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
   const diagramsDone = extractDiagramArtifacts(row.payload).length;
   const review = reviewSummaryOf(row.steps);
   const assembled = assembleReport(row.payload, chapters);
-  const { result, missing, pending, insertedTitles } = await annotateMissingFigures(assembled, row.payload, ownerId);
+  const annotated = await annotateMissingFigures(assembled, row.payload, ownerId);
+  // Em/en dash are an AI hallmark; the final document never contains them (judul, daftar pustaka, catatan).
+  const { missing, pending, insertedTitles } = annotated;
+  const result = stripDashes(annotated.result);
   const totalWords = countWords(result);
   const totalTokens = row.steps.reduce((acc, step) => acc + step.tokensUsed, 0);
   if (missing.length) {

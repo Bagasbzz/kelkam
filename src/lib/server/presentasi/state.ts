@@ -48,10 +48,13 @@ const chatMessageSchema = z.object({
 }).strict();
 export type PresentationChatMessage = z.infer<typeof chatMessageSchema>;
 
+const fileIdSchema = z.string().min(1).max(100).refine((value) => !/[:/\\?#]/u.test(value), "Gunakan ID file.");
 const materialSchema = z.object({
   id: z.string().min(1).max(40),
-  fileId: z.string().min(1).max(100).refine((value) => !/[:/\\?#]/u.test(value), "Gunakan ID file."),
+  fileId: fileIdSchema,
   title: short(200).min(1), fileName: short(200).min(1), kind: short(40).min(1),
+  // Pictures embedded in the document (e.g. the campus logo on a report cover), stored as owned image files.
+  images: z.array(z.object({ fileId: fileIdSchema, title: short(200).min(1), logo: z.boolean().optional() }).strict()).max(6).optional(),
 }).strict();
 export type PresentationMaterial = z.infer<typeof materialSchema>;
 

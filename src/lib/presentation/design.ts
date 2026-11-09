@@ -1,5 +1,14 @@
 import { FONT_PAIRS, inspectSlide, type DeckDesign, type FrameStyle, type PresentationDeck, type PresentationFont, type PresentationSlide, type SlideArt, type SlideEditTarget } from "./model";
-import { fitText, layoutSlide, SLIDE_HEIGHT, SLIDE_WIDTH, type Bounds, type ImageElement, type ShapeElement, type SlideElement, type SlideScene, type TextElement } from "./layout";
+import { fitText, layoutSlide, SLIDE_HEIGHT, SLIDE_WIDTH, type Bounds, type ShapeElement, type SlideElement, type SlideScene, type TextElement } from "./layout";
+import { drawBackdrop, drawMotif, glyphPoints, styleGenes, type MotifColors } from "./motifs";
+
+/** Em dash/en dash are a hallmark of AI text; slides never show them. */
+export function noDash(value: string) {
+  return value
+    .replace(/(\d)\s*[–—]\s*(\d)/g, "$1-$2")
+    .replace(/^\s*[–—]+\s*/g, "")
+    .replace(/\s*[–—]+\s*/g, ", ");
+}
 
 /**
  * Designed decks: a per-deck identity (colors, fonts, frame family, seed) drives ~12 compositions.
@@ -86,7 +95,6 @@ const HEXAGON: Points = [[0.25, 0], [0.75, 0], [1, 0.5], [0.75, 1], [0.25, 1], [
 const DIAMOND: Points = [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
 const SLANT: Points = [[0.22, 0], [1, 0], [1, 1], [0, 1]];
 const CHEVRON: Points = [[0, 0], [0.84, 0], [1, 0.5], [0.84, 1], [0, 1], [0.16, 0.5]];
-const STAR: Points = [[0.5, 0], [0.6, 0.4], [1, 0.5], [0.6, 0.6], [0.5, 1], [0.4, 0.6], [0, 0.5], [0.4, 0.4]];
 
 function arch(): Points {
   const points: [number, number][] = [];
@@ -118,14 +126,6 @@ function rounded(w: number, h: number, radius = 0.32): Points {
   corner(1 - rx, ry, -Math.PI / 2); corner(1 - rx, 1 - ry, 0); corner(rx, 1 - ry, Math.PI / 2); corner(rx, ry, Math.PI);
   return points;
 }
-function wave(phase: number, depth = 0.35): Points {
-  const points: [number, number][] = [];
-  for (let i = 0; i <= 24; i++) {
-    const x = i / 24;
-    points.push([round3(x), round3(depth * (0.5 + 0.5 * Math.sin(phase + x * Math.PI * 2.2)))]);
-  }
-  return [...points, [1, 1], [0, 1]];
-}
 
 type PhotoFrame = "hexagon" | "slant" | "blob" | "circle" | "arch" | "rounded" | "rect" | "diamond";
 const FRAME_PHOTOS: Record<FrameStyle, readonly [PhotoFrame, PhotoFrame]> = {
@@ -139,13 +139,15 @@ const FRAME_PHOTOS: Record<FrameStyle, readonly [PhotoFrame, PhotoFrame]> = {
 
 export function splitLabel(value: string): { label: string; text: string } {
   const match = /^([^:.!?]{1,42}):\s+([\s\S]+)$/u.exec(value.trim());
-  return match ? { label: match[1].trim(), text: match[2].trim() } : { label: "", text: value.trim() };
+  return match ? { label: noDash(match[1].trim()), text: noDash(match[2].trim()) } : { label: "", text: noDash(value.trim()) };
 }
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
 export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign, index = 0, total = 1): SlideScene {
-  const t = designTokens(design);
+  const genes = styleGenes(design.seed, design.frame, random);
+  // The page itself leans toward the deck color, so no two decks share the same plain background.
+  const t = designTokens({ ...design, background: mix(design.background.toUpperCase(), design.primary.toUpperCase(), genes.tint) });
   const deckRand = random(design.seed);
   const mirror = deckRand() < 0.5;
   const photoFrame = FRAME_PHOTOS[t.frame][deckRand() < 0.6 ? 0 : 1];
@@ -163,8 +165,9 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
   };
   const poly = (x: number, y: number, w: number, h: number, fill: string, points: Points, opacity = 1) => shape("polygon", x, y, w, h, fill, { points, opacity });
   const line = (x: number, y: number, w: number, h: number, color: string, width = 1, opacity = 1) => elements.push({ type: "line", x, y, w, h, color, lineWidth: width, opacity });
-  const text = (value: string, b: Bounds, size: number, options: Partial<Pick<TextElement, "fontFace" | "color" | "bold" | "align" | "lineHeight" | "editKey">> = {}) => {
-    if (!value) return;
+  const text = (raw: string, b: Bounds, size: number, options: Partial<Pick<TextElement, "fontFace" | "color" | "bold" | "align" | "lineHeight" | "editKey">> = {}) => {
+    if (!raw) return;
+    const value = noDash(raw);
     const fontFace = options.fontFace ?? t.body;
     const lineHeight = options.lineHeight ?? 1.25;
     const element: TextElement = { type: "text", text: value, ...fitText(value, b, size, fontFace, lineHeight), ...b, lineHeight, fontFace, color: t.text, bold: false, align: "left", ...options };
@@ -177,12 +180,17 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
     text(slide.title, b, size, { editKey: "title", fontFace: t.heading, bold: headingBold, lineHeight: t.heading === "Georgia" ? 1.18 : 1.06, ...options });
   const eyebrow = (b: Bounds, onFill?: string, align: TextElement["align"] = "left") => {
     if (!slide.eyebrow) return;
-    if (t.frame === "halftone" || t.frame === "diagonal" || t.frame === "wave") {
-      const width = Math.min(b.w, 0.5 + slide.eyebrow.length * 0.105);
+    const label = slide.eyebrow.toUpperCase();
+    if (genes.eyebrow === "tag") {
+      const width = Math.min(b.w, 0.45 + label.length * 0.1);
       const px = align === "right" ? b.x + b.w - width : b.x;
-      shape("roundRect", px, b.y, width, 0.42, t.frame === "halftone" ? t.text : t.accent);
-      text(slide.eyebrow, { x: px + 0.18, y: b.y + 0.07, w: width - 0.3, h: 0.32 }, 12, { editKey: "eyebrow", bold: true, color: t.frame === "halftone" ? t.background : t.onAccent });
-    } else text(slide.eyebrow, { ...b, h: 0.4 }, 13, { editKey: "eyebrow", bold: true, color: onFill ?? t.accentText, align });
+      shape("rect", px, b.y + 0.02, width, 0.36, onFill ? t.background : t.accent);
+      text(label, { x: px + 0.14, y: b.y + 0.07, w: width - 0.2, h: 0.3 }, 11, { editKey: "eyebrow", bold: true, color: onFill ? t.text : t.onAccent });
+    } else if (genes.eyebrow === "rule") {
+      const ruleX = align === "right" ? b.x + b.w - 0.5 : b.x;
+      line(ruleX, b.y + 0.2, 0.5, 0, onFill ?? t.accentText, 2.4);
+      text(label, { x: align === "right" ? b.x : b.x + 0.65, y: b.y, w: b.w - 0.65, h: 0.4 }, 12, { editKey: "eyebrow", bold: true, color: onFill ?? t.accentText, align });
+    } else text(label, { ...b, h: 0.4 }, 12, { editKey: "eyebrow", bold: true, color: onFill ?? t.accentText, align });
   };
   const body = (i: number, b: Bounds, size: number, options: Partial<Pick<TextElement, "color" | "align" | "bold">> = {}) =>
     text(slide.body[i], b, size, { editKey: `body-${i}` as SlideEditTarget, ...options });
@@ -201,13 +209,21 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         elements.push({ type: "image", ...image, editKey: options.editable === false ? undefined : "art", ...b, crop: "contain" });
       } else elements.push({ type: "image", ...image, editKey: options.editable === false ? undefined : "art", ...b, crop: "cover", mask: points });
     } else {
-      draw(b.x, b.y, mix(t.primary, t.background, t.dark ? 0.55 : 0.78));
-      const s = Math.min(b.w, b.h) * 0.34;
-      const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-      poly(cx - s * 0.62, cy - s * 0.18, s * 1.24, s * 0.62, t.primary, [[0, 1], [0.38, 0.1], [0.62, 0.6], [0.78, 0.35], [1, 1]], 0.38);
-      shape("ellipse", cx + s * 0.18, cy - s * 0.5, s * 0.26, s * 0.26, t.accent, { opacity: 0.7 });
+      // No image yet: the deck's logo, or generative art of the deck's own motif, never an empty placeholder icon.
+      draw(b.x, b.y, mix(t.primary, t.background, t.dark ? 0.6 : 0.82));
+      const inset = Math.min(b.w, b.h) * 0.14;
+      const inner = { x: b.x + inset, y: b.y + inset, w: b.w - inset * 2, h: b.h - inset * 2 };
+      if (design.logo && isCover) {
+        elements.push(...drawMotif(genes.motif, inner, random(design.seed ^ 991), motifColors, 1.4).map((element) => ({ ...element, opacity: Math.min(element.opacity ?? 1, 0.35) })));
+        const s = Math.min(inner.w, inner.h) * 0.62;
+        elements.push({ type: "image", fileId: design.logo, role: "cutout", alt: "Logo", x: inner.x + (inner.w - s) / 2, y: inner.y + (inner.h - s) / 2, w: s, h: s, crop: "contain" });
+      } else {
+        elements.push(...drawMotif(genes.motif, inner, random(design.seed ^ hashString(slide.id) ^ 7), motifColors, 1.6));
+      }
     }
   };
+
+  const motifColors: MotifColors = { primary: t.primary, accent: t.accent, text: t.text, surface: t.surface, background: t.background };
 
   // --- chrome: consistent per deck, varied per seed ---------------------------
   const W = SLIDE_WIDTH, H = SLIDE_HEIGHT;
@@ -216,61 +232,25 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
     elements.push({ type: "image", ...art, editKey: "art", x: 0, y: 0, w: W, h: H, crop: "cover", opacity: 1 });
     shape("rect", 0, 0, W, H, t.background, { opacity: 0.86 });
   }
+  /**
+   * Generative chrome: the deck's motif family drawn fresh per slide (same family, new arrangement),
+   * placed in the corners away from the header (logo/institution) and the page number.
+   */
+  const backTone = mix(t.background, t.dark ? "FFFFFF" : t.primary, t.dark ? 0.06 : 0.07);
   const chrome = () => {
-    switch (t.frame) {
-      case "diagonal":
-        if (isCover) break;
-        poly(fx(11.2, 2.133), 0, 2.133, 1.35, t.primary, mirror ? [[0, 0], [0.75, 0], [0, 1]] : [[0.25, 0], [1, 0], [1, 1]]);
-        poly(fx(10.7, 1.0), 0, 1.0, 1.35, t.accent, mirror ? [[0.6, 0], [0.82, 0], [0.22, 1], [0, 1]] : [[0.18, 0], [0.4, 0], [1, 1], [0.78, 1]]);
-        poly(fx(0, 1.7), 6.35, 1.7, 1.15, t.primary, mirror ? [[1, 0], [1, 1], [0, 1]] : [[0, 0], [1, 1], [0, 1]]);
-        break;
-      case "blob": {
-        poly(fx(10.35, 3.9), -1.35, 3.9, 3.4, t.surface, blob(rand));
-        poly(fx(-0.95, 2.25), 6.25, 2.25, 2.0, t.accent, blob(rand), 0.85);
-        for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) shape("ellipse", fx(9.65 + c * 0.2, 0.07) , 0.55 + r * 0.2, 0.07, 0.07, t.primary, { opacity: 0.55 });
-        shape("ellipse", fx(12.55, 0.42), 5.75, 0.42, 0.42, t.background, { lineColor: t.primary, lineWidth: 2.5, opacity: 0 });
-        break;
-      }
-      case "wave":
-        poly(0, 6.62, W, 0.88, t.surface, wave(design.seed % 7, 0.55));
-        poly(0, 6.82, W, 0.68, t.primary, wave(design.seed % 7 + 1.4, 0.45));
-        if (!isCover) shape("rect", 0, 0, W, 0.62, t.primary);
-        break;
-      case "geometric":
-        poly(fx(11.1, 2.233), 0, 2.233, 2.0, t.primary, mirror ? [[0, 0], [1, 0], [0, 1]] : [[0, 0], [1, 0], [1, 1]]);
-        poly(fx(12.05, 1.283), 0, 1.283, 1.15, t.text, mirror ? [[0, 0], [1, 0], [0, 1]] : [[0, 0], [1, 0], [1, 1]], 0.85);
-        poly(fx(0, 1.9), 5.9, 1.9, 1.6, t.primary, mirror ? [[1, 0], [1, 1], [0, 1]] : [[0, 0], [1, 1], [0, 1]], 0.9);
-        poly(fx(1.5, 0.42), 6.6, 0.42, 0.42, t.accent, DIAMOND);
-        poly(fx(10.6, 0.3), 2.25, 0.3, 0.3, t.accent, DIAMOND);
-        break;
-      case "grid":
-        for (let x = 0.42; x < W; x += 0.42) line(x, 0, 0, H, t.surface, 0.6, t.dark ? 0.5 : 1);
-        for (let y = 0.42; y < H; y += 0.42) line(0, y, W, 0, t.surface, 0.6, t.dark ? 0.5 : 1);
-        poly(fx(12.2, 0.55), 0.4, 0.55, 0.55, t.primary, STAR);
-        poly(fx(0.45, 0.42), 6.55, 0.42, 0.42, t.primary, STAR);
-        shape("ellipse", fx(12.65, 1.2), 6.9, 1.2, 1.2, t.primary);
-        break;
-      case "halftone": {
-        const field = (x0: number, y0: number, cols: number, rows: number, flip: boolean) => {
-          for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-            const d = 0.03 + ((flip ? cols - c : c) / cols) * 0.075;
-            shape("ellipse", x0 + c * 0.17, y0 + r * 0.17, d, d, t.accent, { opacity: 0.9 });
-          }
-        };
-        field(mirror ? 0.2 : 10.9, 0.25, 14, 8, mirror);
-        field(mirror ? 10.9 : 0.2, 6.0, 14, 8, !mirror);
-        poly(fx(11.75, 2.3), 6.15, 2.3, 2.1, t.accent, blob(rand), 0.9);
-        break;
-      }
-      case "minimal":
-        line(0.75, 0.62, W - 1.5, 0, t.text, 0.8, 0.5);
-        shape("rect", fx(W - 1.05, 0.3), 0.47, 0.3, 0.3, t.accent);
-        line(0.75, 6.92, W - 1.5, 0, t.text, 0.8, 0.5);
-        break;
-      case "gradient":
-        for (let i = 0; i < 6; i++) shape("rect", fx(9.2 + i * 0.35, 4.1 - i * 0.35), -0.4 + i * 0.25, 4.1 - i * 0.35, 3.2 - i * 0.3, t.primary, { opacity: 0.16 + i * 0.1 });
-        for (let i = 0; i < 4; i++) shape("rect", fx(-0.3, 2.8 - i * 0.4), 5.0 + i * 0.3, 2.8 - i * 0.4, 2.6 - i * 0.3, t.primary, { opacity: 0.14 + i * 0.12 });
-        break;
+    elements.push(...drawBackdrop(genes.backdrop, W, H, random(design.seed ^ 0x2f), motifColors, backTone, mirror));
+    if (isCover) return;
+    const fam = genes.motif;
+    const topRight = !mirror; // header sits on the opposite side
+    if (fam === "mosaic") {
+      elements.push(...drawMotif(fam, { x: topRight ? W - 0.62 : 0.14, y: 0.9, w: 0.5, h: H - 1.8 }, rand, motifColors, 0.85));
+    } else if (fam === "confetti" || fam === "grain" || fam === "stripes" || fam === "terrain") {
+      elements.push(...drawMotif(fam, { x: topRight ? W - 2.75 : 0.12, y: 0.06, w: 2.6, h: 0.9 }, rand, motifColors, 0.9));
+      if (genes.corner === 0) elements.push(...drawMotif(fam, { x: topRight ? 0.12 : W - 2.95, y: 6.72, w: 2.8, h: 0.7 }, rand, motifColors, 0.8));
+    } else {
+      // Large forms anchored off-canvas: only a corner shows, kept above the eyebrow line (y < 0.95).
+      elements.push(...drawMotif(fam, { x: topRight ? W - 1.9 : -1.6, y: -2.0, w: 3.5, h: 2.95 }, rand, motifColors, 1));
+      if (genes.corner === 0) elements.push(...drawMotif(fam, { x: topRight ? -1.25 : W - 1.25, y: 6.25, w: 2.5, h: 2.5 }, rand, motifColors, 0.8));
     }
   };
   if (layout !== "section") chrome();
@@ -301,14 +281,14 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         poly(fx(7.05, 1.45), 0, 1.45, H, t.accent, mirror ? [[0.6, 0], [0.75, 0], [0.33, 1], [0.18, 1]] : [[0.25, 0], [0.4, 0], [0.82, 1], [0.67, 1]]);
       }
       const photoBox = photoFrame === "circle" ? { x: fx(8.15, 4.4), y: 1.4, w: 4.4, h: 4.4 } : { x: fx(7.85, 4.85), y: 1.2, w: 4.85, h: 4.6 };
+      // A large, softened layer of the deck motif behind the picture: unique per seed.
+      elements.push(...drawMotif(genes.motif, { x: fx(6.6, 6.73), y: 0, w: 6.73, h: H }, random(design.seed ^ 0x51), motifColors, 1.5)
+        .map((element) => element.type === "shape" && (element.opacity ?? 1) > 0 ? { ...element, opacity: Math.min(element.opacity ?? 1, 0.5) } : element));
       if (!closing || art) photo(photoBox);
-      else {
-        // Closing without a photo: a calm graphic of the deck's frame instead of an empty half.
-        poly(photoBox.x + 0.5, photoBox.y + 0.6, photoBox.w - 0.6, photoBox.h - 0.6, t.accent, blob(rand), 0.9);
-        poly(photoBox.x, photoBox.y, photoBox.w - 0.6, photoBox.h - 0.6, t.dark ? t.surface : t.primary, blob(rand), 0.9);
-      }
-      if (logo) elements.push({ type: "image", fileId: logo, role: "cutout", alt: "Logo", x: fx(0.85, 0.62), y: 0.55, w: 0.62, h: 0.62, crop: "contain" });
-      if (institution) text(institution, { x: fx(logo ? 1.6 : 0.85, 5.5), y: 0.72, w: 5.5, h: 0.32 }, 12, { bold: true, color: t.muted, align: mirror ? "right" : "left" });
+      else elements.push(...drawMotif(genes.motif, { x: photoBox.x + 0.3, y: photoBox.y + 0.3, w: photoBox.w - 0.6, h: photoBox.h - 0.6 }, random(design.seed ^ 0x77), motifColors, 1.7));
+      // Without a picture the cover frame already shows the logo large; avoid a duplicate in the corner.
+      if (logo && (art || closing)) elements.push({ type: "image", fileId: logo, role: "cutout", alt: "Logo", x: fx(0.85, 0.62), y: 0.55, w: 0.62, h: 0.62, crop: "contain" });
+      if (institution) text(institution, { x: fx(logo && (art || closing) ? 1.6 : 0.85, 5.5), y: 0.72, w: 5.5, h: 0.32 }, 12, { bold: true, color: t.muted, align: mirror ? "right" : "left" });
       const textX = fx(0.85, 6.6), textW = 6.6;
       const align = mirror ? "right" : "left";
       eyebrow({ x: textX, y: 1.55, w: textW, h: 0.42 }, undefined, align);
@@ -338,8 +318,8 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       if (photoSide) {
         elements.push({ type: "image", ...art!, editKey: "art", x: fx(7.6, 5.733), y: 0, w: 5.733, h: H, crop: art!.role === "cutout" ? "contain" : "cover", mask: art!.role === "cutout" ? undefined : mirror ? [[0, 0], [1, 0], [0.8, 1], [0, 1]] : SLANT });
       } else {
-        poly(fx(8.9, 4.433), 0, 4.433, H, t.accent, mirror ? [[0, 0], [0.55, 0], [0.3, 1], [0, 1]] : [[0.45, 0], [1, 0], [1, 1], [0.7, 1]], 0.9);
-        poly(fx(10.4, 2.933), 4.2, 2.933, 3.3, t.background, mirror ? [[0, 0], [1, 1], [0, 1]] : [[1, 0], [1, 1], [0, 1]], 0.18);
+        const onPrimary: MotifColors = { primary: mix(t.primary, t.onPrimary, 0.35), accent: t.accent, text: t.onPrimary, surface: mix(t.primary, t.onPrimary, 0.15), background: t.primary };
+        elements.push(...drawMotif(genes.motif, { x: fx(7.9, 5.2), y: 0.6, w: 5.2, h: 6.3 }, rand, onPrimary, 1.8));
       }
       const x = fx(0.95, 6.3);
       text(slide.eyebrow || pad(index + 1), { x, y: 1.55, w: 6.3, h: 1.3 }, 72, { editKey: "eyebrow", fontFace: t.heading, bold: headingBold, color: readableOn(t.primary, t.accent), align: mirror ? "right" : "left" });
@@ -358,11 +338,21 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       const step = rows(count, 1.35, 6.35);
       slide.body.forEach((value, i) => {
         const y = 1.35 + i * step;
-        shape("roundRect", listX, y + 0.05, 0.85, 0.85, i % 2 ? t.accent : t.primary);
-        text(pad(i + 1), { x: listX, y: y + 0.24, w: 0.85, h: 0.5 }, 20, { fontFace: t.heading, bold: true, color: i % 2 ? t.onAccent : t.onPrimary, align: "center" });
         const { label } = splitLabel(value);
-        body(i, { x: listX + 1.1, y: y + 0.08, w: 5.9, h: step - 0.16 }, label ? 18 : 20, { bold: !label && value.length < 50 });
-        if (i < count - 1) line(listX + 1.1, y + step - 0.04, 5.9, 0, t.muted, 0.6, 0.4);
+        if (genes.agenda === "outline") {
+          // Outlined numerals in the heading face, no filled badges.
+          text(String(i + 1), { x: listX, y: y + 0.02, w: 0.9, h: Math.min(step, 0.95) }, 34, { fontFace: t.heading, bold: headingBold, color: i % 2 ? t.accentText : t.primary });
+          body(i, { x: listX + 1.0, y: y + 0.1, w: 6.0, h: step - 0.16 }, label ? 18 : 20, { bold: !label && value.length < 50 });
+        } else if (genes.agenda === "stack") {
+          // Staggered large items with a colored tick, no numbering.
+          const indent = (i % 2) * 0.45;
+          shape("rect", listX + indent, y + 0.16, 0.16, Math.min(step - 0.3, 0.5), i % 2 ? t.accent : t.primary);
+          body(i, { x: listX + indent + 0.38, y: y + 0.06, w: 6.5 - indent, h: step - 0.12 }, label ? 19 : 22, { bold: !label && value.length < 60 });
+        } else {
+          body(i, { x: listX, y: y + 0.08, w: 6.2, h: step - 0.16 }, label ? 18 : 20, { bold: !label && value.length < 50 });
+          text(String(i + 1), { x: listX + 6.3, y: y + 0.1, w: 0.7, h: 0.45 }, 13, { bold: true, color: t.muted, align: "right" });
+          line(listX, y + step - 0.04, 7.0, 0, i % 2 ? t.accent : t.primary, i === count - 1 ? 0 : 1.2, i === count - 1 ? 0 : 0.7);
+        }
       });
       footer();
       break;
@@ -377,13 +367,20 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       const count = Math.max(slide.body.length, 1);
       const twoCol = !withPhoto && count === 4;
       const step = rows(twoCol ? 2 : count, 3.05, 6.55);
+      const marker = glyphPoints(genes.glyph);
+      const indent = genes.marker === "lead" ? 0 : genes.marker === "bar" ? 0.32 : 0.55;
       slide.body.forEach((_, i) => {
         const col = twoCol ? i % 2 : 0, row = twoCol ? Math.floor(i / 2) : i;
         const colW = twoCol ? (textW - 0.4) / 2 : textW;
         const x = textX + col * (colW + 0.4), y = 3.05 + row * step;
-        shape("ellipse", x, y + 0.04, 0.56, 0.56, t.primary);
-        text(String(i + 1), { x, y: y + 0.13, w: 0.56, h: 0.38 }, 16, { bold: true, color: t.onPrimary, align: "center" });
-        body(i, { x: x + 0.8, y, w: colW - 0.8, h: step - 0.12 }, 18);
+        const color = i % 2 ? t.accent : t.primary;
+        if (genes.marker === "glyph") {
+          if (marker === "ellipse") shape("ellipse", x + 0.04, y + 0.12, 0.22, 0.22, color);
+          else poly(x + 0.04, y + 0.12, 0.24, 0.24, color, marker);
+        } else if (genes.marker === "ring") shape("ellipse", x + 0.02, y + 0.1, 0.28, 0.28, color, { opacity: 0, lineColor: color, lineWidth: 2.4 });
+        else if (genes.marker === "bar") shape("rect", x, y + 0.06, 0.08, Math.max(0.3, Math.min(step - 0.3, 0.9)), color);
+        else line(x, y - 0.08, 0.7, 0, color, 2.4);
+        body(i, { x: x + indent, y, w: colW - indent, h: step - 0.12 }, 18);
       });
       if (withPhoto) photo({ x: fx(8.55, 4.0), y: 1.65, w: 4.0, h: 4.4 });
       footer();
@@ -398,14 +395,35 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       const gap = 0.32;
       const cardW = (contentW - gap * (count - 1)) / count;
       slide.body.forEach((value, i) => {
-        const x = contentX + i * (cardW + gap), y = 3.15;
-        shape("roundRect", x + 0.1, y + 0.12, cardW, 2.85, t.accent, { opacity: 0.55 });
-        shape("roundRect", x, y, cardW, 2.85, t.surface);
-        shape("rect", x, y, cardW, 0.12, i % 2 ? t.accent : t.primary);
-        text(pad(i + 1), { x: x + 0.28, y: y + 0.32, w: 1.2, h: 0.6 }, 26, { fontFace: t.heading, bold: true, color: t.accentText });
         const { label, text: content } = splitLabel(value);
-        if (label) text(label, { x: x + 0.28, y: y + 0.95, w: cardW - 0.5, h: 0.62 }, 16, { bold: true, color: t.onSurface });
-        const element = body(i, { x: x + 0.28, y: y + (label ? 1.6 : 1.05), w: cardW - 0.5, h: label ? 1.1 : 1.65 }, 15, { color: t.onSurface });
+        const x = contentX + i * (cardW + gap);
+        let y = 3.15, h = 2.85;
+        let onCard = t.onSurface;
+        let inset = 0.28;
+        if (genes.cards === "tiles") {
+          // Solid color tiles, sharp corners, no shadow and no numbering.
+          const fills = [t.primary, t.accent, t.surface];
+          const fill = fills[(i + (design.seed % 3)) % 3];
+          shape("rect", x, y, cardW, h, fill);
+          onCard = fill === t.primary ? t.onPrimary : fill === t.accent ? t.onAccent : t.onSurface;
+          const g = glyphPoints(genes.glyph);
+          if (g === "ellipse") shape("ellipse", x + cardW - 0.45, y + h - 0.45, 0.2, 0.2, onCard, { opacity: 0.55 });
+          else poly(x + cardW - 0.47, y + h - 0.47, 0.22, 0.22, onCard, g, 0.55);
+        } else if (genes.cards === "columns") {
+          // Open columns: a full-height rule and generous whitespace instead of boxes.
+          shape("rect", x, y, 0.06, h, i % 2 ? t.accent : t.primary);
+          inset = 0.3;
+          onCard = t.text;
+        } else {
+          // Staggered panels with one cut corner.
+          y += i % 2 ? 0.35 : 0;
+          h -= 0.35;
+          const cut = 0.45 / cardW;
+          poly(x, y, cardW, h, t.surface, [[0, 0], [1 - cut, 0], [1, 0.45 / h], [1, 1], [0, 1]]);
+          poly(x + cardW - 0.45, y, 0.45, 0.45, i % 2 ? t.accent : t.primary, [[0, 0], [1, 0], [1, 1]]);
+        }
+        if (label) text(label, { x: x + inset, y: y + 0.3, w: cardW - inset - 0.25, h: 0.7 }, 17, { bold: true, color: onCard, fontFace: t.heading });
+        const element = body(i, { x: x + inset, y: y + (label ? 1.05 : 0.35), w: cardW - inset - 0.25, h: label ? h - 1.25 : h - 0.6 }, 15, { color: onCard });
         if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
       });
       footer();

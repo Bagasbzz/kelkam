@@ -7,7 +7,7 @@ import type { PresentationDeck } from "@/lib/presentation/model";
 import { readUpload } from "@/lib/storage/upload";
 import { inspectImage, toPng } from "@/lib/server/image-convert";
 import { listImageJobs, startImageJob } from "@/lib/server/image-jobs";
-import { snapshotPresentation, getPresentation, readPresentationState, recordPlanImageJob } from "./repository";
+import { snapshotPresentation, getPresentation, readPresentationState, recordPlanImageJob, ensureCoverPlanImage } from "./repository";
 import { PresentationError, revisionSchema } from "./state";
 
 export const MAX_ART_ASSETS = 12;
@@ -107,4 +107,33 @@ export async function startPlannedArt(ownerId: string, projectId: string, input:
   if (!slide) throw new PresentationError(409, "Slide untuk gambar ini belum ada. Gunakan hasil AI terlebih dahulu.");
   const job = await startPresentationArt(ownerId, projectId, { baseRevision: input.baseRevision, slideId: slide.id, prompt: image.prompt, role: image.role });
   return { job, project: await recordPlanImageJob(ownerId, projectId, input.planImage, slide.id, job.id) };
+}
+
+/** Images started automatically after an AI deck is accepted (cover first). */
+const AUTO_IMAGES = 3;
+
+/**
+ * Owner decision (2026-11-09): an accepted AI deck gets its cover and up to two key slides illustrated
+ * without an extra click. Slides that already have a picture, or are locked, are skipped.
+ */
+export async function autoStartDeckImages(ownerId: string, projectId: string) {
+  await ensureCoverPlanImage(ownerId, projectId);
+  const state = await readPresentationState(ownerId, projectId);
+  const images = state.plan?.images ?? [];
+  let budget = Math.max(0, AUTO_IMAGES - images.filter((image) => image.jobId).length);
+  const queue = images.map((image, index) => ({ image, index }))
+    .filter(({ image }) => !image.jobId)
+    .sort((a, b) => (a.image.slide === 1 ? -1 : 0) - (b.image.slide === 1 ? -1 : 0) || a.image.slide - b.image.slide);
+  for (const { image, index } of queue) {
+    if (budget <= 0) break;
+    const fresh = await readPresentationState(ownerId, projectId);
+    const slide = fresh.deck.slides.find((item) => item.id === image.slideId) ?? fresh.deck.slides[image.slide - 1];
+    if (!slide || slide.art || slide.locked) continue;
+    try {
+      await startPlannedArt(ownerId, projectId, { baseRevision: fresh.revision, planImage: index });
+      budget -= 1;
+    } catch {
+      break; // queue full or budget reached: the user can still start the rest from the plan panel
+    }
+  }
 }
