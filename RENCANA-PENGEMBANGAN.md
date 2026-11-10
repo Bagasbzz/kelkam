@@ -371,3 +371,14 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   penulisan bab ikut memakai jalur ini; (2) max_tokens bab dinaikkan ke 8000 (ringkas 2400) untuk ruang thinking;
   (3) ai-check kini juga menguji varian Claude (max_tokens 300 vs 1500, reasoning_effort low/none, thinking disabled)
   untuk memilih parameter yang mematikan thinking.
+
+## 15. Perbaikan pengumpulan Tugas: NIM dan nama roster (2026-11-10)
+
+- Kasus: mahasiswa (Suci Sania) punya 2 akun dan pernah mengumpulkan dari keduanya. Aturan audit keamanan mengikat NIM ke
+  akun yang pernah mengumpulkan; karena NIM-nya tercatat di dua akun, KEDUA akun ditolak ("NIM ini sudah terikat ke akun
+  mahasiswa lain"). Perbaikan: akun yang sudah pernah mengumpulkan dengan NIM itu tetap boleh; akun baru yang belum pernah
+  memakai NIM tersebut tetap ditolak (perlindungan dari pemakaian NIM orang lain).
+- Nama roster terlalu ketat (harus persis). Sekarang `namesMatch`: singkatan umum (M., Muh., Moh., Mhd., Muhamad,
+  Mohammad, Achmad, St.), inisial, nama sebagian ("Suci" ~ "Suci Sania"), salah ketik satu huruf; tetap menolak nama
+  orang lain. Nama yang disimpan tetap nama di roster.
+- Mahasiswa yang lupa akun lamanya: admin cukup "Reset sandi" akun lama di Daftar akun, lalu mahasiswa login dengan akun itu.

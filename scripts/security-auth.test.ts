@@ -171,3 +171,21 @@ test("course routes require token and assistant routes bind run course", async (
     assert.ok(source.indexOf("assertSameOriginJsonRequest(req)") < source.indexOf("await readJsonBody(req,"), "origin check must precede bounded credential parsing");
   }
 });
+
+test("roster names match common spellings but not other students", async () => {
+  const { namesMatch } = await import("../src/lib/server/tugas/submission-identity.ts");
+  for (const [a, b] of [["M. Aldi", "Muhammad Aldi"], ["Muhamad Rizky Pratama", "M Rizky Pratama"], ["Suci", "Suci Sania"], ["suci sanya", "Suci Sania"], ["MUH. FAJAR", "Mohammad Fajar"]]) {
+    assert.equal(namesMatch(a, b), true, `${a} ~ ${b}`);
+  }
+  for (const [a, b] of [["Alice Student", "Other Student"], ["Muhammad Aldi", "Muhammad Rizky"], ["M", "Muhammad Aldi"], ["Bob", "Alice"]]) {
+    assert.equal(namesMatch(a, b), false, `${a} !~ ${b}`);
+  }
+});
+
+test("a student who already submitted with a NIM from two accounts can keep submitting from either", async () => {
+  const input = { nim: "162024001", name: "Suci", classId: "class-a" };
+  const legacy = [{ userId: "first", nim: "162024001", name: "Suci Sania" }, { userId: "student", nim: "162024001", name: "Suci Sania" }];
+  const result = await resolveSubmissionIdentity(identityDb(legacy), "course-a", "student", input);
+  assert.equal(result.nim, "162024001");
+  await assert.rejects(resolveSubmissionIdentity(identityDb(legacy), "course-a", "newcomer", input), ApiRequestError);
+});
