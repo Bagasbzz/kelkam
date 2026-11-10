@@ -34,7 +34,7 @@ import {
 const HISTORY_LIMIT = 16;
 const MAX_STEPS = 60;
 /** Batas daftar sumber per sesi (termasuk yang tidak dicentang). */
-const MAX_SESSION_SOURCES = 80;
+const MAX_SESSION_SOURCES = 150;
 /** Budget waktu unduh+baca PDF per panggilan findSources (muat di segmen agent). */
 const FULLTEXT_DEADLINE_MS = 40_000;
 
@@ -112,7 +112,22 @@ export interface PlanTable { id: string; title: string; purpose: string; columns
  * addMaterialFigure; gambar seperti ini tidak butuh prompt.
  */
 export interface PlanFigure { id: string; title: string; caption: string; prompt: string; sectionId?: string; fileId?: string }
+/** Satu baris matriks penelitian terdahulu (peneliti dan judul diambil dari sumber, bukan dari AI). */
+export interface MatrixRow {
+  sourceId: string;
+  peneliti: string;
+  judul: string;
+  tujuan: string;
+  metode: string;
+  hasil: string;
+  keterbatasan: string;
+  perbedaan: string;
+}
+export interface ResearchMatrix { rows: MatrixRow[]; gap: string; novelty: string }
+
 export interface ReportPlan {
+  /** Matriks penelitian terdahulu + research gap + novelty (opsional, disetujui pengguna). */
+  researchMatrix?: ResearchMatrix;
   outline: PlanSection[];
   diagrams: PlanDiagram[];
   tables: PlanTable[];
@@ -152,6 +167,19 @@ function slug(s: string, i: number) {
 /** Batas bab inti: lebih dari ini hampir pasti outline terlalu pecah (Daftar Pustaka/Lampiran bukan bab). */
 const MAX_OUTLINE_SECTIONS = 6;
 const NON_CHAPTER_TITLE = /^(daftar\s+(pustaka|isi|gambar|tabel|lampiran)|referensi|references|bibliography|lampiran|appendix|abstrak|abstract|kata\s+pengantar)\b/i;
+
+function normalizeMatrix(raw: unknown): ResearchMatrix | undefined {
+  const m = asObj(raw);
+  const rows = asArr(m.rows).map((row) => {
+    const r = asObj(row);
+    return {
+      sourceId: asStr(r.sourceId, 200), peneliti: asStr(r.peneliti, 200), judul: asStr(r.judul, 300),
+      tujuan: asStr(r.tujuan, 400), metode: asStr(r.metode, 400), hasil: asStr(r.hasil, 600),
+      keterbatasan: asStr(r.keterbatasan, 400), perbedaan: asStr(r.perbedaan, 400),
+    };
+  }).filter((row) => row.sourceId && row.peneliti).slice(0, 10);
+  return rows.length ? { rows, gap: asStr(m.gap, 1500), novelty: asStr(m.novelty, 1500) } : undefined;
+}
 
 function normalizePlan(raw: unknown): ReportPlan {
   const o = asObj(raw);
@@ -193,7 +221,8 @@ function normalizePlan(raw: unknown): ReportPlan {
     const fileId = asStr(fo.fileId, 64) || undefined;
     return { id: asStr(fo.id, 60) || `gambar-${i + 1}`, title, caption: asStr(fo.caption, 300) || title, prompt: asStr(fo.prompt, 1500), sectionId: asStr(fo.sectionId, 60) || undefined, ...(fileId ? { fileId } : {}) };
   }).filter((f) => f.title && (f.fileId || f.prompt.length >= 8)).slice(0, 20);
-  return { outline, diagrams, tables, figures, sourceQueries: strList(o.sourceQueries, 8), rationale: asStr(o.rationale, 800) || undefined };
+  const matrix = normalizeMatrix(o.researchMatrix);
+  return { outline, diagrams, tables, figures, sourceQueries: strList(o.sourceQueries, 8), rationale: asStr(o.rationale, 800) || undefined, ...(matrix ? { researchMatrix: matrix } : {}) };
 }
 
 function mergeBrief(prev: ReportBrief, patch: unknown): ReportBrief {
@@ -289,6 +318,7 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
     })),
     figures,
     tables: session.plan.tables.map((t) => ({ id: t.id, title: t.title, purpose: t.purpose, columns: t.columns, sectionId: t.sectionId })),
+    researchMatrix: session.plan.researchMatrix,
     references: selectedSources(session.sources).map((s) => ({
       id: s.id, doi: s.doi || s.doiUrl, verified: typeof s.verified === "boolean" ? s.verified : s.doiVerified,
       authors: s.authors, year: s.year, title: s.title, venue: s.venue,
@@ -341,7 +371,7 @@ ${reportIntentPrompt(intent)}
 
 ALUR:
 1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui dan relevan, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. ${intent.outputMode === "full_report" && !intent.explicit.scope ? "Untuk laporan penuh, pahami jenis dokumen, judul/topik, syarat jurnal dan gaya sitasi. Ketentuan kampus, data sampul, dan bahan ditanyakan hanya bila relevan atau diminta." : "Untuk keluaran terbatas, cukup pertanyaan/topik atau sumber terpilih. Jangan wajibkan jenis dokumen, syarat SINTA/Scopus, jumlah/tahun sumber, novelty, format kampus, atau data sampul. Gunakan gaya sitasi yang diminta, jika tidak ada gunakan APA tanpa menahan jawaban."} Setiap fakta baru, panggil updateBrief.
-  2. PLANNED: bila brief cukup dan mode bukan answer/citations_only, panggil proposePlan sesuai scope, LALU LANGSUNG panggil findSources untuk SETIAP query di sourceQueries (minimal 3 query berbeda, campur Inggris dan Indonesia, limit 8-10 per query, satu panggilan per query) agar literatur luas dan mendalam. Hasil otomatis diurutkan paling relevan dan terbaru, dan PDF open access dibaca penuh oleh sistem. Setelah itu panggil selectSources untuk mencentang sumber yang paling relevan (buang yang melenceng), lalu tampilkan ringkasan rencana + sumber dan minta persetujuan. Jangan meminta persetujuan eksekusi sebelum sumber dicari. Untuk citations_only, cari/seleksi sumber lalu keluarkan artefak sitasi tanpa membuat bab. Untuk literature_review, hanya buat outline tinjauan/sintesis yang diminta, tetapi tetap cari sumbernya.
+  2. PLANNED: bila brief cukup dan mode bukan answer/citations_only, panggil proposePlan sesuai scope, LALU LANGSUNG cari sumber sebanyak mungkin yang relevan: panggil findSources dengan queries berisi 3-4 query sekaligus (dicari paralel, campur Inggris dan Indonesia, limit 12-20 per query), ulangi dengan query lain sampai target jumlah sumber tercapai. Target sumber terverifikasi: makalah/tugas 10-20, laporan proyek 20-30, skripsi/tesis/penelitian 40-70 (atau brief.minSources bila pengguna/dosen menyebut angka; tanyakan bila skripsi dan belum jelas). Variasikan query: konsep inti, variabel, metode, konteks Indonesia, penelitian terdahulu. Hasil otomatis diurutkan paling relevan dan terbaru, dan PDF open access dibaca penuh oleh sistem. Setelah itu panggil selectSources untuk mencentang sumber yang paling relevan (buang yang melenceng). MATRIKS PENELITIAN: untuk skripsi, tesis, artikel penelitian, atau bila dosen meminta research gap/novelty, TANYAKAN dulu ke pengguna apakah perlu matriks penelitian terdahulu (untuk tugas biasa tidak perlu). Bila setuju, pilih 5-8 jurnal utama paling relevan dari sumber tercentang lalu panggil setResearchMatrix (isi dari abstrak/teks penuh, jangan mengarang), dan rumuskan research gap serta novelty penelitian pengguna. Lalu tampilkan ringkasan rencana + sumber (+ matriks) dan minta persetujuan. Jangan meminta persetujuan eksekusi sebelum sumber dicari. Untuk citations_only, cari/seleksi sumber lalu keluarkan artefak sitasi tanpa membuat bab. Untuk literature_review, hanya buat outline tinjauan/sintesis yang diminta, tetapi tetap cari sumbernya.
    JUMLAH BAB: hanya untuk full_report tanpa pembatasan scope, ikuti jenis dokumen kecuali ketentuan kampus menyebut lain: makalah/paper/laporan praktikum/laporan tugas 3-4 bab (Pendahuluan, Landasan Teori/Tinjauan Pustaka, Pembahasan, Penutup); laporan proyek/PKL/magang 4-5 bab; skripsi/tugas akhir/tesis 5 bab (Pendahuluan, Tinjauan Pustaka, Metode, Hasil dan Pembahasan, Penutup). Maksimal 6 bab. literature_review hanya tinjauan/sintesis; answer jawaban langsung; citations_only tanpa bab dan tanpa penulisan AI. Daftar Pustaka/Lampiran bukan bab. Jangan mewajibkan novelty atau research gap kecuali kontrak required.
    PANJANG: untuk full_report isi subsections (sub-bab berurutan) dan targetPages tiap bab. Ikuti target panjang pengguna atau kampus (brief.targetLength); bila tidak disebut, perkiraan wajar: makalah 10-20 halaman total, laporan proyek/PKL 30-50, skripsi 60-120 (Hasil dan Pembahasan biasanya bab terpanjang). Tidak ada batas atas tetap: bab panjang (mis. 100 halaman) ditulis sistem per sub-bab, jadi pecah bab panjang menjadi cukup banyak sub-bab yang jelas.
 3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
@@ -427,12 +457,29 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          query: { type: "string" },
-          limit: { type: "number", description: "default 8, maks 15" },
+          query: { type: "string", description: "Satu query. Lebih baik pakai queries untuk beberapa query sekaligus." },
+          queries: { type: "array", items: { type: "string" }, description: "2-4 query berbeda (Inggris dan Indonesia) yang dicari paralel dalam satu panggilan." },
+          limit: { type: "number", description: "hasil per query, default 12, maks 25" },
           replace: { type: "boolean", description: "true = ganti seluruh daftar sumber" },
           kinds: { type: "array", items: { type: "string", enum: SEARCHABLE_KINDS }, description: "Jenis sumber: journal (jurnal/prosiding), book (buku/bab buku), thesis (skripsi/tesis/preprint), official (laporan lembaga ber-DOI). Kosongkan untuk campuran bawaan atau preferensi brief.sourceKinds. Isi ['book'] untuk mencari buku teori dasar secara khusus." },
         },
-        required: ["query"],
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "setResearchMatrix",
+      description: "Simpan matriks penelitian terdahulu (5-8 jurnal utama dari sumber tercentang) beserta research gap dan novelty. Hanya setelah pengguna setuju dibuatkan matriks. Peneliti/tahun/judul diisi sistem dari sumber; isi kolom lain dari abstrak/teks penuh, jangan mengarang.",
+      parameters: {
+        type: "object",
+        properties: {
+          rows: { type: "array", items: { type: "object", properties: { sourceId: { type: "string" }, tujuan: { type: "string" }, metode: { type: "string" }, hasil: { type: "string" }, keterbatasan: { type: "string", description: "Keterbatasan/celah penelitian itu." }, perbedaan: { type: "string", description: "Perbedaan dengan penelitian pengguna." } }, required: ["sourceId", "tujuan", "metode", "hasil"] } },
+          gap: { type: "string", description: "Research gap yang muncul dari matriks." },
+          novelty: { type: "string", description: "Kebaruan penelitian pengguna dibanding penelitian terdahulu." },
+        },
+        required: ["rows", "gap", "novelty"],
       },
     },
   },
@@ -633,6 +680,8 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       plan.diagrams = intent.diagrams === "omit" || intent.outputMode === "citations_only" ? [] : [...(state.plan?.diagrams.filter((diagram) => diagram.status === "approved") || []), ...plan.diagrams.filter((diagram) => intent.diagrams === "include" && !state.plan?.diagrams.some((old) => old.status === "approved" && old.id === diagram.id))];
       plan.figures = intent.diagrams === "omit" || intent.outputMode === "citations_only" ? [] : [...(state.plan?.figures.filter((figure) => figure.fileId) || []), ...plan.figures.filter((figure) => intent.diagrams === "include" && !state.plan?.figures.some((old) => old.fileId && old.id === figure.id))];
       if (!plan.outline.length && intent.outputMode !== "citations_only") return { error: "Outline kosong." };
+      // Matriks penelitian yang sudah disetujui ikut dipertahankan saat rencana diperbarui.
+      if (state.plan?.researchMatrix && !plan.researchMatrix) plan.researchMatrix = state.plan.researchMatrix;
       state.plan = plan;
       if (state.stage === "intake") state.stage = "planned";
       await persist(state);
@@ -640,23 +689,25 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       return { ok: true, outline: plan.outline.map((s) => s.title), diagrams: plan.diagrams.length, tables: plan.tables.length, figures: plan.figures.length, sourceQueries: plan.sourceQueries };
     }
     case "findSources": {
-      const query = asStr(args.query, 300);
-      if (!query) return { error: "Query kosong." };
-      const limit = Math.min(15, Math.max(1, Number(args.limit) || 8));
+      // Beberapa query sekaligus, dicari paralel: lebih banyak sumber dalam waktu langkah yang sama.
+      const queries = Array.from(new Set([...(Array.isArray(args.queries) ? args.queries : []), args.query].map((value) => asStr(value, 300)).filter(Boolean))).slice(0, 4);
+      if (!queries.length) return { error: "Query kosong." };
+      const limit = Math.min(25, Math.max(1, Number(args.limit) || 12));
       const requestedKinds = sourceKindList(args.kinds);
       const kinds = requestedKinds.length ? requestedKinds : sourceKindList(state.brief.sourceKinds);
       const searchesBooks = !kinds.length || kinds.includes("book");
-      emit(`Mencari literatur "${query}" di Semantic Scholar, OpenAlex, Crossref${searchesBooks ? ", Google Books/Open Library" : ""}, Unpaywall…`);
-      const found = await findVerifiedSources(query, {
+      emit(`Mencari literatur untuk ${queries.length} query paralel (${queries.map((q) => `"${q.slice(0, 50)}"`).join(", ")}) di Semantic Scholar, OpenAlex, Crossref${searchesBooks ? ", Google Books/Open Library" : ""}, Unpaywall…`);
+      const results = await Promise.all(queries.map((query) => findVerifiedSources(query, {
         limit,
         requirement: state.brief.journalRequirement,
         yearFrom: state.brief.yearFrom ?? null,
         kinds: kinds.length ? kinds : undefined,
-        onProgress: emit,
-      });
+        onProgress: queries.length === 1 ? emit : undefined,
+      }).catch(() => [] as VerifiedSource[])));
       const existing = args.replace ? [] : state.sources;
       const seen = new Set(existing.map((s) => s.id));
-      const addedRaw = found.filter((s) => !seen.has(s.id));
+      const addedRaw: VerifiedSource[] = [];
+      for (const found of results) for (const source of found) if (!seen.has(source.id)) { seen.add(source.id); addedRaw.push(source); }
       // Baca teks penuh PDF open access (dibatasi waktu agar muat di segmen agent).
       const openCount = addedRaw.filter((s) => s.pdfStatus === "verified").length;
       if (openCount) emit(`Mengunduh dan membaca ${openCount} PDF open access…`);
@@ -666,16 +717,43 @@ async function runTool(state: SessionState, name: string, args: Record<string, u
       const added = enriched.sources;
       state.sources = [...existing, ...added].slice(0, MAX_SESSION_SOURCES);
       await persist(state);
-      emit(`Ditemukan ${added.length} sumber baru terverifikasi, ${enriched.read} dibaca penuh (total ${state.sources.length})${added[0] ? `: ${added[0].authors[0] || "?"} ${added[0].year || ""}` : ""}`);
-      events.push(`Sumber "${query}": ${added.length} baru, ${enriched.read} teks penuh (${state.sources.length} total)`);
+      emit(`Ditemukan ${added.length} sumber baru terverifikasi, ${enriched.read} dibaca penuh (total ${state.sources.length})`);
+      events.push(`Sumber ${queries.length} query: ${added.length} baru, ${enriched.read} teks penuh (${state.sources.length} total)`);
       return {
         ok: true,
-        query,
-        added: added.map((s) => ({ id: s.id, kind: s.kind || "journal", apa: s.citationApa, year: s.year, relevance: s.relevance, readLevel: s.readLevel, doi: s.doiUrl, pdf: s.pdfStatus, signals: s.qualitySignals })),
+        queries,
+        perQuery: results.map((found, i) => ({ query: queries[i], ditemukan: found.length })),
+        added: added.map((s) => ({ id: s.id, kind: s.kind || "journal", apa: s.citationApa.slice(0, 180), year: s.year, relevance: s.relevance, readLevel: s.readLevel })),
         total: state.sources.length,
         selected: selectedSources(state.sources).length,
         note: "Peringkat SINTA/Scimago belum diverifikasi otomatis; user cek lewat tautan. readLevel=fulltext berarti isi PDF sudah dibaca sistem. Buku hanya punya deskripsi penerbit (isi buku tidak dibaca).",
       };
+    }
+    case "setResearchMatrix": {
+      if (!state.plan) return { error: "Buat rencana dulu dengan proposePlan." };
+      const pool = new Map(selectedSources(state.sources).map((source) => [source.id, source]));
+      const rows: MatrixRow[] = [];
+      const rejected: string[] = [];
+      for (const raw of asArr(args.rows).slice(0, 10)) {
+        const r = asObj(raw);
+        const source = pool.get(asStr(r.sourceId, 200));
+        if (!source) { rejected.push(asStr(r.sourceId, 80) || "?"); continue; }
+        const surname = (source.authors[0] || "").split(/\s+/).at(-1) || "Anonim";
+        rows.push({
+          sourceId: source.id,
+          // Identitas sumber diambil dari data terverifikasi, bukan ditulis AI.
+          peneliti: `${surname}${source.authors.length > 2 ? " dkk." : source.authors.length === 2 ? ` & ${(source.authors[1] || "").split(/\s+/).at(-1)}` : ""} (${source.year || "t.t."})`,
+          judul: source.title.slice(0, 300),
+          tujuan: asStr(r.tujuan, 400), metode: asStr(r.metode, 400), hasil: asStr(r.hasil, 600),
+          keterbatasan: asStr(r.keterbatasan, 400), perbedaan: asStr(r.perbedaan, 400),
+        });
+      }
+      if (!rows.length) return { error: "Tidak ada sourceId yang cocok dengan sumber tercentang.", rejected };
+      state.plan.researchMatrix = { rows, gap: asStr(args.gap, 1500), novelty: asStr(args.novelty, 1500) };
+      await persist(state);
+      events.push(`Matriks penelitian: ${rows.length} jurnal utama`);
+      emit(`Matriks penelitian terdahulu disusun dari ${rows.length} jurnal utama`);
+      return { ok: true, rows: rows.length, rejected, note: "Matriks tampil di tab Rencana. Minta pengguna memeriksa sebelum eksekusi." };
     }
     case "selectSources": {
       const ids = Array.isArray(args.ids) ? args.ids.map((v) => asStr(v, 200)).filter(Boolean) : [];
@@ -1154,7 +1232,8 @@ function describeToolCall(name: string, args: Record<string, unknown>): string |
   switch (name) {
     case "updateBrief": return "Mencatat kebutuhan laporan…";
     case "proposePlan": return "Menyusun rencana outline, diagram, dan tabel…";
-    case "findSources": return `Mencari sumber: "${asStr(args.query, 80)}"`;
+    case "findSources": return `Mencari sumber: ${Array.isArray(args.queries) ? `${args.queries.length} query paralel` : `"${asStr(args.query, 80)}"`}`;
+    case "setResearchMatrix": return "Menyusun matriks penelitian terdahulu…";
     case "selectSources": return `${args.selected === false ? "Melepas centang" : "Mencentang"} sumber referensi…`;
     case "startExecution": return "Memulai penulisan penuh…";
     case "reviseSection": return `Merevisi bagian "${asStr(args.sectionTitle, 80)}"…`;

@@ -30,33 +30,42 @@ function createOfflineLock(): AiBudgetLock {
   };
 }
 
-test("cheap routing is default; review requires explicit purpose", async () => {
+test("purpose routing: default is the writer model, fast and review are explicit", async () => {
   const { AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW, getModelForPurpose } = await import("../src/lib/ai/client.ts");
-  assert.equal(AI_MODEL, AI_MODEL_FAST);
-  assert.equal(getModelForPurpose(), AI_MODEL_FAST);
-  assert.equal(getModelForPurpose("default"), AI_MODEL_FAST);
+  assert.equal(getModelForPurpose(), AI_MODEL);
+  assert.equal(getModelForPurpose("default"), AI_MODEL);
+  assert.equal(getModelForPurpose("fast"), AI_MODEL_FAST);
   assert.equal(getModelForPurpose("review"), AI_MODEL_REVIEW);
 });
 
-test("configured GPT model IDs are honored without changing defaults or transport admission", async () => {
+test("writer model is AI_MODEL (Claude by default) and known-slow GPT-5/6 IDs fall back to defaults", async () => {
   const source = await readFile(new URL("../src/lib/ai/client.ts", import.meta.url), "utf8");
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  for (const model of ["gpt-5-configured", "gpt-6-configured-sol", "provider/gpt-6-configured-sol"]) {
+  const load = (env: Record<string, string>) => {
     const exports: Record<string, unknown> = {};
     vm.runInNewContext(compiled, {
       exports,
-      process: { env: { AI_MODEL_FAST: ` ${model} `, AI_MODEL_REVIEW: "vision-model", AI_MODEL: "legacy-review" } },
+      process: { env },
       require: (id: string) => {
         if (id === "openai" || id === "@/lib/ai/guard" || id === "@/lib/server/safe-fetch") return {};
         if (id === "@/lib/server/ai-budget") return { budgetLimit };
         throw new Error(`Unexpected dependency: ${id}`);
       },
     });
-    assert.equal(exports.AI_MODEL_FAST, model);
-    assert.equal(exports.AI_MODEL_DEFAULT, model);
-    assert.equal(exports.AI_MODEL, model);
-    assert.equal(exports.AI_MODEL_REVIEW, "vision-model");
-  }
+    return exports;
+  };
+  const defaults = load({});
+  assert.equal(defaults.AI_MODEL, "claude-sonnet-5");
+  assert.equal(defaults.AI_MODEL_FAST, "deepseek-v4-flash-fast");
+  assert.equal(defaults.AI_MODEL_REVIEW, "claude-sonnet-5");
+  const slow = load({ AI_MODEL: "gpt-5.2", AI_MODEL_FAST: " gpt-6-sol ", AI_MODEL_REVIEW: "gpt-5" });
+  assert.equal(slow.AI_MODEL, "claude-sonnet-5");
+  assert.equal(slow.AI_MODEL_FAST, "deepseek-v4-flash-fast");
+  assert.equal(slow.AI_MODEL_REVIEW, "claude-sonnet-5");
+  const custom = load({ AI_MODEL: "writer-x", AI_MODEL_FAST: "fast-x", AI_MODEL_REVIEW: "vision-model" });
+  assert.equal(custom.AI_MODEL_DEFAULT, "writer-x");
+  assert.equal(custom.AI_MODEL_FAST, "fast-x");
+  assert.equal(custom.AI_MODEL_REVIEW, "vision-model");
 });
 
 test("per-user AI caps stay off until explicitly enabled; the site-wide cap always applies", () => {

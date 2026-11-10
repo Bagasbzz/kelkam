@@ -109,7 +109,16 @@ export function compactProject(project: unknown) {
       columns: strings(table.columns).slice(0, 12),
       sectionId: truncate(table.sectionId, 80) || undefined,
     })),
-    references: records(source.references).filter((reference) => reference.selected !== false).slice(0, 60).map((reference, index) => ({
+    /** Matriks penelitian terdahulu yang disetujui pengguna (research gap + novelty). */
+    researchMatrix: isRecord(source.researchMatrix) ? {
+      rows: records(source.researchMatrix.rows).slice(0, 10).map((row) => ({
+        peneliti: truncate(row.peneliti, 200), judul: truncate(row.judul, 300), tujuan: truncate(row.tujuan, 400), metode: truncate(row.metode, 400),
+        hasil: truncate(row.hasil, 600), keterbatasan: truncate(row.keterbatasan, 400), perbedaan: truncate(row.perbedaan, 400),
+      })),
+      gap: truncate(source.researchMatrix.gap, 1500),
+      novelty: truncate(source.researchMatrix.novelty, 1500),
+    } : null,
+    references: records(source.references).filter((reference) => reference.selected !== false).slice(0, 150).map((reference, index) => ({
       id: truncate(reference.id, 200),
       number: index + 1,
       doi: truncate(reference.doi || reference.doiUrl, 300),
@@ -741,6 +750,8 @@ export async function generateChapter(project: unknown, input: ChapterInput): Pr
   const firstBodySectionIndex = Math.min(1, Math.max(0, total - 1));
   const sectionFigures = firstPart ? compact.figures.filter((figure) => (figure.sectionId && section.id ? figure.sectionId === section.id : index === firstBodySectionIndex)) : [];
   const sectionTables = firstPart ? compact.tables.filter((table) => !table.sectionId || !section.id || table.sectionId === section.id) : [];
+  // Matriks penelitian dipakai di pendahuluan (gap/novelty), tinjauan pustaka (tabel), dan pembahasan (pembanding).
+  const useMatrix = Boolean(compact.researchMatrix?.rows.length) && /pendahuluan|tinjauan|pustaka|terdahulu|landasan|teori|pembahasan|hasil/i.test(section.title) && (!part || part.number === 0 || /terdahulu|pembahasan/i.test(part.heading));
   const targetWords = part ? part.targetWords : section.targetPages ? chapterWords(section, mode) : 0;
   const partHeading = part && part.subNumber ? `### ${index + 1}.${part.subNumber} ${promptInline(part.heading, 160)}` : "";
   const references = pickReferences(compact, section, isRingkas ? 6 : 16, isRingkas ? 4_000 : 14_000);
@@ -780,7 +791,8 @@ ATURAN GAMBAR/TABEL:
 ATURAN TIPOGRAFI:
 10. Istilah asing/bahasa Inggris dan nama latin ditulis miring dengan *...* (contoh: *framework*, *machine learning*, *end-to-end*). Singkatan diperkenalkan sekali dengan kepanjangannya.
 11. DILARANG memakai tanda em dash (\u2014) atau en dash (\u2013) di mana pun. Pakai koma, titik, titik dua, tanda kurung, atau tanda hubung biasa (-) untuk rentang angka.
-12. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan. Pastikan kalimat terakhir utuh.`;
+${useMatrix ? `13. MATRIKS PENELITIAN tersedia (matriksPenelitian). ${/tinjauan|pustaka|terdahulu|landasan|teori/i.test(section.title) ? 'Buat sub-bab Penelitian Terdahulu berisi tabel markdown dengan baris "**Tabel: Matriks Penelitian Terdahulu**" (kolom: No, Peneliti (Tahun), Judul, Metode, Hasil, Perbedaan dengan Penelitian Ini) dari matriks apa adanya, lalu paragraf sintesis, research gap, dan posisi penelitian ini.' : /pendahuluan/i.test(section.title) ? "Gunakan research gap dan novelty dari matriks pada latar belakang dan rumusan masalah." : "Bandingkan temuan dengan penelitian terdahulu di matriks."} Sitasi peneliti di matriks memakai referensi yang sama di payload.
+` : ""}12. Jangan menulis kalimat penutup umum seperti "demikian bab ini". Akhiri dengan transisi singkat ke bagian berikutnya bila relevan. Pastikan kalimat terakhir utuh.`;
 
   const userPayload = {
     laporan: {
@@ -801,6 +813,7 @@ ATURAN TIPOGRAFI:
       gambarIlustrasi: sectionFigures.map((figure) => ({ placeholder: `[Gambar: ${figure.title} - ${figure.caption || figure.title}]` })),
     },
     ringkasanBabSebelumnya: input.previousSummaries.slice(-4),
+    ...(useMatrix ? { matriksPenelitian: compact.researchMatrix } : {}),
     ...(part ? { teksSebelumnya: part.previousTail.slice(-2000), subBabBab: section.subsections ?? [] } : {}),
     sumber: sources,
     rencanaTabel: sectionTables.slice(0, 6),

@@ -626,6 +626,19 @@ export default function LaporanPage() {
                           <ul className="space-y-1 text-sm">{detail.plan.tables.map((t) => <li key={t.id} className="rounded-lg bg-slate-50 px-2.5 py-1.5"><b>{t.title}</b>, {t.purpose}{t.columns.length ? ` [${t.columns.join(", ")}]` : ""}</li>)}</ul>
                         </div>
                       )}
+                      {detail.plan.researchMatrix && detail.plan.researchMatrix.rows.length > 0 && (
+                        <div>
+                          <div className="mb-1 flex items-center gap-1 text-sm font-bold text-slate-700"><Table2 className="h-4 w-4" /> Matriks penelitian terdahulu ({detail.plan.researchMatrix.rows.length} jurnal utama)</div>
+                          <div className="overflow-x-auto rounded-lg border border-slate-200">
+                            <table className="w-full min-w-[640px] text-left text-xs">
+                              <thead className="bg-slate-50 text-slate-600"><tr>{["Peneliti", "Metode", "Hasil", "Celah", "Perbedaan"].map((h) => <th key={h} className="px-2 py-1.5 font-bold">{h}</th>)}</tr></thead>
+                              <tbody>{detail.plan.researchMatrix.rows.map((row) => <tr key={row.sourceId} className="border-t border-slate-100 align-top"><td className="px-2 py-1.5 font-semibold text-slate-800">{row.peneliti}<div className="font-normal text-slate-500">{row.judul}</div></td><td className="px-2 py-1.5">{row.metode}</td><td className="px-2 py-1.5">{row.hasil}</td><td className="px-2 py-1.5">{row.keterbatasan}</td><td className="px-2 py-1.5">{row.perbedaan}</td></tr>)}</tbody>
+                            </table>
+                          </div>
+                          {detail.plan.researchMatrix.gap && <p className="mt-2 text-sm"><b>Research gap:</b> {detail.plan.researchMatrix.gap}</p>}
+                          {detail.plan.researchMatrix.novelty && <p className="mt-1 text-sm"><b>Novelty:</b> {detail.plan.researchMatrix.novelty}</p>}
+                        </div>
+                      )}
                       <p className="text-sm text-slate-500">Mau ubah? Bilang saja di chat, mis. “ganti BAB 3 jadi metode Waterfall” atau “tambah diagram sequence login”.</p>
                     </>
                   ) : <p className="text-sm text-slate-500">Rencana muncul setelah asisten cukup paham kebutuhanmu.</p>}

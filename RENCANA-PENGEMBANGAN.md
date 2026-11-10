@@ -348,3 +348,19 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   - Auditor akhir membaca laporan utuh per batch paralel (120 ribu karakter/batch, maks. 8 batch ≈ 300+ halaman).
     Bab panjang tidak ditulis ulang otomatis oleh perbaikan; temuannya menjadi catatan. Audit per bab hanya untuk bab
     satu langkah.
+
+## 14. Perbaikan 2026-11-10: bab kosong, chat timeout, sumber berkurang, matriks penelitian
+
+- Akar masalah bab "0 kata"/timeout: audit `844dd00` mengganti penulis utama menjadi model cepat (`AI_MODEL_DEFAULT =
+  AI_MODEL_FAST`) dan menghapus pengaman model lambat (gpt-5/6 yang 0 token dalam 60 dtk), sehingga env model ikut
+  dipakai apa adanya. Dikembalikan: penulis = `AI_MODEL` (bawaan claude-sonnet-5), review = `AI_MODEL_REVIEW` ||
+  `AI_MODEL_LARGE` || penulis, cepat = `AI_MODEL_FAST`; nama gpt-5/6 dipetakan ke bawaan. Agen chat Laporan/PPT juga
+  kembali memakai model penulis.
+- Diagnostik: `GET /api/admin/ai-check` (admin) mengetes tiap model (waktu token pertama, total, error provider).
+- Sumber: `findSources` menerima `queries` (2-4 query dicari paralel), hasil per query maks. 25, sumber per sesi maks. 150,
+  referensi ke penulis maks. 150. Target jumlah sumber per jenis dokumen di prompt (skripsi 40-70 atau sesuai dosen).
+  Penurunan sebelumnya: pencarian berurutan satu query per langkah sehingga run terpotong batas waktu.
+- Matriks penelitian terdahulu (`setResearchMatrix`, disimpan di `plan.researchMatrix`): AI menanyakan dulu (tidak untuk
+  tugas biasa), memilih 5-8 jurnal utama dari sumber tercentang; peneliti/tahun/judul diisi sistem dari data sumber;
+  ditampilkan di tab Rencana dengan research gap dan novelty; dipakai penulis di Pendahuluan, Tinjauan Pustaka (tabel
+  Penelitian Terdahulu), dan Pembahasan.

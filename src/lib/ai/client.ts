@@ -3,15 +3,23 @@ import { AI_SECURITY_POLICY, AI_SECURITY_POLICY_MARKER, leaksSystemPrompt, sanit
 import { safeFetch } from "@/lib/server/safe-fetch";
 import { AiBudgetError, budgetLimit, estimateAiCharge, getAiOwnerContext, reserveAiBudget } from "@/lib/server/ai-budget";
 
-// Honor provider model IDs from configuration; latency is not a model-name policy.
+/**
+ * Model routing (dikembalikan 2026-11-10 ke perilaku sebelum audit keamanan 844dd00, yang terbukti
+ * menghasilkan laporan panjang): penulis utama = AI_MODEL (bawaan claude-sonnet-5), model cepat untuk
+ * JSON/klasifikasi, model review untuk audit. Audit sempat membuat penulis utama = model cepat dan
+ * menghapus pengaman model lambat, sehingga bab kosong/timeout.
+ * Diukur 2026-10-08: gpt-5.x/6.x 0 token dalam 60 dtk (reasoning tersembunyi) → dipetakan ke bawaan.
+ */
+const SLOW_MODEL = /^gpt-(5|6)/i;
 function pickModel(envValue: string | undefined, fallback: string) {
   const value = (envValue || "").trim();
-  return value || fallback;
+  if (!value || SLOW_MODEL.test(value)) return fallback;
+  return value;
 }
 
+export const AI_MODEL_DEFAULT = pickModel(process.env.AI_MODEL, "claude-sonnet-5");
 export const AI_MODEL_FAST = pickModel(process.env.AI_MODEL_FAST || process.env.AI_MODEL_MINI, "deepseek-v4-flash-fast");
-export const AI_MODEL_DEFAULT = AI_MODEL_FAST;
-export const AI_MODEL_REVIEW = pickModel(process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE || process.env.AI_MODEL, "claude-sonnet-5");
+export const AI_MODEL_REVIEW = pickModel(process.env.AI_MODEL_REVIEW || process.env.AI_MODEL_LARGE, AI_MODEL_DEFAULT);
 export const AI_MODEL = AI_MODEL_DEFAULT;
 export const AI_MODEL_IMAGE = process.env.AI_MODEL_IMAGE || "gpt-image-2";
 
@@ -126,7 +134,7 @@ export async function budgetedAiFetch(input: RequestInfo | URL, init?: RequestIn
   if (!kind || (init?.method ?? "GET").toUpperCase() !== "POST" || typeof init?.body !== "string" || init.body.length > 16_000_000) throw new AiBudgetError("Operasi provider AI belum didukung.");
   const body = JSON.parse(init.body) as Record<string, unknown>;
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new AiBudgetError("Payload AI tidak valid.");
-  if (kind === "chat" && body.model !== AI_MODEL_FAST && body.model !== AI_MODEL_REVIEW || kind === "image" && body.model !== AI_MODEL_IMAGE) throw new AiBudgetError("Model AI belum diizinkan.");
+  if (kind === "chat" && body.model !== AI_MODEL_FAST && body.model !== AI_MODEL_REVIEW && body.model !== AI_MODEL_DEFAULT || kind === "image" && body.model !== AI_MODEL_IMAGE) throw new AiBudgetError("Model AI belum diizinkan.");
   const charge = estimateAiCharge(body, kind, AI_MODEL_FAST);
   charge.provider = configured.hostname;
   await reserveAiBudget(context, charge);
