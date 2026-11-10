@@ -187,11 +187,11 @@ export interface ReportJobSummary {
 /** Step "running" tanpa heartbeat lebih lama dari ini dianggap mati → retry. Heartbeat diperbarui tiap potongan teks. */
 export const STALE_STEP_MS = 120_000;
 /** Maks percobaan per step sebelum pakai fallback. */
-const MAX_STEP_ATTEMPTS = 2;
+const MAX_STEP_ATTEMPTS = 4;
 /** Maks section yang diproses. */
-const MAX_STEPS = 10;
-const MAX_TOTAL_STEPS = 30;
-const MAX_TOTAL_ATTEMPTS = 40;
+const MAX_STEPS = 20;
+const MAX_TOTAL_STEPS = 60;
+const MAX_TOTAL_ATTEMPTS = 120;
 /** Entri log terakhir yang disimpan. */
 const LOG_LIMIT = 120;
 /** Job lebih tua dari ini tidak dilanjutkan oleh tick. */
@@ -433,7 +433,7 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
   let safeProject = sanitizeForPersistence(project);
   const compact = compactProject(safeProject);
   const deterministic = compact.intent.outputMode === "citations_only";
-  if (!deterministic && isRecord(safeProject) && Array.isArray(safeProject.outline) && safeProject.outline.length > MAX_STEPS) throw new Error("Maksimal 10 bagian outline per laporan.");
+  if (!deterministic && isRecord(safeProject) && Array.isArray(safeProject.outline) && safeProject.outline.length > MAX_STEPS) throw new Error("Maksimal 20 bagian outline per laporan.");
   // Daftar pustaka dirakit otomatis dari sitasi (assembleReport); jangan jadi step AI (hasilnya dobel/ngarang).
   const isBibliography = (title: string) => /^(daftar\s+pustaka|referensi|references|bibliography)$/i.test(title.trim());
   const outline = compact.outline.filter((section) => !isBibliography(section.title)).slice(0, MAX_STEPS);
@@ -479,7 +479,7 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
   if (!deterministic) seeds.push({ sectionId: `${REVIEW_PREFIX}1`, title: "Audit akhir dokumen" });
   log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit bab` : "tanpa audit per bab (mode ringkas)"} → audit akhir (maks. ${MAX_FIX_ROUNDS} putaran perbaikan)` });
 
-  if (countedSteps(seeds) > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 30 langkah dan 3 ilustrasi.");
+  if (countedSteps(seeds) > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 60 langkah dan 3 ilustrasi.");
   const row = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
     await expireAbandonedJobs(tx);

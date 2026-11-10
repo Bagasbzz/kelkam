@@ -300,3 +300,6 @@ Yang dikerjakan (selesai 2026-11-09):
   Timeout juga dinaikkan untuk revisi laporan (100 dtk), olah data (100 dtk), dan diagram UML/konsep (90 dtk).
 - Belum terverifikasi langsung di server (kunci AI hanya ada di server). Bila masih gagal, baca log job: pesan provider
   di sana menunjukkan apakah masalahnya model/kunci/kuota di sisi Mindaku.
+- Lanjutan: audit keamanan `844dd00` (2026-11-02) juga menurunkan batas job Laporan. Dikembalikan sebagian:
+  percobaan per bab 2 → 4, maks. bagian outline 10 → 20, total langkah 30 → 60, total percobaan 40 → 120
+  (`report-jobs.ts`, tes `security-ai.test.ts` disesuaikan). Rem biaya global tetap aktif.
