@@ -401,7 +401,7 @@ test("empty recovery can call tools next, then produce a valid visible completio
       assert.match(String((request.messages as Msg[])[0].content), /Pemulihan runtime/);
       return toolAnswer("work");
     }
-    assert.match(String((request.messages as Msg[])[0].content), /Batas kerja runtime/);
+    // Batas langkah tercapai setelah ada kemajuan: run diteruskan otomatis, jawaban akhir tetap valid.
     return answer("Completed based on saved result");
   };
   const result = await h.serve();
@@ -411,17 +411,15 @@ test("empty recovery can call tools next, then produce a valid visible completio
   assert.equal(h.row.stepCount, 3);
 });
 
-test("last allowed turn still permits tools when there is no successful evidence", async () => {
+test("progressing runs auto-continue a bounded number of times, then stop", async () => {
   const h = harness({ maxSteps: 1 });
   let tools = 0;
   h.driver.runTool = async () => { tools++; return { ok: true }; };
-  h.hooks.complete = async (request) => {
-    assert.equal(request.tool_choice, "auto");
-    return toolAnswer("work");
-  };
+  h.hooks.complete = async () => toolAnswer("work");
   assert.equal((await h.serve()).status, "failed");
-  assert.equal(tools, 1);
-  assert.equal(h.requests.length, 1);
+  // 1 langkah awal + 2 perpanjangan otomatis x 10 langkah; langkah terakhir hanya boleh jawaban akhir.
+  assert.equal(h.requests.length, 21);
+  assert.equal(tools, 20);
 });
 
 for (const content of [null, '{"error":"failed"}', '{"ok":false}', '{"outcome":"unknown","interrupted":true}', '{"nested":{"error":"failed"}}', '{}']) {
@@ -504,7 +502,8 @@ test("outage on the final allowed step cannot trigger another summary or hide fa
   const result = await h.serve();
   assert.equal(result.status, "failed");
   assert.equal(result.reply, null);
-  assert.equal(h.requests.length, 2);
-  assert.equal(result.stepCount, 2);
+  // Gangguan provider tetap berhenti setelah 3 kegagalan berturut-turut walau run diteruskan otomatis.
+  assert.equal(h.requests.length, 4);
+  assert.equal(result.stepCount, 4);
   assert.equal(toolResults(h.row.messages).length, 1);
 });

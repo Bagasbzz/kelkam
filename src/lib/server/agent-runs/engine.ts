@@ -122,6 +122,10 @@ const STEP_MIN_MAX_TOKENS = 4_000;
 const FINAL_ANSWER_MAX_TOKENS = 6_000;
 /** Respons kosong/terpotong juga dibatasi, bukan dianggap pekerjaan selesai. */
 const MAX_EMPTY_REPLIES = 3;
+/** Run yang sudah menghasilkan kemajuan diteruskan otomatis maks. 2 kali (tiap kali +10 langkah) sebelum dianggap gagal. */
+const AUTO_CONTINUE_LIMIT = 2;
+const AUTO_CONTINUE_STEPS = 10;
+const AUTO_CONTINUE_MARK = "Melanjutkan otomatis";
 const LEGACY_CONTINUATION = "[SISTEM] Respons sebelumnya kosong atau terpotong. Lanjutkan pekerjaan: panggil tool berikutnya yang dibutuhkan, atau bila data sudah cukup tulis kesimpulan ringkas langsung tanpa berpikir panjang.";
 const LEGACY_FINAL_TAIL = " Tulis jawaban akhir SEKARANG berdasarkan data yang sudah terkumpul: apa yang sudah dikerjakan, temuan utama, dan apa yang belum sempat (jika ada). Jangan memanggil tool. Langsung tulis jawabannya tanpa berpikir panjang.";
 /** Exact markers older engines stored as user turns; anything with extra text stays untrusted user content. */
@@ -609,8 +613,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
   let stepCount = row0.stepCount;
   let consecutiveErrors = 0;
   let emptyReplies = 0;
+  let autoContinues = events.filter((event) => event.text.startsWith(AUTO_CONTINUE_MARK)).length;
   for (const event of events.slice().reverse()) {
-    if (event.text === "Respons AI diterima.") break;
+    if (event.text === "Respons AI diterima." || event.text.startsWith(AUTO_CONTINUE_MARK)) break;
     if (!consecutiveErrors) consecutiveErrors = Number(/^Gangguan AI \([^;]+; (\d+)\/3\)/.exec(event.text)?.[1]) || 0;
     if (!emptyReplies) emptyReplies = Number(/^Respons AI kosong atau tidak lengkap \((\d+)\/3\)/.exec(event.text)?.[1]) || 0;
   }
@@ -690,13 +695,22 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
         return finish({ status: "cancelled", reply: `Dihentikan oleh user setelah ${stepCount} langkah. Aktivitas: ${events.filter((e) => e.level === "tool").map((e) => e.text).slice(-8).join("; ") || "-"}.` });
       }
       if (ctl.control === "pause") return release("paused", "Dijeda oleh user, ketik \"lanjut\" untuk meneruskan dari langkah terakhir.");
+      // Exhausted attempts do not prove that a visible answer or any work completed.
+      const hasEvidence = hasSuccessfulToolResult(messages, driver);
+      // Pekerjaan sudah berjalan (ada hasil tool) tetapi AI berhenti: teruskan otomatis, user tidak perlu mengetik "lanjut".
+      const stepLimit = Math.min(row0.maxSteps, DEFAULT_MAX_STEPS) + autoContinues * AUTO_CONTINUE_STEPS;
+      const stalled = emptyReplies >= MAX_EMPTY_REPLIES || stepCount >= stepLimit;
+      if (stalled && hasEvidence && autoContinues < AUTO_CONTINUE_LIMIT && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
+        autoContinues += 1;
+        emptyReplies = 0;
+        emit(`${AUTO_CONTINUE_MARK} (${autoContinues}/${AUTO_CONTINUE_LIMIT}): pekerjaan belum selesai, AI meneruskan dari langkah terakhir.`, "warn");
+        continue;
+      }
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS || emptyReplies >= MAX_EMPTY_REPLIES) {
         return finish({ status: "failed", error: "AI belum dapat menyelesaikan permintaan setelah percobaan terbatas. Hasil yang sudah tersimpan tetap tersedia; coba lagi beberapa saat." });
       }
 
-      // Exhausted attempts do not prove that a visible answer or any work completed.
-      const hasEvidence = hasSuccessfulToolResult(messages, driver);
-      if (stepCount >= Math.min(row0.maxSteps, DEFAULT_MAX_STEPS) || (toolsUsed.length >= MAX_TOOLS_PER_RUN && !hasEvidence)) {
+      if (stepCount >= stepLimit || (toolsUsed.length >= MAX_TOOLS_PER_RUN && !hasEvidence)) {
         const error = "Batas kerja AI tercapai sebelum jawaban lengkap tersedia. Hasil yang sudah tersimpan tetap tersedia; coba permintaan yang lebih terarah.";
         emit(error, "error");
         return finish({ status: "failed", error });
@@ -707,7 +721,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
       if (remaining < MIN_STEP_BUDGET_MS) return release("queued", "Segmen waktu server habis, melanjutkan otomatis di segmen berikutnya…");
 
       // 4. Panggil model.
-      const isLast = stepCount === Math.min(row0.maxSteps, DEFAULT_MAX_STEPS) - 1;
+      const isLast = stepCount === stepLimit - 1 && autoContinues >= AUTO_CONTINUE_LIMIT;
       const finalOnly = hasEvidence && !consecutiveErrors && !emptyReplies && (isLast || toolsUsed.length >= MAX_TOOLS_PER_RUN);
       emit(`Berpikir (langkah ${stepCount + 1})…`);
       messages = compactMessages(messages);
@@ -782,8 +796,8 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
       const usableFinal = finalOnly && !calls.length && replyText.length >= 80;
       if (!usableFinal && (!msg || truncated || (!calls.length && !replyText) || (finalOnly && calls.length))) {
         emptyReplies += 1;
-        emit(`Respons AI kosong atau tidak lengkap (${emptyReplies}/${MAX_EMPTY_REPLIES}). Mencoba melanjutkan pekerjaan.`, "warn");
-        if (emptyReplies >= MAX_EMPTY_REPLIES || finalOnly) {
+        emit(`Respons AI kosong atau tidak lengkap (${emptyReplies}/${MAX_EMPTY_REPLIES}${truncated ? ", terpotong batas token" : ""}). Mencoba melanjutkan pekerjaan.`, "warn");
+        if (finalOnly || (emptyReplies >= MAX_EMPTY_REPLIES && !(hasEvidence && autoContinues < AUTO_CONTINUE_LIMIT))) {
           return finish({ status: "failed", error: "AI tidak mengirim jawaban lengkap setelah percobaan terbatas. Coba lagi atau persempit permintaan. Hasil yang sudah tersimpan tetap tersedia." });
         }
         if (replyText) messages.push({ role: "assistant", content: replyText });

@@ -1324,7 +1324,8 @@ export const laporanAgentDriver: AgentDriver = {
   kind: RUN_KIND,
   tools: TOOL_DEFS,
   temperature: 0.3,
-  maxTokens: 1800,
+  // Rencana bab (sub-bab), pencarian multi-query, dan matriks penelitian butuh argumen tool panjang.
+  maxTokens: 8000,
   describeToolCall,
   async systemPrompt(run) {
     const state = await loadSessionForRun(run.sessionId, run.ownerId);

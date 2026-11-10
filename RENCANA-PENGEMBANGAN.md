@@ -398,3 +398,9 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   Crossref 40), verifikasi DOI maks. 45 per query, saringan relevansi (minimal sepertiga kata kunci query di judul/abstrak),
   non-jurnal maks. ±30% per query (tiap jenis ±20%), prompt menegaskan jurnal dominan. Uji langsung: query Inggris
   14 hasil (10 jurnal, 4 preprint), query Indonesia 8 jurnal.
+- Masih gagal setelah perbaikan di atas: agen Laporan dibatasi 4000 token output per langkah, sedangkan rencana bab dengan
+  sub-bab, pencarian multi-query, dan matriks penelitian butuh argumen tool panjang → respons terpotong 3x → gagal.
+  Perbaikan: `maxTokens` agen Laporan 8000; event mencatat "terpotong batas token".
+- Lanjut otomatis (permintaan pemilik): run yang sudah menghasilkan kemajuan (ada hasil tool berhasil) dan berhenti karena
+  respons kosong/terpotong atau batas langkah diteruskan otomatis maks. 2 kali (+10 langkah tiap kali, event
+  "Melanjutkan otomatis (n/2)"). Gangguan provider tetap berhenti setelah 3 kegagalan berturut-turut.
