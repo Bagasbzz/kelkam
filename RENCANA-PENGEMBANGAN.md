@@ -382,3 +382,14 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   Mohammad, Achmad, St.), inisial, nama sebagian ("Suci" ~ "Suci Sania"), salah ketik satu huruf; tetap menolak nama
   orang lain. Nama yang disimpan tetap nama di roster.
 - Mahasiswa yang lupa akun lamanya: admin cukup "Reset sandi" akun lama di Daftar akun, lalu mahasiswa login dengan akun itu.
+
+## 16. Perbaikan chat Laporan gagal "AI tidak mengirim jawaban lengkap" (2026-11-10)
+
+- ai-check terbaru: claude-sonnet-5 normal dengan max_tokens 1500 (teks pertama ±3 dtk); kegagalan sebelumnya hanya karena
+  uji max_tokens 300. Jadi Claude tidak bermasalah.
+- Penyebab chat gagal: saat run mendekati batas langkah/40 tool (banyak pencarian sumber), langkah "jawaban akhir" dipaksa
+  memakai model cepat (deepseek-v4-pro) dengan 4000 token; model itu menghabiskan token untuk reasoning sehingga jawaban
+  terpotong, dan langkah akhir yang terpotong langsung menggagalkan seluruh run. Perbaikan (`agent-runs/engine.ts`):
+  jawaban akhir memakai model run (Claude), 6000 token, dan jawaban akhir terpotong yang sudah berisi teks diterima.
+- Sumber didominasi buku (29 jurnal, 43 buku): kuota campuran dulu mengisi slot kosong dengan buku. Sekarang slot kosong
+  tidak diisi non-jurnal (maks. ±25% per jenis, 40% total per query), jurnal tetap mayoritas.

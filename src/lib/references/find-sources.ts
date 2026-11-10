@@ -316,7 +316,7 @@ type Candidate = { paper: ProviderPaper; kind: SourceKind; score: number };
 
 /**
  * Jurnal tetap mayoritas saat campuran: tiap jenis non-jurnal maks. ±1/4 limit,
- * total non-jurnal maks. 40%. Sisa kuota diisi kandidat berikutnya bila jurnal kurang.
+ * total non-jurnal maks. 40% dari limit; slot kosong tidak diisi non-jurnal.
  */
 function pickWithQuota<T extends Candidate>(items: T[], kinds: SourceKind[], limit: number): T[] {
   if (kinds.length === 1 || !kinds.includes("journal")) return items.slice(0, limit);
@@ -325,22 +325,16 @@ function pickWithQuota<T extends Candidate>(items: T[], kinds: SourceKind[], lim
   const counts = new Map<SourceKind, number>();
   let nonJournal = 0;
   const picked: T[] = [];
-  const rest: T[] = [];
   for (const item of items) {
     if (picked.length >= limit) break;
     if (item.kind === "journal") { picked.push(item); continue; }
     const count = counts.get(item.kind) || 0;
+    // Slot yang tersisa tidak diisi buku/skripsi: jurnal harus tetap mayoritas walau hasil jadi lebih sedikit.
     if (count < perKind && nonJournal < nonJournalCap) {
       counts.set(item.kind, count + 1);
       nonJournal += 1;
       picked.push(item);
-    } else {
-      rest.push(item);
     }
-  }
-  for (const item of rest) {
-    if (picked.length >= limit) break;
-    picked.push(item);
   }
   return picked.sort((a, b) => b.score - a.score);
 }

@@ -119,7 +119,7 @@ const EVENT_LIMIT = 300;
 const TOOL_RESULT_MAX_CHARS = 14_000;
 /** Model dengan thinking butuh ruang token; di bawah ini jawaban sering terpotong jadi kosong. */
 const STEP_MIN_MAX_TOKENS = 4_000;
-const FINAL_ANSWER_MAX_TOKENS = 4_000;
+const FINAL_ANSWER_MAX_TOKENS = 6_000;
 /** Respons kosong/terpotong juga dibatasi, bukan dianggap pekerjaan selesai. */
 const MAX_EMPTY_REPLIES = 3;
 const LEGACY_CONTINUATION = "[SISTEM] Respons sebelumnya kosong atau terpotong. Lanjutkan pekerjaan: panggil tool berikutnya yang dibutuhkan, atau bila data sudah cukup tulis kesimpulan ringkas langsung tanpa berpikir panjang.";
@@ -723,7 +723,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
         controller.signal.throwIfAborted();
         requestStartedAt = Date.now();
         completion = await aiClient.chat.completions.create({
-            model: finalOnly ? AI_MODEL_FAST : model,
+            // Jawaban akhir memakai model run yang sama: model cepat (deepseek-v4-pro) menghabiskan token untuk
+            // reasoning sehingga jawaban akhir terpotong dan seluruh run gagal.
+            model,
             messages: [{ role: "system", content: system }, ...messages],
             tools: finalOnly ? undefined : driver.tools,
             tool_choice: finalOnly ? undefined : "auto",
@@ -776,7 +778,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
       const calls = Array.isArray(msg?.tool_calls) ? msg.tool_calls : [];
       const replyText = typeof msg?.content === "string" ? stripDashes(stripThinking(msg.content)).trim() : "";
       const truncated = choice?.finish_reason === "length";
-      if (!msg || truncated || (!calls.length && !replyText) || (finalOnly && calls.length)) {
+      // Jawaban akhir yang terpotong tetapi sudah berisi teks tetap lebih berguna daripada menggagalkan run.
+      const usableFinal = finalOnly && !calls.length && replyText.length >= 80;
+      if (!usableFinal && (!msg || truncated || (!calls.length && !replyText) || (finalOnly && calls.length))) {
         emptyReplies += 1;
         emit(`Respons AI kosong atau tidak lengkap (${emptyReplies}/${MAX_EMPTY_REPLIES}). Mencoba melanjutkan pekerjaan.`, "warn");
         if (emptyReplies >= MAX_EMPTY_REPLIES || finalOnly) {
