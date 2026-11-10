@@ -4,9 +4,11 @@ import { AI_MODEL_DEFAULT } from "@/lib/ai/client";
 import { UNTRUSTED_DATA_NOTICE, wrapUntrusted } from "@/lib/ai/guard";
 import { deckSchema, slideSchema } from "@/lib/presentation/model";
 import { createAgentRun, type AgentDriver, type Msg } from "@/lib/server/agent-runs/engine";
-import { appendChatMessage, commitPresentationRun, finishDraftDeck, getPresentation, parseRunOperation, readPresentationState, snapshotPresentation } from "./repository";
+import { appendChatMessage, commitPresentationRun, finishDraftDeck, readDeckAuditRound, saveDeckAuditRound, getPresentation, parseRunOperation, readPresentationState, snapshotPresentation } from "./repository";
 import { PresentationError, type RunOperation } from "./state";
 import { listImageJobs } from "@/lib/server/image-jobs";
+import { deckAuditNote, deckFixMessage, MAX_DECK_FIX_ROUNDS, reviewDeck } from "./deck-review";
+import { runWithAiOwner } from "@/lib/server/ai-budget";
 import { ASK_USER_TOOL, CHAT_MAX_STEPS, CHAT_TOOLS, CHAT_TOOL_NAMES, chatSystemPrompt, FINISH_DECK_TOOL, chatToolLabel, evidenceFrom, runChatTool } from "./chat";
 
 const COMMIT_TOOL = {
@@ -76,9 +78,25 @@ export const presentasiAgentDriver: AgentDriver = {
       if (name === FINISH_DECK_TOOL) {
         if (!ctx.claimToken) throw new PresentationError(409, "Klaim worker diperlukan untuk menyimpan proposal.");
         try {
+          // Gerbang mutu: auditor AI memeriksa draft sebelum deck diserahkan ke pengguna.
+          const audit = await readDeckAuditRound(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id);
+          let note = "";
+          if (audit.slides.length) {
+            const round = audit.round + 1;
+            ctx.emit(`Auditor AI memeriksa ${audit.slides.length} slide (putaran ${round})...`);
+            const state = await readPresentationState(ctx.run.ownerId, ctx.run.sessionId);
+            const verdict = await runWithAiOwner(ctx.run.ownerId, "presentasi:audit", () => reviewDeck({ slides: audit.slides, state, round }));
+            if (verdict.verdict === "perbaiki" && !verdict.aiUnavailable && round <= MAX_DECK_FIX_ROUNDS) {
+              await saveDeckAuditRound(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id, audit.meta, round, verdict.summary);
+              ctx.emit(`Auditor meminta perbaikan pada ${verdict.issues.filter((issue) => issue.severity !== "ringan").length} hal, slide diperbaiki dulu`);
+              return { success: false, error: deckFixMessage(verdict, audit.slides, round) };
+            }
+            note = deckAuditNote(verdict);
+            ctx.emit(note);
+          }
           const result = await finishDraftDeck(ctx.run.ownerId, ctx.run.sessionId, ctx.run.id, ctx.claimToken, evidenceFrom(ctx.messages));
           if (result.success) ctx.emit("Proposal presentasi siap ditinjau. Deck aktif belum diubah.");
-          return result;
+          return note ? { ...result, auditAkhir: `${note} Sampaikan catatan ini apa adanya di jawaban akhir.` } : result;
         } catch (error) {
           if (error instanceof PresentationError) return { success: false, error: error.message };
           throw error;

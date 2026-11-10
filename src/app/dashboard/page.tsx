@@ -18,6 +18,8 @@ import AgentRunProgress from "@/components/ui/AgentRunProgress";
 import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import Button from "@/components/ui/Button";
 import JournalCheck from "@/components/JournalCheck";
+import GuidedTour from "@/components/ui/GuidedTour";
+import { LAPORAN_TOUR } from "@/lib/client/tours";
 import type { JournalVerification } from "@/lib/references/journal-check";
 import { getErrorMessage as baseErrorMessage, toPublicAssistantMessage } from "@/lib/errors";
 import { jobAction, peekJob, runJobUntilDone, type ReportJob } from "@/lib/client/report-job";
@@ -804,9 +806,10 @@ export default function LaporanPage() {
 
   return (
     <div className="flex h-[100dvh] flex-col bg-slate-50 pt-[64px] md:pt-[72px]">
+      <GuidedTour id="laporan" steps={LAPORAN_TOUR} />
       <div className="flex min-h-0 flex-1">
         {/* ------------------------------------ desktop: daftar sesi (bisa dilipat) */}
-        <aside className={`hidden shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-3 transition-[width] lg:block ${sidebarOpen ? "w-[300px]" : "w-0 !p-0 border-0"}`}>
+        <aside data-tour="lap-sesi" className={`hidden shrink-0 overflow-y-auto border-r border-slate-200 bg-white p-3 transition-[width] lg:block ${sidebarOpen ? "w-[300px]" : "w-0 !p-0 border-0"}`}>
           {sidebarOpen && sessionList}
         </aside>
 
@@ -820,7 +823,7 @@ export default function LaporanPage() {
             </div>
             {stageBadge}
             {/* desktop: rail chip panel kanan */}
-            <div className="ml-1 hidden items-center gap-1.5 lg:flex">
+            <div data-tour="lap-panel" className="ml-1 hidden items-center gap-1.5 lg:flex">
               {TABS.map(([key, label, Icon]) => {
                 const n = tabCount[key]; const isFresh = fresh === key; const activeTab = panelOpen && tab === key;
                 return (
@@ -886,17 +889,17 @@ export default function LaporanPage() {
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
                   {detail.stage === "planned" && <Chip onClick={() => send("Cari sumber tambahan yang lebih relevan dengan topik ini.")}>Cari sumber lagi</Chip>}
-                  {canExecute && !jobActive && <Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip>}
+                  {canExecute && !jobActive && <span data-tour="lap-eksekusi" className="inline-flex"><Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip></span>}
                   {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
                   {detail.draft && <Chip onClick={() => send("Kirim file DOCX laporan terbaru.")}>Kirim file DOCX</Chip>}
-                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                  <label data-tour="lap-bahan" className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Lampirkan bahan
                     <input type="file" className="hidden" accept={MATERIAL_ACCEPT} multiple disabled={sending} onChange={(e) => { stageAttachments(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
                   </label>
                   <label className="ml-auto inline-flex items-center gap-1 text-sm text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
                 </div>
               )}
-              <form onSubmit={(e) => { e.preventDefault(); send(); }} onPaste={(e) => { const files = clipboardFiles(e.clipboardData); if (files.length) { e.preventDefault(); stageAttachments(files); } }} className="rounded-2xl border border-slate-300 bg-white p-2 shadow-sm focus-within:border-slate-500">
+              <form data-tour="lap-chat" onSubmit={(e) => { e.preventDefault(); send(); }} onPaste={(e) => { const files = clipboardFiles(e.clipboardData); if (files.length) { e.preventDefault(); stageAttachments(files); } }} className="rounded-2xl border border-slate-300 bg-white p-2 shadow-sm focus-within:border-slate-500">
                 {pendingAttachments.length > 0 && <div className="mb-2 border-b border-slate-100 pb-2">
                   <div className="flex max-h-44 gap-2 overflow-x-auto p-1" aria-label="Lampiran belum dikirim">
                     {pendingAttachments.map((attachment) => <div key={attachment.id} className="relative w-28 shrink-0 rounded-xl border border-slate-200 bg-slate-50 p-2">

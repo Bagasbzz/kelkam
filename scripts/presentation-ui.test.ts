@@ -32,20 +32,12 @@ const click = (element: Element) => (element.props.onClick as () => void | Promi
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const json = (value: unknown, status = 200) => Response.json(value, { status });
 
-test("home lists Presentasi in the existing tool grid with an editable PowerPoint description", async () => {
-  const source = await readFile(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  const file = ts.createSourceFile("page.tsx", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
-  let presentasi: ts.ObjectLiteralExpression | undefined;
-  const visit = (node: ts.Node) => {
-    if (ts.isVariableDeclaration(node) && node.name.getText(file) === "UTILITY_FEATURES" && node.initializer && ts.isArrayLiteralExpression(node.initializer)) {
-      presentasi = node.initializer.elements.find((item): item is ts.ObjectLiteralExpression => ts.isObjectLiteralExpression(item) && item.properties.some((property) => ts.isPropertyAssignment(property) && property.name.getText(file) === "href" && ts.isStringLiteral(property.initializer) && property.initializer.text === "/presentasi"));
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  assert.ok(presentasi, "Presentasi must appear in the actual rendered tool data");
-  assert.match(presentasi.getText(file), /title: "Presentasi"/);
-  assert.match(presentasi.getText(file), /PowerPoint yang dapat diedit/);
+test("home features Presentasi first with an editable PowerPoint description", async () => {
+  const source = await readFile(new URL("../src/components/home/HomeClient.tsx", import.meta.url), "utf8");
+  const featured = source.slice(source.indexOf("const FEATURED"), source.indexOf("const PRIMARY_FEATURES"));
+  assert.match(featured, /href: "\/presentasi"/, "Presentasi must be a featured card");
+  assert.match(featured, /PowerPoint/);
+  assert.ok(featured.indexOf('"/dashboard"') < featured.indexOf('"/presentasi"'), "Laporan and Presentasi lead the page");
 });
 
 test("presentation interface follows site typography and indigo palette without changing slide artwork", async () => {

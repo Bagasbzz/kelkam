@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------------
  * Top navigation. Karena web punya 10 halaman, navbar dipecah jadi:
  *
- *   1. PRIMARY (3 link), yang paling sering diakses: Studio, Laporan, Tugas.
+ *   1. PRIMARY (4 link): Laporan dan Presentasi (unggulan) paling depan, lalu Studio, Tugas.
  *   2. DROPDOWN "Lainnya", 7 utility link dikelompokkan per kategori:
  *        - Rancang (UML, Editor)
  *        - Olah Data (Data Synthesizer)
@@ -55,8 +55,10 @@ interface NavGroup {
 }
 
 const PRIMARY_LINKS: NavItem[] = [
-  { href: "/studio", label: "Studio", icon: IconBrain },
+  // Dua fitur unggulan selalu paling depan (keputusan pemilik 2026-11-09).
   { href: "/dashboard", label: "Laporan", icon: IconChart },
+  { href: "/presentasi", label: "Presentasi", icon: IconLayout },
+  { href: "/studio", label: "Studio", icon: IconBrain },
   { href: "/tugas", label: "Tugas", icon: IconCheck },
 ];
 
@@ -65,7 +67,6 @@ const MORE_GROUPS: NavGroup[] = [
     label: "Buat",
     items: [
       { href: "/uml-builder", label: "Diagram", icon: IconFlow },
-      { href: "/presentasi", label: "Presentasi", icon: IconLayout },
       { href: "/template-generator", label: "Editor Dokumen", icon: IconLayout },
     ],
   },

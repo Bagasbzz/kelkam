@@ -15,11 +15,9 @@ import { DocxToolsPanel } from "@/components/tools/DocxToolsPanel";
 import { ImageToolsPanel } from "@/components/tools/ImageToolsPanel";
 import { PDFToolsPanel } from "@/components/tools/PDFToolsPanel";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/Tabs";
+import { pageMeta } from "@/components/seo/JsonLd";
 
-export const metadata = {
-  title: "Tools | keluhkampus",
-  description: "Kumpulan tools PDF, DOCX, dan Image, semua proses di browser, file aman.",
-};
+export const metadata = pageMeta("Alat PDF, Word, dan Gambar Online", "Gabung dan pisah PDF, ubah Word ke PDF, dan kompres gambar. Semua diproses di browser, file aman.", "/tools");
 
 export default function ToolsPage() {
   return (

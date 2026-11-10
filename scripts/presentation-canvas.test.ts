@@ -120,6 +120,8 @@ async function loadComponent(file: string, react: unknown, overrides: Props = {}
     "@/lib/presentation/presets": presets,
     "@/lib/presentation/design": design,
     "./presentation.module.css": { default: new Proxy({}, { get: (_, name) => String(name) }) },
+    "@/components/ui/GuidedTour": { default: () => null },
+    "@/lib/client/tours": { PRESENTASI_TOUR: [], LAPORAN_TOUR: [] },
     ...overrides,
   };
   const exports: Props = {};

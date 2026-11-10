@@ -455,3 +455,17 @@ export async function ensureCoverPlanImage(ownerId: string, projectId: string) {
     await writeProject(tx, ownerId, { ...state, plan: { ...plan, images: [{ slide: 1, prompt, role: "hero" as const }, ...images] } });
   });
 }
+
+/** Deck audit rounds already spent in this run (stored in the run meta, written only by the server). */
+export async function readDeckAuditRound(ownerId: string, projectId: string, runId: string) {
+  const row = await prisma.agentRun.findFirst({ where: { id: runId, ownerId, kind: "presentasi", sessionId: projectId }, select: { meta: true } });
+  const meta = row?.meta && typeof row.meta === "object" && !Array.isArray(row.meta) ? row.meta as Record<string, unknown> : {};
+  return { round: typeof meta.deckAuditRound === "number" ? meta.deckAuditRound : 0, slides: readRunDraft(meta).slides, meta };
+}
+
+export async function saveDeckAuditRound(ownerId: string, projectId: string, runId: string, meta: Record<string, unknown>, round: number, note: string) {
+  await prisma.agentRun.updateMany({
+    where: { id: runId, ownerId, kind: "presentasi", sessionId: projectId, status: "running" },
+    data: { meta: { ...meta, deckAuditRound: round, deckAuditNote: note.slice(0, 1000) } as Prisma.InputJsonValue },
+  });
+}

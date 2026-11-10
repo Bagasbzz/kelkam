@@ -28,6 +28,34 @@ interface FeatureCard {
   primary?: boolean;
 }
 
+/** Dua fitur unggulan, selalu paling depan (keputusan pemilik 2026-11-09). */
+const FEATURED: (FeatureCard & { learn: string; points: string[] })[] = [
+  {
+    href: "/dashboard",
+    learn: "/fitur/laporan-ai",
+    title: "Laporan AI",
+    description:
+      "Ngobrol dengan AI, setujui kerangka bab, lalu laporan ditulis lengkap dengan sumber jurnal dan buku asli, diagram, dan file Word rapi.",
+    points: ["Sumber jurnal ber-DOI, buku ber-ISBN, skripsi", "Diagram UML dan ilustrasi otomatis", "Diaudit AI sebelum dikirim, unduh DOCX"],
+    icon: IconChart,
+    accent: "amber",
+    cta: "Buat laporan",
+    primary: true,
+  },
+  {
+    href: "/presentasi",
+    learn: "/fitur/ppt-ai",
+    title: "Presentasi (PPT) AI",
+    description:
+      "Dari materi atau laporanmu, AI menyusun slide dengan desain yang selalu berbeda, logo kampus, dan gambar, lalu bisa diedit dan diunduh sebagai PowerPoint.",
+    points: ["Desain unik setiap kali dibuat", "Logo kampus dan gambar sampul otomatis", "Diaudit AI, unduh PPTX yang bisa diedit"],
+    icon: IconLayout,
+    accent: "indigo",
+    cta: "Buat presentasi",
+    primary: true,
+  },
+];
+
 const PRIMARY_FEATURES: FeatureCard[] = [
   {
     href: "/studio",
@@ -37,16 +65,6 @@ const PRIMARY_FEATURES: FeatureCard[] = [
     icon: IconBrain,
     accent: "blue",
     cta: "Buka",
-    primary: true,
-  },
-  {
-    href: "/dashboard",
-    title: "Laporan",
-    description:
-      "Buat laporan praktikum, makalah, capstone, atau skripsi langkah demi langkah.",
-    icon: IconChart,
-    accent: "amber",
-    cta: "Buat laporan",
     primary: true,
   },
   {
@@ -62,15 +80,6 @@ const PRIMARY_FEATURES: FeatureCard[] = [
 ];
 
 const UTILITY_FEATURES: FeatureCard[] = [
-  {
-    href: "/presentasi",
-    title: "Presentasi",
-    description:
-      "Susun slide bersama AI dari materi atau laporan Anda, edit hasilnya, lalu unduh PowerPoint yang dapat diedit.",
-    icon: IconLayout,
-    accent: "indigo",
-    cta: "Buat presentasi",
-  },
   {
     href: "/uml-builder",
     title: "Buat Diagram",
@@ -181,7 +190,7 @@ const ACCENT: Record<FeatureCard["accent"], { bg: string; text: string; border: 
   },
 };
 
-function FeatureCardLink({ card, large = false }: { card: FeatureCard; large?: boolean }) {
+function FeatureCardLink({ card, large = false, badge, points }: { card: FeatureCard; large?: boolean; badge?: string; points?: string[] }) {
   const a = ACCENT[card.accent];
   const Icon = card.icon;
   return (
@@ -197,12 +206,18 @@ function FeatureCardLink({ card, large = false }: { card: FeatureCard; large?: b
       >
         <Icon className="w-7 h-7 md:w-8 md:h-8" />
       </div>
+      {badge && <span className="absolute top-6 right-6 rounded-full bg-slate-900 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white">{badge}</span>}
       <h2 className="text-lg md:text-2xl font-black mb-2 md:mb-3 text-slate-900 group-hover:text-slate-900 transition-colors">
         {card.title}
       </h2>
       <p className="text-slate-500 text-sm md:text-base leading-relaxed mb-6 md:mb-8 flex-1 font-medium group-hover:text-slate-600 transition-colors">
         {card.description}
       </p>
+      {points && (
+        <ul className="-mt-3 mb-6 space-y-1.5 text-sm font-semibold text-slate-600">
+          {points.map((point) => <li key={point} className="flex gap-2"><span aria-hidden="true" className={a.text}>✓</span>{point}</li>)}
+        </ul>
+      )}
       <div
         className={`inline-flex items-center justify-center w-full py-3 md:py-3.5 rounded-xl bg-slate-50 font-bold text-sm md:text-base border border-slate-100 group-hover:border-transparent transition-all duration-300 ${a.btn}`}
       >
@@ -212,7 +227,7 @@ function FeatureCardLink({ card, large = false }: { card: FeatureCard; large?: b
   );
 }
 
-export default function Home() {
+export default function HomeClient() {
   const [showModal, setShowModal] = useState(false);
   const router = useRouter();
 
@@ -230,17 +245,30 @@ export default function Home() {
     <div className="min-h-screen flex flex-col bg-white text-slate-800 font-sans">
       <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
-          Bantuan <span className="text-blue-600">tugas kuliah</span>
+          Laporan dan PPT kuliah,
           <br />
-          di satu tempat
+          <span className="text-blue-600">dibantu AI</span>
         </h1>
         <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          Kumpulkan tugas, susun laporan, dan buat diagram tanpa ribet. Pilih yang kamu butuhkan di bawah.
+          Susun laporan lengkap dengan sumber asli dan buat presentasi dengan desain unik, semuanya bisa diedit dan diunduh. Alat bantu kuliah lain ada di bawah.
         </p>
 
-        {/* Primary features, 3 yang paling sering diakses */}
+        {/* Fitur unggulan: Laporan dan Presentasi, selalu paling depan. */}
+        <section aria-label="Fitur unggulan" className="w-full max-w-6xl mb-10 md:mb-14 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
+          <div className="grid md:grid-cols-2 gap-6 md:gap-8 w-full">
+            {FEATURED.map((card) => (
+              <div key={card.href} className="flex flex-col">
+                <FeatureCardLink card={card} badge="Unggulan" points={card.points} />
+                <Link href={card.learn} className="mt-3 text-sm font-bold text-slate-500 hover:text-blue-600">
+                  Pelajari cara kerja {card.title} →
+                </Link>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="w-full max-w-6xl mb-16 md:mb-24 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 w-full">
+          <div className="grid md:grid-cols-2 gap-6 md:gap-8 w-full">
             {PRIMARY_FEATURES.map((card) => (
               <FeatureCardLink key={card.href} card={card} />
             ))}
@@ -314,12 +342,6 @@ export default function Home() {
           </div>
         </div>
       )}
-
-      <footer className="w-full py-8 md:py-12 mt-auto text-slate-500 text-center">
-        <p className="text-sm font-medium">
-          &copy; {new Date().getFullYear()} keluhkampus
-        </p>
-      </footer>
     </div>
   );
 }

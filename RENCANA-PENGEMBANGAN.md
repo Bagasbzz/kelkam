@@ -303,3 +303,26 @@ Yang dikerjakan (selesai 2026-11-09):
 - Lanjutan: audit keamanan `844dd00` (2026-11-02) juga menurunkan batas job Laporan. Dikembalikan sebagian:
   percobaan per bab 2 → 4, maks. bagian outline 10 → 20, total langkah 30 → 60, total percobaan 40 → 120
   (`report-jobs.ts`, tes `security-ai.test.ts` disesuaikan). Rem biaya global tetap aktif.
+
+## 12. SEO, keterbacaan AI, panduan interaktif, audit PPT (2026-11-10)
+
+Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan dengan benar oleh asisten AI
+(AI Overview, ChatGPT, Claude); Laporan dan PPT paling depan; mode panduan ala onboarding; audit AI untuk PPT.
+
+- Satu sumber data fitur: `src/lib/seo/site.ts` (deskripsi, keunggulan, langkah, FAQ). Dipakai oleh:
+  halaman publik `/fitur` dan `/fitur/laporan-ai`, `/fitur/ppt-ai` (HowTo, FAQPage, SoftwareApplication, Breadcrumb
+  JSON-LD), beranda (seksi "Kenapa mahasiswa memakai keluhkampus" + FAQ, JSON-LD), `/llms.txt` (ringkasan untuk AI),
+  `sitemap.xml`, `robots.txt` (crawler AI diizinkan, `/api`, `/login`, admin tidak diindeks), gambar OpenGraph.
+- Metadata per halaman (`layout.tsx` per rute, canonical, OpenGraph). `/dashboard` dan `/studio` noindex karena wajib login;
+  halaman fitur publik yang diindeks.
+- Navbar & beranda: Laporan dan Presentasi paling depan dengan label "Unggulan" dan tautan "Pelajari cara kerja".
+  Beranda dipecah: `src/app/page.tsx` (server, SEO) + `src/components/home/HomeClient.tsx` (interaktif).
+- Panduan interaktif `src/components/ui/GuidedTour.tsx`: sorot elemen (`data-tour`), Kembali/Lanjut/Lewati, panah
+  keyboard, Esc; muncul sekali pada kunjungan pertama, lewat `?panduan=1`, atau tombol "Cara pakai?" di kanan bawah.
+  Langkah di `src/lib/client/tours.ts` (Laporan 7 langkah, Presentasi 6 langkah).
+- Audit AI Presentasi `src/lib/server/presentasi/deck-review.ts`: saat finishDeck, cek otomatis (slide kosong/padat,
+  judul ganda, layout berulang, jumlah slide vs rencana) + auditor AI_MODEL_REVIEW. Ditolak → temuan dikembalikan ke AI
+  penulis untuk diperbaiki dengan writeSlides, maks. 2 putaran (`deckAuditRound` di meta run), lalu diserahkan dengan
+  catatan (K17). Auditor gagal → hanya cek otomatis.
+- Tes 324 lulus, typecheck bersih. Belum dicek di browser; build diverifikasi oleh CI saat push.
+- Saran lanjutan untuk pemilik: daftarkan situs di Google Search Console dan kirim sitemap.
