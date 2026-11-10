@@ -20,9 +20,10 @@ import { reportIntentPrompt } from "@/lib/report/report-intent";
 export const MAX_FIX_ROUNDS = 2;
 
 const REVIEW_TIMEOUT_MS = Number(process.env.AI_FINAL_REVIEW_TIMEOUT_MS || 180_000);
-/** Batas teks bab yang dikirim ke auditor (karakter), agar muat di konteks model. */
-const MAX_CHAPTER_CHARS = 45_000;
-const MAX_TOTAL_CHARS = 220_000;
+/** Teks laporan per panggilan auditor (karakter); laporan lebih panjang dibaca dalam beberapa batch paralel. */
+const BATCH_CHARS = 120_000;
+/** ±8 batch × 120 ribu karakter ≈ 300+ halaman dibaca utuh. */
+const MAX_BATCHES = 8;
 
 export type ReviewSeverity = "berat" | "sedang" | "ringan";
 
@@ -180,12 +181,25 @@ export async function reviewReport(project: unknown, input: {
     ...extra,
   });
 
-  let budget = MAX_TOTAL_CHARS;
-  const chapters = input.chapters.map((chapter) => {
-    const content = chapter.content.slice(0, Math.min(MAX_CHAPTER_CHARS, Math.max(2_000, budget)));
-    budget -= content.length;
-    return { judul: chapter.title, placeholder: chapter.placeholder, terpotongUntukAudit: content.length < chapter.content.length, isi: content };
-  });
+  // Laporan panjang dibaca utuh dalam beberapa batch paralel (tiap batch muat satu panggilan AI).
+  type Segment = { judul: string; bagian: string; placeholder: boolean; isi: string };
+  const segments: Segment[] = [];
+  for (const chapter of input.chapters) {
+    const count = Math.max(1, Math.ceil(chapter.content.length / BATCH_CHARS));
+    for (let k = 0; k < count; k++) {
+      segments.push({ judul: chapter.title, bagian: count > 1 ? `${k + 1}/${count}` : "utuh", placeholder: chapter.placeholder, isi: chapter.content.slice(k * BATCH_CHARS, (k + 1) * BATCH_CHARS) });
+    }
+  }
+  const batches: Segment[][] = [];
+  let size = 0;
+  for (const segment of segments) {
+    if (!batches.length || size + segment.isi.length > BATCH_CHARS) { batches.push([]); size = 0; }
+    batches[batches.length - 1].push(segment);
+    size += segment.isi.length;
+  }
+  const readable = batches.slice(0, MAX_BATCHES);
+  const unread = segments.length - readable.flat().length;
+  const outlineOf = input.chapters.map((chapter) => ({ judul: chapter.title, awal: chapter.content.slice(0, 400) }));
 
   const systemPrompt = `Anda adalah AUDITOR AKHIR laporan akademik Indonesia. Anda BUKAN penulisnya. Tugas Anda memastikan dokumen benar-benar rapi dan sesuai permintaan pengguna sebelum diserahkan.
 ${reportIntentPrompt(compact.intent)}
@@ -207,29 +221,31 @@ Keluarkan HANYA JSON valid tanpa teks lain:
 {"vonis":"lulus"|"perbaiki","ringkasan":"1-2 kalimat","masalah":[{"bab":"judul bab persis dari daftar, atau kosong untuk masalah umum","tingkat":"berat|sedang|ringan","masalah":"apa yang salah, spesifik dengan kutipan singkat","perbaikan":"instruksi perbaikan yang bisa langsung dikerjakan penulis"}]}
 Maksimal 15 masalah, urutkan dari yang paling berat.`;
 
-  const userPayload = {
+  const context = {
     pengguna: userContext(project),
     rencana: compact.outline.map((section) => ({
       judul: section.title,
       tujuan: section.purpose,
+      subBab: section.subsections ?? [],
+      targetHalaman: section.targetPages ?? null,
       tabel: compact.tables.filter((table) => table.sectionId && table.sectionId === section.id).map((table) => table.title),
       gambar: [...compact.diagrams, ...compact.figures].filter((asset) => asset.sectionId && asset.sectionId === section.id).map((asset) => asset.title),
     })),
-    referensi: compact.references.map((reference) => ({ jenis: reference.kind, sitasi: reference.citation, abstrak: reference.abstract.slice(0, 300) })),
+    referensi: compact.references.slice(0, 40).map((reference) => ({ jenis: reference.kind, sitasi: reference.citation.slice(0, 220), abstrak: reference.abstract.slice(0, 200) })),
     pemeriksaanOtomatis: input.localIssues.map((issue) => `${issue.chapter || "Umum"}: ${issue.problem}`),
     masalahSebelumnya: (input.previousIssues || []).map((issue) => `${issue.chapter || "Umum"} (${issue.severity}): ${issue.problem}`),
     daftarBab: titles,
-    bab: chapters,
+    ringkasanSemuaBab: readable.length > 1 ? outlineOf : undefined,
   };
 
-  try {
-    assertAiConfigured();
-    emit(`Auditor AI membaca ${input.chapters.length} bab utuh (putaran ${input.round})…`);
+  const ask = async (batch: Segment[], number: number) => {
+    const note = readable.length > 1 ? `
+Anda membaca batch ${number + 1} dari ${readable.length}. Nilai isi batch ini; untuk konsistensi antarbab gunakan ringkasanSemuaBab.` : "";
     const request = {
       model: AI_MODEL_REVIEW,
       messages: [
-        { role: "system" as const, content: systemPrompt },
-        { role: "user" as const, content: JSON.stringify(userPayload) },
+        { role: "system" as const, content: systemPrompt + note },
+        { role: "user" as const, content: JSON.stringify({ ...context, bab: batch }) },
       ],
       temperature: 0,
       max_tokens: 4000,
@@ -242,20 +258,32 @@ Maksimal 15 masalah, urutkan dari yang paling berat.`;
       if ((error as { status?: unknown })?.status !== 400) throw error;
       response = await aiClient.chat.completions.create(request, options);
     }
-    const tokensUsed = response.usage?.total_tokens ?? 0;
     const parsed = parseVerdictJson(stripThinking(response.choices[0]?.message.content));
     if (!parsed) throw new Error("Jawaban auditor bukan JSON yang valid.");
-    const aiIssues: ReviewIssue[] = (Array.isArray(parsed.masalah) ? parsed.masalah : []).filter(isRecord).slice(0, 15).map((issue) => ({
+    const issues: ReviewIssue[] = (Array.isArray(parsed.masalah) ? parsed.masalah : []).filter(isRecord).slice(0, 15).map((issue) => ({
       chapter: matchChapterTitle(issue.bab, titles),
       severity: normalizeSeverity(issue.tingkat),
       problem: text(issue.masalah, 500) || "Masalah tidak dijelaskan.",
       fix: text(issue.perbaikan, 500),
       origin: "auditor" as const,
     }));
+    return { issues, summary: text(parsed.ringkasan, 400), tokens: response.usage?.total_tokens ?? 0 };
+  };
+
+  try {
+    assertAiConfigured();
+    const totalChars = input.chapters.reduce((sum, chapter) => sum + chapter.content.length, 0);
+    emit(`Auditor AI membaca ${input.chapters.length} bab utuh (±${Math.round(totalChars / 1000)} ribu karakter${readable.length > 1 ? `, ${readable.length} batch paralel` : ""}, putaran ${input.round})…`);
+    const results = await Promise.allSettled(readable.map((batch, i) => ask(batch, i)));
+    const done = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (!done.length) throw (results[0] as PromiseRejectedResult).reason;
+    const aiIssues = done.flatMap((result) => result.issues);
+    const gaps = results.length - done.length + (unread > 0 ? 1 : 0);
+    if (gaps) aiIssues.push({ chapter: null, severity: "ringan", problem: `Sebagian isi laporan belum terbaca auditor (${results.length - done.length} batch gagal${unread > 0 ? `, ${unread} potongan melebihi batas baca` : ""}).`, fix: "Periksa bagian akhir laporan secara manual.", origin: "auditor" });
     const issues = [...input.localIssues, ...aiIssues];
-    const summary = text(parsed.ringkasan, 400) || (issues.some(blocksApproval) ? "Masih ada masalah yang perlu diperbaiki." : "Dokumen sesuai permintaan dan rapi.");
+    const summary = done.map((result) => result.summary).filter(Boolean).join(" ").slice(0, 400) || (issues.some(blocksApproval) ? "Masih ada masalah yang perlu diperbaiki." : "Dokumen sesuai permintaan dan rapi.");
     // Vonis ditentukan dari masalah, bukan hanya kata "lulus" dari model.
-    const verdict = base(issues, summary, { tokensUsed });
+    const verdict = base(issues, summary, { tokensUsed: done.reduce((sum, result) => sum + result.tokens, 0) });
     emit(`Auditor: ${verdict.verdict === "lulus" ? "LULUS" : "PERLU PERBAIKAN"} (${issues.filter(blocksApproval).length} masalah berat/sedang, ${issues.filter((issue) => !blocksApproval(issue)).length} ringan)`);
     return verdict;
   } catch (error) {

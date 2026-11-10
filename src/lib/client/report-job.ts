@@ -16,7 +16,7 @@ export interface ReportJobStep {
   index: number;
   title: string;
   /** diagram | chapter | audit | review (audit akhir) | fix (perbaikan dari auditor). */
-  kind?: "diagram" | "chapter" | "audit" | "review" | "fix";
+  kind?: "diagram" | "chapter" | "part" | "audit" | "review" | "fix";
   status: "queued" | "running" | "done" | "fallback" | "failed";
   attempts: number;
   error?: string;

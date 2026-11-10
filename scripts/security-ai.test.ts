@@ -283,7 +283,7 @@ test("owned execution surfaces retain claims and enforce cumulative bounds", asy
   assert.match(report, /updatedAt: next\.updatedAt/);
   assert.doesNotMatch(report, /attempts: 0|Promise\.race/);
   assert.match(report, /const MAX_STEPS = 20/);
-  assert.match(report, /const MAX_TOTAL_ATTEMPTS = 120/);
+  assert.match(report, /const MAX_TOTAL_ATTEMPTS = 400/);
   assert.match(image, /pg_advisory_xact_lock/);
   assert.match(image, /attempts: \{ lt: MAX_ATTEMPTS \}/);
   assert.match(agent, /const MAX_TOOLS_PER_RUN = 40/);

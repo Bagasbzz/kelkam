@@ -326,3 +326,25 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   catatan (K17). Auditor gagal → hanya cek otomatis.
 - Tes 324 lulus, typecheck bersih. Belum dicek di browser; build diverifikasi oleh CI saat push.
 - Saran lanjutan untuk pemilik: daftarkan situs di Google Search Console dan kirim sitemap.
+
+## 13. Pertanyaan pemilik 2026-11-10: batas panjang bab dan rem biaya global (RANCANGAN, belum dikerjakan)
+
+- Panjang bab saat ini: target 1500-2500 kata, satu langkah job per bab (maks. ±5 menit, output per panggilan maks.
+  8000 token, 3 lanjutan) sehingga satu bab mentok sekitar 25-30 halaman. Usulan: panjang mengikuti kebutuhan, bab dipecah
+  per sub-bab (4.1, 4.2, ...) dan tiap sub-bab satu langkah job, target kata dihitung dari target halaman pengguna;
+  auditor akhir membaca per bab agar laporan ratusan halaman tetap bisa diaudit.
+- Rem global: 200 juta unit, 20.000 panggilan, 300 gambar per hari. Unit dihitung dari BYTE (bukan token) dan model
+  review dikali 5, jadi perkiraannya 3-4x lebih tinggi dari pemakaian nyata. Perkiraan kasar: satu skripsi 5 bab penuh
+  (tulis + audit bab + audit akhir + chat) ±5-9 juta unit, artinya rem habis setelah ±20-40 skripsi/hari.
+  Usulan: hitung unit dari perkiraan token (bukan byte) dan tentukan rem dari anggaran rupiah harian pemilik.
+- **Dikerjakan 2026-11-10 (pemilik: "kerjakan dua-duanya"; anggaran rupiah harian belum disebut):**
+  - Rem biaya: unit kini dihitung dari perkiraan token (byte/3), bukan byte; batas tetap 200 juta unit/hari, artinya
+    kapasitas nyata naik ±3x (perkiraan ±60-120 skripsi penuh/hari). Batas konteks per panggilan tetap 300 ribu byte.
+    Angka bisa diubah lewat env `AI_DAILY_UNITS_GLOBAL` setelah pemilik menentukan anggaran rupiah.
+  - Rencana bab: `subsections` dan `targetPages` per bab (planner diberi panduan panjang wajar per jenis dokumen,
+    tanpa batas atas tetap). `planChapterParts`: bab > ±13 halaman dipecah per sub-bab, tiap bagian ≤3000 kata satu
+    langkah job (step `part:<sectionId>:<n>`), maks. 40 bagian per bab; bagian berikutnya menerima ekor teks bagian
+    sebelumnya agar menyambung. Batas job: 150 langkah, 400 percobaan.
+  - Auditor akhir membaca laporan utuh per batch paralel (120 ribu karakter/batch, maks. 8 batch ≈ 300+ halaman).
+    Bab panjang tidak ditulis ulang otomatis oleh perbaikan; temuannya menjadi catatan. Audit per bab hanya untuk bab
+    satu langkah.

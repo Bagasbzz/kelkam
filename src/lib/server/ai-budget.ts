@@ -97,8 +97,11 @@ export function estimateAiCharge(body: Record<string, unknown>, kind: "chat" | "
     if (key === "input_audio" || key === "file") throw new AiBudgetError("Jenis input AI belum didukung.");
     return value;
   });
-  const inputTokens = Buffer.byteLength(input, "utf8") + images * 32_768 + 1024;
-  if (images > 8 || inputTokens > 300_000) throw new AiBudgetError("Konteks AI terlalu besar. Persempit permintaan.");
+  const bytes = Buffer.byteLength(input, "utf8");
+  if (images > 8 || bytes + 1024 > 300_000) throw new AiBudgetError("Konteks AI terlalu besar. Persempit permintaan.");
+  // Units follow estimated tokens (about 3 bytes per token for Indonesian/JSON text), not raw bytes,
+  // so the daily brake matches real provider usage instead of counting 3-4x too high.
+  const inputTokens = Math.ceil(bytes / 3) + images * 32_768 + 1024;
   const requested = body.max_completion_tokens ?? body.max_tokens;
   const outputTokens = kind === "image" ? 0 : Number(requested);
   if (kind === "chat" && (!Number.isSafeInteger(outputTokens) || outputTokens < 1 || outputTokens > 8000 || (body.n !== undefined && body.n !== 1))) throw new AiBudgetError("Batas output AI tidak valid.");

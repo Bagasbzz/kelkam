@@ -87,6 +87,10 @@ export interface PlanSection {
   id: string;
   title: string;
   purpose: string;
+  /** Sub-bab (mis. "Gambaran Umum Objek Penelitian"); bab panjang ditulis per sub-bab. */
+  subsections?: string[];
+  /** Perkiraan halaman bab ini (A4, spasi 1,5). Panjang mengikuti kebutuhan, bukan batas tetap. */
+  targetPages?: number;
   requiredDiagrams: string[];
 }
 export interface PlanDiagram {
@@ -154,7 +158,13 @@ function normalizePlan(raw: unknown): ReportPlan {
   const outline: PlanSection[] = asArr(o.outline).map((s, i) => {
     const so = asObj(s);
     const title = asStr(so.title, 160) || `Bagian ${i + 1}`;
-    return { id: asStr(so.id, 60) || slug(title, i), title, purpose: asStr(so.purpose, 500), requiredDiagrams: strList(so.requiredDiagrams, 6) };
+    const pages = Number(so.targetPages);
+    const subsections = strList(so.subsections, 30).map((item) => item.slice(0, 160));
+    return {
+      id: asStr(so.id, 60) || slug(title, i), title, purpose: asStr(so.purpose, 500), requiredDiagrams: strList(so.requiredDiagrams, 6),
+      ...(subsections.length ? { subsections } : {}),
+      ...(Number.isFinite(pages) && pages > 0 ? { targetPages: Math.min(400, Math.round(pages)) } : {}),
+    };
   }).filter((s) => !NON_CHAPTER_TITLE.test(s.title.trim())).slice(0, MAX_OUTLINE_SECTIONS);
   const diagrams: PlanDiagram[] = asArr(o.diagrams).map((d, i) => {
     const dobj = asObj(d);
@@ -262,7 +272,7 @@ async function buildProjectPayload(session: { id: string; ownerId: string; brief
     intent,
     formatRules: b.formatRules || "",
     sources: mats,
-    outline: session.plan.outline.map((s) => ({ id: s.id, title: s.title, purpose: s.purpose, requiredDiagrams: s.requiredDiagrams })),
+    outline: session.plan.outline.map((s) => ({ id: s.id, title: s.title, purpose: s.purpose, requiredDiagrams: s.requiredDiagrams, subsections: s.subsections, targetPages: s.targetPages })),
     // Diagram: yang sudah dibuat engine (approved + diagramData) dipakai apa adanya;
     // sisanya "planned" → job membuatkan lewat engine UML bila tipenya didukung.
     diagrams: session.plan.diagrams.map((d) => ({
@@ -333,6 +343,7 @@ ALUR:
 1. INTAKE: ngobrol untuk memahami kebutuhan. Tanyakan hanya yang belum diketahui dan relevan, maksimal 2-3 pertanyaan per giliran, bahasa santai-sopan. ${intent.outputMode === "full_report" && !intent.explicit.scope ? "Untuk laporan penuh, pahami jenis dokumen, judul/topik, syarat jurnal dan gaya sitasi. Ketentuan kampus, data sampul, dan bahan ditanyakan hanya bila relevan atau diminta." : "Untuk keluaran terbatas, cukup pertanyaan/topik atau sumber terpilih. Jangan wajibkan jenis dokumen, syarat SINTA/Scopus, jumlah/tahun sumber, novelty, format kampus, atau data sampul. Gunakan gaya sitasi yang diminta, jika tidak ada gunakan APA tanpa menahan jawaban."} Setiap fakta baru, panggil updateBrief.
   2. PLANNED: bila brief cukup dan mode bukan answer/citations_only, panggil proposePlan sesuai scope, LALU LANGSUNG panggil findSources untuk SETIAP query di sourceQueries (minimal 3 query berbeda, campur Inggris dan Indonesia, limit 8-10 per query, satu panggilan per query) agar literatur luas dan mendalam. Hasil otomatis diurutkan paling relevan dan terbaru, dan PDF open access dibaca penuh oleh sistem. Setelah itu panggil selectSources untuk mencentang sumber yang paling relevan (buang yang melenceng), lalu tampilkan ringkasan rencana + sumber dan minta persetujuan. Jangan meminta persetujuan eksekusi sebelum sumber dicari. Untuk citations_only, cari/seleksi sumber lalu keluarkan artefak sitasi tanpa membuat bab. Untuk literature_review, hanya buat outline tinjauan/sintesis yang diminta, tetapi tetap cari sumbernya.
    JUMLAH BAB: hanya untuk full_report tanpa pembatasan scope, ikuti jenis dokumen kecuali ketentuan kampus menyebut lain: makalah/paper/laporan praktikum/laporan tugas 3-4 bab (Pendahuluan, Landasan Teori/Tinjauan Pustaka, Pembahasan, Penutup); laporan proyek/PKL/magang 4-5 bab; skripsi/tugas akhir/tesis 5 bab (Pendahuluan, Tinjauan Pustaka, Metode, Hasil dan Pembahasan, Penutup). Maksimal 6 bab. literature_review hanya tinjauan/sintesis; answer jawaban langsung; citations_only tanpa bab dan tanpa penulisan AI. Daftar Pustaka/Lampiran bukan bab. Jangan mewajibkan novelty atau research gap kecuali kontrak required.
+   PANJANG: untuk full_report isi subsections (sub-bab berurutan) dan targetPages tiap bab. Ikuti target panjang pengguna atau kampus (brief.targetLength); bila tidak disebut, perkiraan wajar: makalah 10-20 halaman total, laporan proyek/PKL 30-50, skripsi 60-120 (Hasil dan Pembahasan biasanya bab terpanjang). Tidak ada batas atas tetap: bab panjang (mis. 100 halaman) ditulis sistem per sub-bab, jadi pecah bab panjang menjadi cukup banyak sub-bab yang jelas.
 3. EXECUTING: hanya setelah user setuju eksplisit ("oke", "eksekusi", "lanjut"), panggil startExecution. Jangan pernah memulai tanpa persetujuan.
 4. DRAFTED: user bisa minta revisi bagian tertentu, panggil reviseSection dengan instruksi spesifik. Setelah revisi selesai (atau user minta "kirim file"), panggil exportDocx lalu tempel baris tautan unduhan dari hasil tool APA ADANYA di jawaban. Saat job penulisan selesai, sistem otomatis mengirim file DOCX ke chat, jangan membuat ulang kecuali diminta.
   5. VISUAL: hanya buat visual bila kontrak diagrams mengizinkan. Saat proposePlan, pilah visual ke 3 jalur dan beri sectionId untuk masing-masing:
@@ -397,7 +408,7 @@ const TOOL_DEFS: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       parameters: {
         type: "object",
         properties: {
-          outline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, requiredDiagrams: { type: "array", items: { type: "string" } } }, required: ["title", "purpose"] } },
+          outline: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, requiredDiagrams: { type: "array", items: { type: "string" } }, subsections: { type: "array", items: { type: "string" }, description: "Judul sub-bab berurutan tanpa nomor. Wajib untuk laporan penuh; bab panjang ditulis per sub-bab." }, targetPages: { type: "number", description: "Perkiraan halaman bab ini (A4, spasi 1,5, sekitar 300 kata/halaman). Ikuti target panjang pengguna/kampus; tanpa batas atas tetap." } }, required: ["title", "purpose"] } },
            diagrams: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, type: { type: "string", description: "Diagram editable: flowchart|usecase|activity|sequence|class|state|erd|component|deployment. Konsep non-UML: arsitektur|konsep|kerangka" }, purpose: { type: "string", description: "Isi spesifik yang harus tergambar (aktor, langkah, komponen), bukan tujuan umum." }, sectionId: { type: "string" } }, required: ["title", "type", "purpose", "sectionId"] } },
           tables: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, purpose: { type: "string" }, columns: { type: "array", items: { type: "string" } }, sectionId: { type: "string" } }, required: ["title", "purpose", "sectionId"] } },
           figures: { type: "array", description: "Ilustrasi non-diagram (maks 6) yang dibuat model gambar saat eksekusi.", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string", description: "Judul singkat Bahasa Indonesia, mis. 'Ilustrasi Proses Fermentasi'." }, caption: { type: "string" }, prompt: { type: "string", description: "Deskripsi visual detail bahasa Inggris untuk model gambar." }, sectionId: { type: "string" } }, required: ["title", "prompt", "sectionId"] } },
@@ -886,7 +897,9 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
   try {
     if (await alreadyAnnounced(state.id, job.id)) return;
     const title = state.title || state.brief.title || state.brief.topic || "Laporan";
-    const chapters = job.steps.filter((s) => s.kind === "chapter");
+    // Bab panjang ditulis per bagian ("part"); hitung bab dari rencana, catat bagian yang belum terisi.
+    const chapters = job.steps.filter((s) => s.kind === "chapter" || s.kind === "part");
+    const chapterCount = state.plan?.outline.length || chapters.length;
     const placeholderChapters = chapters.filter((s) => s.status === "fallback").map((s) => s.title);
     const diagramsDone = (state.plan?.diagrams || []).filter((d) => d.svg).length;
     const words = (state.draft || "").split(/\s+/).filter(Boolean).length;
@@ -922,7 +935,7 @@ async function announceJobDone(state: SessionState, job: ReportJob) {
         "",
       ];
     const content = [
-      `Laporan **${title}** selesai disusun: ${chapters.length} bab, ${diagramsDone} diagram, ±${words.toLocaleString("id-ID")} kata.`,
+      `Laporan **${title}** selesai disusun: ${chapterCount} bab, ${diagramsDone} diagram, ±${words.toLocaleString("id-ID")} kata.`,
       "",
       ...reviewLines,
       fileLine,

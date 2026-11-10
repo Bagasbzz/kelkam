@@ -124,6 +124,18 @@ test("chapter writing survives a gateway that rejects streaming and gives the pl
   assert.ok(notes.some((note) => /HTTP 400/.test(note)));
 });
 
+test("long chapters are split into parts that follow the requested length", () => {
+  assert.equal(report.planChapterParts({}, "lengkap").length, 0);
+  assert.equal(report.planChapterParts({ targetPages: 10 }, "lengkap").length, 0);
+  const bab4 = report.planChapterParts({ targetPages: 100, subsections: ["Gambaran Objek", "Hasil Analisis", "Pembahasan"] }, "lengkap");
+  const words = bab4.reduce((sum, part) => sum + part.targetWords, 0);
+  assert.ok(Math.abs(words - 100 * report.WORDS_PER_PAGE) < 50, "part words add up to the chapter target");
+  assert.ok(bab4.every((part) => part.targetWords <= report.PART_WORDS));
+  assert.equal(JSON.stringify(bab4.filter((part) => part.subNumber).map((part) => part.heading)), JSON.stringify(["Gambaran Objek", "Hasil Analisis", "Pembahasan"]));
+  assert.equal(report.planChapterParts({ targetPages: 50 }, "lengkap").length, 5);
+  assert.equal(report.planChapterParts({ targetPages: 100 }, "ringkas").length, 0);
+});
+
 test("chapter title matching tolerates numbering and case", () => {
   const review = reviewWith(() => null);
   const titles = ["Pendahuluan", "Tinjauan Pustaka", "Hasil dan Pembahasan"];

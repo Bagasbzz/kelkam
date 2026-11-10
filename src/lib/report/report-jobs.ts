@@ -37,6 +37,7 @@ import {
   compactProject,
   fallbackChapter,
   generateChapter,
+  planChapterParts,
   type ReportMode,
 } from "@/lib/report/generate-report";
 import { generateUmlForReport, isUmlDiagramType } from "@/lib/uml/pipeline";
@@ -60,20 +61,32 @@ import { blocksApproval, checkReportLocally, fixInstructions, MAX_FIX_ROUNDS, pa
 // Step review/fix ditambahkan dinamis: review menolak → fix per bab + review ulang.
 // ---------------------------------------------------------------------------
 
-export type ReportStepKind = "diagram" | "chapter" | "audit" | "review" | "fix";
+export type ReportStepKind = "diagram" | "chapter" | "part" | "audit" | "review" | "fix";
 
 const DIAGRAM_PREFIX = "diagram:";
 const AUDIT_PREFIX = "audit:";
 const REVIEW_PREFIX = "review:";
 const FIX_PREFIX = "fix:";
+/** "part:<sectionId>:<n>": satu bagian (sub-bab) dari bab panjang. */
+const PART_PREFIX = "part:";
 
 export function stepKind(sectionId: string | null | undefined): ReportStepKind {
   if (sectionId?.startsWith(DIAGRAM_PREFIX)) return "diagram";
   if (sectionId?.startsWith(AUDIT_PREFIX)) return "audit";
   if (sectionId?.startsWith(REVIEW_PREFIX)) return "review";
   if (sectionId?.startsWith(FIX_PREFIX)) return "fix";
+  if (sectionId?.startsWith(PART_PREFIX)) return "part";
   return "chapter";
 }
+
+function parsePartId(sectionId: string | null | undefined) {
+  const rest = (sectionId || "").slice(PART_PREFIX.length);
+  const cut = rest.lastIndexOf(":");
+  return { sectionId: rest.slice(0, cut), number: Number(rest.slice(cut + 1)) || 0 };
+}
+
+/** Langkah yang menulis isi laporan (bab utuh atau bagian bab). */
+const isWritingKind = (kind: ReportStepKind) => kind === "chapter" || kind === "part";
 
 function reviewRound(sectionId: string | null | undefined) {
   return Number((sectionId || "").slice(REVIEW_PREFIX.length)) || 1;
@@ -190,8 +203,8 @@ export const STALE_STEP_MS = 120_000;
 const MAX_STEP_ATTEMPTS = 4;
 /** Maks section yang diproses. */
 const MAX_STEPS = 20;
-const MAX_TOTAL_STEPS = 60;
-const MAX_TOTAL_ATTEMPTS = 120;
+const MAX_TOTAL_STEPS = 150;
+const MAX_TOTAL_ATTEMPTS = 400;
 /** Entri log terakhir yang disimpan. */
 const LOG_LIMIT = 120;
 /** Job lebih tua dari ini tidak dilanjutkan oleh tick. */
@@ -465,21 +478,29 @@ export async function startReportJob(project: unknown, ownerId: string, mode: Re
   const withAudit = mode === "lengkap" && !deterministic;
 
   type StepSeed = { sectionId: string | null; title: string };
-  const seeds: StepSeed[] = [
-    ...plannedDiagrams.map((diagram, i) => ({ sectionId: `${DIAGRAM_PREFIX}${diagram.id || `diagram-${i + 1}`}`, title: `Diagram: ${diagram.title}` })),
-    ...outline.map((section, index) => ({ sectionId: section.id ?? `section-${index + 1}`, title: section.title || `Bagian ${index + 1}` })),
-  ];
-  if (withAudit) {
-    const chapterStart = plannedDiagrams.length;
-    outline.forEach((section, index) => {
-      seeds.push({ sectionId: `${AUDIT_PREFIX}${chapterStart + index}`, title: `Audit: ${section.title || `Bagian ${index + 1}`}` });
-    });
-  }
+  const seeds: StepSeed[] = plannedDiagrams.map((diagram, i) => ({ sectionId: `${DIAGRAM_PREFIX}${diagram.id || `diagram-${i + 1}`}`, title: `Diagram: ${diagram.title}` }));
+  // Panjang mengikuti kebutuhan: bab panjang dipecah per sub-bab, satu langkah per bagian.
+  const auditable: { index: number; title: string }[] = [];
+  let partCount = 0;
+  outline.forEach((section, index) => {
+    const sectionId = section.id ?? `section-${index + 1}`;
+    const title = section.title || `Bagian ${index + 1}`;
+    const parts = planChapterParts(section, mode);
+    if (!parts.length) {
+      auditable.push({ index: seeds.length, title });
+      seeds.push({ sectionId, title });
+      return;
+    }
+    partCount += parts.length;
+    for (const part of parts) seeds.push({ sectionId: `${PART_PREFIX}${sectionId}:${part.number}`, title: `${title}: ${part.heading || `lanjutan ${part.number + 1}/${part.count}`}` });
+  });
+  // Audit per bab hanya untuk bab satu langkah; bab panjang diperiksa auditor akhir per batch.
+  if (withAudit) for (const item of auditable) seeds.push({ sectionId: `${AUDIT_PREFIX}${item.index}`, title: `Audit: ${item.title}` });
   // Gerbang mutu (K17–K20): audit akhir dokumen utuh di semua mode; perbaikan + audit ulang ditambahkan dinamis.
   if (!deterministic) seeds.push({ sectionId: `${REVIEW_PREFIX}1`, title: "Audit akhir dokumen" });
-  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab → ${withAudit ? `${outline.length} audit bab` : "tanpa audit per bab (mode ringkas)"} → audit akhir (maks. ${MAX_FIX_ROUNDS} putaran perbaikan)` });
+  log.push({ t: new Date().toISOString(), level: "info", msg: `Rencana kerja: ${umlCount} diagram UML + ${plannedDiagrams.length - umlCount} diagram konsep → ${outline.length} bab${partCount ? ` (${partCount} bagian untuk bab panjang)` : ""} → ${withAudit ? `${outline.length} audit bab` : "tanpa audit per bab (mode ringkas)"} → audit akhir (maks. ${MAX_FIX_ROUNDS} putaran perbaikan)` });
 
-  if (countedSteps(seeds) > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 60 langkah dan 3 ilustrasi.");
+  if (countedSteps(seeds) > MAX_TOTAL_STEPS || illustrations.length > 3) throw new Error("Rencana laporan terlalu besar: maksimal 150 langkah dan 3 ilustrasi.");
   const row = await prisma.$transaction(async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('ai-report-admission'))`;
     await expireAbandonedJobs(tx);
@@ -668,18 +689,23 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
   const project = row.payload as unknown;
   const compact = compactProject(project);
   // Bab dicari berdasarkan sectionId (index step tidak lagi = index outline karena ada step diagram).
-  const outlineIndex = compact.outline.findIndex((section, i) => (section.id ?? `section-${i + 1}`) === next.sectionId);
+  const partId = kind === "part" ? parsePartId(next.sectionId) : null;
+  const ownSectionId = partId ? partId.sectionId : next.sectionId;
+  const outlineIndex = compact.outline.findIndex((section, i) => (section.id ?? `section-${i + 1}`) === ownSectionId);
   const section = compact.outline[outlineIndex] ?? {
     id: next.sectionId ?? undefined,
     title: next.title,
     purpose: "",
     requiredDiagrams: [],
   };
-  const chapterSteps = steps.filter((step) => stepKind(step.sectionId) === "chapter");
-  const chapterPosition = Math.max(0, chapterSteps.findIndex((step) => step.id === next.id));
-  const previousSummaries = chapterSteps
+  const writingSteps = steps.filter((step) => isWritingKind(stepKind(step.sectionId)));
+  const chapterPosition = outlineIndex >= 0 ? outlineIndex : Math.max(0, writingSteps.findIndex((step) => step.id === next.id));
+  const previousSummaries = writingSteps
     .filter((step) => step.index < next.index && step.summary)
     .map((step) => step.summary as string);
+  const parts = partId && outlineIndex >= 0 ? planChapterParts(compact.outline[outlineIndex], row.mode === "ringkas" ? "ringkas" : "lengkap") : [];
+  const partInfo = partId ? parts[partId.number] : undefined;
+  const previousPartStep = partId && partId.number > 0 ? steps.find((step) => step.sectionId === `${PART_PREFIX}${partId.sectionId}:${partId.number - 1}`) : undefined;
 
   const attemptNo = next.attempts + 1;
   const doneBefore = steps.filter((step) => isStepFinished(step.status)).length;
@@ -740,10 +766,11 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
 
   const mode = (row.mode === "ringkas" ? "ringkas" : "lengkap") as ReportMode;
   // Percobaan ulang bab melanjutkan teks parsial percobaan sebelumnya (bukan placeholder fallback).
-  const previousPartial = kind === "chapter" && attemptNo > 1 && next.output && !/respons AI gagal/.test(next.output) ? next.output : undefined;
+  const previousPartial = isWritingKind(kind) && attemptNo > 1 && next.output && !/respons AI gagal/.test(next.output) ? next.output : undefined;
   const chapterInput = {
     index: chapterPosition,
-    total: chapterSteps.length || 1,
+    total: compact.outline.length || 1,
+    ...(partInfo ? { part: { ...partInfo, previousTail: (previousPartStep?.output || "").slice(-2500) } } : {}),
     section,
     previousSummaries,
     mode,
@@ -764,7 +791,7 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
   try {
     controller.signal.throwIfAborted();
     const staleDiagram = kind === "diagram" && !compact.diagrams.some((diagram) => diagram.id === (next.sectionId || "").slice(DIAGRAM_PREFIX.length) && !diagram.approved);
-    const staleChapter = kind === "chapter" && outlineIndex < 0;
+    const staleChapter = isWritingKind(kind) && (outlineIndex < 0 || (kind === "part" && !partInfo));
     const auditTarget = kind === "audit" ? row.steps.find((step) => step.index === Number((next.sectionId || "").slice(AUDIT_PREFIX.length))) : undefined;
     const staleAudit = kind === "audit" && !compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === auditTarget?.sectionId);
     const fixTarget = kind === "fix" ? row.steps.find((step) => step.index === parseFixId(next.sectionId).target) : undefined;
@@ -823,7 +850,7 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
       ? error.partial
       : latestPartial || previousPartial || null;
 
-    if (kind !== "chapter") {
+    if (!isWritingKind(kind)) {
       // Diagram/audit tidak boleh menggagalkan laporan: tandai fallback, lanjut.
       await prisma.reportJobStep.updateMany({
         where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
@@ -833,7 +860,11 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
     } else if (attemptNo >= MAX_STEP_ATTEMPTS) {
       // Habis percobaan: pakai teks parsial kalau cukup panjang, kalau tidak placeholder.
       const usable = partial && countWords(partial) >= 250;
-      const fallback = fallbackChapter(chapterInput, project);
+      const fallback = partInfo
+        ? { content: `${partInfo.subNumber ? `### ${chapterPosition + 1}.${partInfo.subNumber} ${partInfo.heading}
+
+` : ""}[ISI ${(partInfo.heading || next.title).toUpperCase()}: respons AI gagal, gunakan fitur revisi untuk mengisi bagian ini]`, summary: "bagian belum terisi" }
+        : fallbackChapter(chapterInput, project);
       const content = usable ? `${partial.trimEnd()}\n\n[LANJUTAN ${next.title.toUpperCase()}: bagian ini belum selesai, gunakan fitur revisi untuk melengkapi]` : fallback.content;
       await prisma.reportJobStep.updateMany({
         where: { id: next.id, attempts: attemptNo, startedAt: claimTime, status: "running", job: { status: "running" } },
@@ -1077,6 +1108,8 @@ async function runAuditStep(
 interface FinalChapter extends ReviewChapter {
   /** index step bab asal (dipakai sebagai target perbaikan). */
   stepIndex: number;
+  /** Bab panjang yang ditulis per bagian; terlalu panjang untuk ditulis ulang utuh oleh perbaikan. */
+  long?: boolean;
 }
 
 /**
@@ -1097,16 +1130,31 @@ function finalChapters(row: Pick<JobRow, "payload" | "steps">): FinalChapter[] {
       if (!current || round > current.round) fixByTarget.set(target, { round, output: step.output });
     }
   }
-  return row.steps
-    .filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId))
-    .filter((step) => isStepFinished(step.status) && step.output)
-    .sort((a, b) => a.index - b.index)
-    .map((step) => ({
-      stepIndex: step.index,
-      title: step.title,
-      content: fixByTarget.get(step.index)?.output ?? auditByTarget.get(step.index) ?? (step.output as string),
-      placeholder: step.status === "fallback",
-    }));
+  const out: FinalChapter[] = [];
+  compact.outline.forEach((section, index) => {
+    const sectionId = section.id || `section-${index + 1}`;
+    const whole = row.steps.find((step) => stepKind(step.sectionId) === "chapter" && step.sectionId === sectionId);
+    if (whole) {
+      if (isStepFinished(whole.status) && whole.output) {
+        out.push({ stepIndex: whole.index, title: whole.title, content: fixByTarget.get(whole.index)?.output ?? auditByTarget.get(whole.index) ?? whole.output, placeholder: whole.status === "fallback" });
+      }
+      return;
+    }
+    // Bab panjang: gabungkan bagian-bagiannya sesuai urutan.
+    const parts = row.steps
+      .filter((step) => stepKind(step.sectionId) === "part" && parsePartId(step.sectionId).sectionId === sectionId)
+      .sort((a, b) => parsePartId(a.sectionId).number - parsePartId(b.sectionId).number);
+    const written = parts.filter((step) => isStepFinished(step.status) && step.output);
+    if (!written.length) return;
+    out.push({
+      stepIndex: written[0].index,
+      title: section.title,
+      content: written.map((step) => (step.output as string).trim()).join("\n\n"),
+      placeholder: parts.some((step) => step.status === "fallback"),
+      long: true,
+    });
+  });
+  return out;
 }
 
 async function runReviewStep(
@@ -1128,7 +1176,7 @@ async function runReviewStep(
   // Bab yang bisa diperbaiki otomatis: punya masalah berat/sedang, bukan placeholder (penulisan gagal total).
   const byChapter = new Map<string, FinalChapter>(chapters.map((chapter) => [chapter.title, chapter]));
   const targets = verdict.verdict === "perbaiki" && !verdict.aiUnavailable && round <= MAX_FIX_ROUNDS
-    ? chapters.filter((chapter) => !chapter.placeholder && verdict.issues.some((issue) => issue.chapter === chapter.title && blocksApproval(issue)))
+    ? chapters.filter((chapter) => !chapter.placeholder && !chapter.long && verdict.issues.some((issue) => issue.chapter === chapter.title && blocksApproval(issue)))
     : [];
   const unassigned = verdict.issues.filter((issue) => blocksApproval(issue) && (!issue.chapter || !byChapter.has(issue.chapter)));
 
@@ -1246,7 +1294,7 @@ async function finalizeJob(row: JobRow, ownerId: string, log: ReportJobEvent[]):
   // Bab final = perbaikan auditor terakhir > audit per bab > tulisan asli.
   const finals = finalChapters(row);
   const chapters = finals.map((chapter) => chapter.content);
-  const chapterSteps = row.steps.filter((step) => stepKind(step.sectionId) === "chapter" && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === step.sectionId));
+  const chapterSteps = row.steps.filter((step) => { const kind = stepKind(step.sectionId); const own = kind === "part" ? parsePartId(step.sectionId).sectionId : step.sectionId; return isWritingKind(kind) && compact.outline.some((section, index) => (section.id || `section-${index + 1}`) === own); });
   const auditedCount = row.steps.filter((step) => stepKind(step.sectionId) === "audit" && step.status === "done" && step.output).length;
 
   if (!chapters.length && compact.intent.outputMode !== "citations_only") {
