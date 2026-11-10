@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AuthProvider } from "@/components/AuthProvider";
 import Navbar from "@/components/ui/Navbar";
 import { JsonLd } from "@/components/seo/JsonLd";
+import PageTracker from "@/components/analytics/PageTracker";
 import { organizationJsonLd, SITE_DESCRIPTION, SITE_NAME, SITE_TAGLINE, SITE_URL } from "@/lib/seo/site";
 import "./globals.css";
 
@@ -33,6 +34,7 @@ export default function RootLayout({
         <JsonLd data={organizationJsonLd()} />
         <AuthProvider>
           <Navbar />
+          <PageTracker />
           <div className="flex-1 flex flex-col mt-[72px]">
             {children}
           </div>

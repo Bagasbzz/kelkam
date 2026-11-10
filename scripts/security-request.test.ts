@@ -65,6 +65,7 @@ test("auth, enrollment and both submission handlers reject oversized JSON before
         if (id === "@/lib/server/request-guards") return { ApiRequestError, publicErrorResponse, readJsonBody, enforceRateLimit: () => null };
         if (id === "@/lib/server/auth") return { authenticateRequestFromCookie: async () => ({ ok: true, user: { id: "student" } }) };
         if (id === "@/lib/server/csrf-origin") return { assertSameOriginJsonRequest() {} };
+        if (id === "@/lib/server/analytics") return { recordLogin: async () => undefined, touchPresence: () => undefined };
         if (["@/lib/db/prisma", "@/lib/server/tugas/access", "@/lib/server/tugas/submission-identity", "@/lib/server/tugas/position", "@/lib/server/tugas/serialize"].includes(id)) {
           return new Proxy({}, { get() { throw new Error("Storage must not be reached"); } });
         }

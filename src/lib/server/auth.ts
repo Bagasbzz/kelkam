@@ -45,6 +45,7 @@ import { cookies } from "next/headers";
 import { SignJWT, jwtVerify } from "jose";
 import argon2 from "argon2";
 import { prisma } from "@/lib/db/prisma";
+import { touchPresence } from "@/lib/server/analytics";
 import { ApiRequestError } from "@/lib/server/request-guards";
 
 // ---------------------------------------------------------------------------
@@ -233,6 +234,8 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
       where: { id: userId },
       select: { id: true, email: true, name: true, role: true },
     });
+    // Tahap 3: "terakhir aktif" (throttle 5 menit, tidak pernah menggagalkan request).
+    if (user) touchPresence(user.id);
     return user || null;
   } catch {
     // JWT corrupt / signature invalid / expired → anggap tidak login.

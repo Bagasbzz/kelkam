@@ -1,5 +1,6 @@
 "use client";
 
+import FeedbackButtons from "@/components/feedback/FeedbackButtons";
 import { useEffect, useRef, useState } from "react";
 import { Bot, FileText, Loader2, Paperclip, Send, X } from "lucide-react";
 import { authenticatedFetch } from "@/components/AuthProvider";
@@ -111,7 +112,7 @@ export default function PresentationChat({ root, messages, sourceTitle, question
         ) : (
           <div key={m.id} className="flex gap-3">
             <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white"><Bot className="h-4 w-4" /></div>
-            <div className="min-w-0 flex-1 text-[15px] leading-relaxed text-slate-900"><SimpleMarkdown text={m.content} /></div>
+            <div className="min-w-0 flex-1 text-[15px] leading-relaxed text-slate-900"><SimpleMarkdown text={m.content} />{!m.id.startsWith("pending") && <FeedbackButtons feature="presentasi" targetId={m.id} />}</div>
           </div>
         ))}
         {templateOptions.length > 0 && <div className="pl-10"><TemplatePicker compact only={templateOptions} disabled={blocked} onPick={(label) => void send(`Tampilan: ${label}`)} /></div>}

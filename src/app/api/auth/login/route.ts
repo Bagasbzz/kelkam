@@ -30,6 +30,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
+import { recordLogin } from "@/lib/server/analytics";
 import { createSession, verifyPassword } from "@/lib/server/auth";
 import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 import { assertSameOriginJsonRequest } from "@/lib/server/csrf-origin";
@@ -83,6 +84,7 @@ export async function POST(req: Request) {
     }
 
     const session = await createSession(user.id, user.email, user.name, user.role);
+    await recordLogin(user.id, "password");
     return NextResponse.json(
       { success: true, user: session.user },
       { headers: { "Cache-Control": "no-store" } }

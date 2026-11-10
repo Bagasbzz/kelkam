@@ -115,7 +115,7 @@ Terakhir diperbarui: 2026-11-09
 | 0 | Lepas batas AI per pengguna (user bebas), rem global dinaikkan | ✅ Selesai 2026-11-07 |
 | 1 | Role `SUPER_ADMIN`/`PENGAJAR` + tutup celah reset sandi & ubah role + log audit | Belum mulai |
 | 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | Belum mulai |
-| 3 | Pencatatan data: aktivitas, login, last_seen, token aktual, feedback 👍/👎 | Belum mulai |
+| 3 | Pencatatan data: aktivitas, login, last_seen, token aktual, feedback 👍/👎 | ✅ Kode selesai 2026-11-10; aktif setelah SQL `database-hotfix-2026-11-10-analytics.sql` dijalankan |
 | 4 | Dashboard analitik ringkasan + detail pengguna | Belum mulai |
 | 5 | Mesin kuota di DB (posisi mati) | Belum mulai |
 | 6 | Paket premium + pembayaran manual QRIS (posisi mati) | Belum mulai |
@@ -404,3 +404,17 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
 - Lanjut otomatis (permintaan pemilik): run yang sudah menghasilkan kemajuan (ada hasil tool berhasil) dan berhenti karena
   respons kosong/terpotong atau batas langkah diteruskan otomatis maks. 2 kali (+10 langkah tiap kali, event
   "Melanjutkan otomatis (n/2)"). Gangguan provider tetap berhenti setelah 3 kegagalan berturut-turut.
+
+## 17. Tahap 3 pencatatan data (2026-11-10)
+
+- Tabel baru (tanpa mengubah tabel users): `activity_events` (kunjungan halaman, termasuk tamu lewat cookie acak
+  `kk_vid`, tanpa IP), `user_presence` (terakhir aktif, ditulis maks. tiap 5 menit dari `getCurrentUser`), `login_events`
+  (login & daftar), `ai_usage` (per panggilan AI: pemilik, operasi, model, token input/output; `actual=true` bila dari
+  `usage` provider, termasuk streaming lewat clone respons), `feedbacks` (👍/👎 + komentar per jawaban AI).
+- Migrasi: `prisma/migrations/20261110000000_analytics` dan file manual `database-hotfix-2026-11-10-analytics.sql`
+  (deploy tidak menjalankan migrasi; jalankan di phpPgAdmin). Semua pencatatan dibungkus try/catch, jadi kode aman
+  walau SQL belum dijalankan. `/api/admin/db-health` ikut mengecek 5 tabel ini.
+- Pencatat: `src/lib/server/analytics.ts`, `POST /api/track` (publik di proxy, rate limit 120/menit per pengunjung),
+  `PageTracker` di layout, `recordLogin` di login/register, `recordAiUsage` di `budgetedAiFetch`,
+  `POST /api/feedback` + `FeedbackButtons` di chat Laporan dan Presentasi.
+- Berikutnya: Tahap 4 dashboard analitik (membaca tabel-tabel ini).

@@ -19,6 +19,7 @@ import SimpleMarkdown from "@/components/ui/SimpleMarkdown";
 import Button from "@/components/ui/Button";
 import JournalCheck from "@/components/JournalCheck";
 import GuidedTour from "@/components/ui/GuidedTour";
+import FeedbackButtons from "@/components/feedback/FeedbackButtons";
 import { LAPORAN_TOUR } from "@/lib/client/tours";
 import type { JournalVerification } from "@/lib/references/journal-check";
 import { getErrorMessage as baseErrorMessage, toPublicAssistantMessage } from "@/lib/errors";
@@ -885,6 +886,7 @@ export default function LaporanPage() {
                       )}
                       <SimpleMarkdown text={toPublicAssistantMessage(m.content)} />
                       {m.toolCalls?.tools?.length ? <div className="mt-1 text-[13px] text-slate-400">⚙ {m.toolCalls.tools.join(", ")}</div> : null}
+                      {!m.id.startsWith("pending") && m.toolCalls?.status !== "failed" && <FeedbackButtons feature="laporan" targetId={m.id} />}
                     </div>
                   </div>
                 )

@@ -893,3 +893,79 @@ model AgentRun {
   @@index([status, heartbeatAt])
   @@map("agent_runs")
 }
+
+// ===========================================================================
+// ANALITIK (Tahap 3, 2026-11-10): tabel milik sendiri, tanpa IP/alamat mentah.
+// Kolom user_id sengaja tanpa relasi agar pencatatan tidak pernah memblokir fitur.
+// ===========================================================================
+
+/// Kunjungan halaman (termasuk tamu). visitor_id = hash acak per browser, bukan IP.
+model ActivityEvent {
+  id        String   @id @default(cuid())
+  visitorId String   @map("visitor_id")
+  userId    String?  @map("user_id")
+  kind      String   @default("page")
+  path      String
+  feature   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([visitorId, createdAt])
+  @@map("activity_events")
+}
+
+/// Aktivitas terakhir per akun (diperbarui maks. tiap 5 menit). Tabel terpisah agar tabel users tidak berubah:
+/// kode baru tetap aman walau SQL migrasi belum dijalankan di server.
+model UserPresence {
+  userId     String   @id @map("user_id")
+  lastSeenAt DateTime @map("last_seen_at")
+
+  @@index([lastSeenAt])
+  @@map("user_presence")
+}
+
+/// Peristiwa login berhasil.
+model LoginEvent {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  method    String   @default("password")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("login_events")
+}
+
+/// Pemakaian AI per panggilan. actual=true bila angka token dari provider, false bila perkiraan.
+model AiUsage {
+  id           String   @id @default(cuid())
+  ownerId      String   @map("owner_id")
+  operation    String
+  model        String
+  kind         String   @default("chat")
+  inputTokens  Int      @default(0) @map("input_tokens")
+  outputTokens Int      @default(0) @map("output_tokens")
+  actual       Boolean  @default(false)
+  ok           Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([ownerId, createdAt])
+  @@map("ai_usage")
+}
+
+/// Feedback sengaja dari pengguna (👍/👎 + komentar opsional).
+model Feedback {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  feature   String
+  targetId  String?  @map("target_id")
+  rating    Int
+  comment   String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, feature, targetId])
+  @@index([feature, createdAt])
+  @@map("feedbacks")
+}

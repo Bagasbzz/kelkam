@@ -63,7 +63,7 @@ assert.ok(messageMap && ts.isCallExpression(messageMap));
 const renderer = {} as { renderMessage: (message: { id: string; role: string; content: string; toolCalls?: SavedMessage["toolCalls"] | null }) => ReactNode };
 // Server-render the actual message JSX, not a fake DOM or a copy of its status logic.
 vm.runInNewContext(compile(`exports.renderMessage = ${messageMap.arguments[0].getText(dashboardAst)};`), {
-  exports: renderer, getErrorMessage, toPublicAssistantMessage, Bot: () => null,
+  exports: renderer, getErrorMessage, toPublicAssistantMessage, Bot: () => null, FeedbackButtons: () => null,
   SimpleMarkdown: ({ text }: { text: string }) => createElement("div", { "data-reply": true }, text),
   require: (id: string) => {
     assert.equal(id, "react/jsx-runtime", "no application dependencies may load");

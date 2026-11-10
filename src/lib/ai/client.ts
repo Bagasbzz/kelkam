@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { AI_SECURITY_POLICY, AI_SECURITY_POLICY_MARKER, leaksSystemPrompt, sanitizeForPrompt } from "@/lib/ai/guard";
 import { safeFetch } from "@/lib/server/safe-fetch";
 import { AiBudgetError, budgetLimit, estimateAiCharge, getAiOwnerContext, reserveAiBudget } from "@/lib/server/ai-budget";
+import { recordAiUsage, usageFromResponse } from "@/lib/server/analytics";
 
 /**
  * Model routing (dikembalikan 2026-11-10 ke perilaku sebelum audit keamanan 844dd00, yang terbukti
@@ -141,7 +142,18 @@ export async function budgetedAiFetch(input: RequestInfo | URL, init?: RequestIn
   const signal = context.signal && init.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal ?? init.signal;
   signal?.throwIfAborted();
   // Do not follow provider redirects: POST replay would escape transport admission.
-  return fetch(input, { ...init, signal, redirect: "error" });
+  const response = await fetch(input, { ...init, signal, redirect: "error" });
+  // Tahap 3: catat pemakaian AI (token aktual bila provider mengirim usage) tanpa menahan pemanggil.
+  const owner = context;
+  const base = { ownerId: owner.ownerId, operation: owner.operation, model: String(body.model), kind: kind as "chat" | "image" };
+  if (kind === "image" || !response.ok || !response.body) {
+    recordAiUsage({ ...base, inputTokens: charge.inputTokens, outputTokens: 0, actual: false, ok: response.ok });
+  } else {
+    void usageFromResponse(response.clone(), charge.inputTokens)
+      .then((usage) => recordAiUsage({ ...base, inputTokens: usage.input, outputTokens: usage.output, actual: usage.actual, ok: true }))
+      .catch(() => recordAiUsage({ ...base, inputTokens: charge.inputTokens, outputTokens: 0, actual: false, ok: false }));
+  }
+  return response;
 }
 
 export function getAiClient() {

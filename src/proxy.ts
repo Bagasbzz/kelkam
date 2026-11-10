@@ -77,6 +77,8 @@ const PUBLIC_API_EXACT_PATHS = [
   "/api/tugas/courses/by-token",
   // Cron tick: auth via REPORT_CRON_SECRET di handler (bukan cookie).
   "/api/report-jobs/tick",
+  // Catatan kunjungan (tamu ikut tercatat); handler punya rate limit sendiri dan tidak pernah membuka data.
+  "/api/track",
 ];
 
 /** Endpoint publik berbasis token course (handler memverifikasi token + rate limit sendiri). */
