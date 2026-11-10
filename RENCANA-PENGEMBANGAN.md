@@ -364,3 +364,10 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   tugas biasa), memilih 5-8 jurnal utama dari sumber tercentang; peneliti/tahun/judul diisi sistem dari data sumber;
   ditampilkan di tab Rencana dengan research gap dan novelty; dipakai penulis di Pendahuluan, Tinjauan Pustaka (tabel
   Penelitian Terdahulu), dan Pembahasan.
+- Hasil `/api/admin/ai-check` (2026-11-10, gateway Mindaku `vip-api.mind-aku.my.id`, env AI_MODEL=claude-sonnet-5,
+  AI_MODEL_FAST=deepseek-v4-pro, AI_MODEL_REVIEW=claude-sonnet-5): claude-sonnet-5 dengan max_tokens 300 → 0 karakter isi,
+  finish=length (token habis untuk thinking tersembunyi); deepseek-v4-pro normal (teks pertama 3,7 dtk).
+  Tindakan: (1) permintaan non-stream yang isinya kosong otomatis diulang sekali dengan model cepat (`client.ts`),
+  penulisan bab ikut memakai jalur ini; (2) max_tokens bab dinaikkan ke 8000 (ringkas 2400) untuk ruang thinking;
+  (3) ai-check kini juga menguji varian Claude (max_tokens 300 vs 1500, reasoning_effort low/none, thinking disabled)
+  untuk memilih parameter yang mematikan thinking.

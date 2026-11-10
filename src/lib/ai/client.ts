@@ -158,8 +158,21 @@ export function getAiClient() {
     const original = completions.create.bind(completions);
     const guarded = async (body: ChatParams, options?: Parameters<typeof original>[1]) => {
       try {
-        const result = await original(hardenChatRequest(body) as never, { ...options, maxRetries: 0 });
-        if (!body.stream) scrubCompletion(result);
+        const hardened = hardenChatRequest(body);
+        const result = await original(hardened as never, { ...options, maxRetries: 0 });
+        if (!body.stream) {
+          // Claude via gateway Mindaku dapat menghabiskan max_tokens untuk "thinking" tersembunyi lalu mengembalikan
+          // isi kosong (finish=length). Satu kali coba ulang dengan model cepat agar fitur tidak gagal diam-diam.
+          const choice = (result as OpenAI.Chat.Completions.ChatCompletion).choices?.[0];
+          const empty = !stripThinking(choice?.message?.content ?? "").trim() && !choice?.message?.tool_calls?.length;
+          if (empty && hardened.model !== AI_MODEL_FAST) {
+            console.warn(`[ai] ${hardened.model} mengembalikan isi kosong (finish=${choice?.finish_reason}); mencoba ${AI_MODEL_FAST}`);
+            const retry = await original({ ...hardened, model: AI_MODEL_FAST } as never, { ...options, maxRetries: 0 });
+            scrubCompletion(retry);
+            return retry;
+          }
+          scrubCompletion(result);
+        }
         return result;
       } catch (error) { rethrowBudgetError(error); }
     };

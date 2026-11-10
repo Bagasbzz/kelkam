@@ -528,7 +528,8 @@ async function streamChapter(
     }
     if (!result || !stripThinking(result.text).trim()) {
       if (controller.signal.aborted) throw new ChapterTimeoutError(`Timeout ${Math.round(timeoutMs / 1000)}s`, text);
-      if (result) onNote("Streaming tidak menghasilkan teks, mencoba permintaan biasa");
+      if (result) onNote(`Streaming ${params.model} tidak menghasilkan teks (finish=${result.finishReason}), mencoba permintaan biasa`);
+      // Permintaan biasa otomatis beralih ke model cepat bila model penulis mengembalikan isi kosong (lihat client.ts).
       result = await plain();
     }
     return result;
@@ -821,7 +822,8 @@ ${useMatrix ? `13. MATRIKS PENELITIAN tersedia (matriksPenelitian). ${/tinjauan|
   };
 
   const model = isRingkas ? AI_MODEL_FAST : AI_MODEL;
-  const maxTokens = isRingkas ? 1800 : 5200;
+  // Ruang ekstra: Claude di gateway menghitung "thinking" tersembunyi ke dalam max_tokens.
+  const maxTokens = isRingkas ? 2400 : 8000;
   const emit = input.onEvent ?? (() => {});
   const onPartial = input.onPartial ?? (() => {});
 
