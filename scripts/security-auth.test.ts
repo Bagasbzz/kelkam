@@ -189,3 +189,12 @@ test("a student who already submitted with a NIM from two accounts can keep subm
   assert.equal(result.nim, "162024001");
   await assert.rejects(resolveSubmissionIdentity(identityDb(legacy), "course-a", "newcomer", input), ApiRequestError);
 });
+
+test("an account that once typed a wrong NIM can switch to its roster NIM, but not to a stranger's", async () => {
+  const roster = [{ nim: "162026027", name: "NABILA AULIA", classId: null }, { nim: "162026028", name: "M. FELLO ALKHALIFI", classId: null }];
+  const typo = [{ userId: "student", nim: "16202627", name: "Nabila Aulia" }];
+  const result = await resolveSubmissionIdentity(identityDb(typo, roster), "course-a", "student", { nim: "162026027", name: "Nabila Aulia", classId: "class-a" });
+  assert.equal(result.nim, "162026027");
+  const realOther = [{ userId: "student", nim: "162026028", name: "Fello Alkhalifi" }];
+  await assert.rejects(resolveSubmissionIdentity(identityDb(realOther, roster), "course-a", "student", { nim: "162026027", name: "Nabila Aulia", classId: "class-a" }), ApiRequestError);
+});

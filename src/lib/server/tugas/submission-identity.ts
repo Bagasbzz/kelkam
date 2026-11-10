@@ -67,28 +67,37 @@ export async function resolveSubmissionIdentity(
   if (!ownsNim && identities.some((identity) => identity.userId !== userId && nimKey(identity.nim) === key)) {
     throw new ApiRequestError(409, "NIM ini sudah terikat ke akun mahasiswa lain di course ini. Hubungi admin bila tidak sesuai.");
   }
-  if (own.some((identity) => nimKey(identity.nim) !== key)) {
-    throw new ApiRequestError(409, "Akun ini sudah terikat ke NIM lain di course ini. Hubungi admin untuk koreksi identitas.");
-  }
-
   // Roster is admin-maintained, but has no verified user linkage. Never treat
   // its optional email (or a self-created enrollment) as proof of identity.
   const roster = await tx.mahasiswa.findMany({
     where: { courseId },
     select: { nim: true, name: true, classId: true },
   });
+  const rosterByNim = new Map(roster.map((student) => [nimKey(student.nim), student]));
+  const otherOwnNims = own.filter((identity) => nimKey(identity.nim) !== key);
+  if (otherOwnNims.length) {
+    // Akun ini pernah memakai NIM lain. Boleh pindah ke NIM roster ini bila NIM lama memang bukan NIM roster
+    // (salah ketik) atau nama yang dulu dipakai akun ini cocok dengan nama roster NIM baru (orang yang sama).
+    const target = rosterByNim.get(key);
+    const oldWasTypo = otherOwnNims.every((identity) => !rosterByNim.has(nimKey(identity.nim)));
+    const samePerson = Boolean(target) && own.some((identity) => namesMatch(identity.name, target!.name));
+    if (!target || (!oldWasTypo && !samePerson)) {
+      throw new ApiRequestError(409, "Akun ini sudah terikat ke NIM lain di course ini. Hubungi admin untuk koreksi identitas.");
+    }
+  }
+
   const matches = roster.filter((student) => nimKey(student.nim) === key);
   if (matches.length > 1) throw new ApiRequestError(409, "Identitas roster ambigu. Hubungi admin course.");
   const student = matches[0];
   if (student?.classId && student.classId !== input.classId) {
     throw new ApiRequestError(400, "NIM terdaftar pada kelas yang berbeda.");
   }
-  const canonicalName = student?.name || own[0]?.name;
+  const canonicalName = student?.name || own.find((identity) => nimKey(identity.nim) === key)?.name;
   if (canonicalName && !namesMatch(canonicalName, input.name)) {
     throw new ApiRequestError(409, `Nama tidak cocok dengan data NIM ini di course${student ? " (roster)" : ""}. Periksa kembali NIM yang diketik, atau hubungi admin bila NIM sudah benar.`);
   }
   return {
-    nim: student?.nim || own[0]?.nim || input.nim.trim(),
+    nim: student?.nim || own.find((identity) => nimKey(identity.nim) === key)?.nim || input.nim.trim(),
     name: canonicalName || input.name.trim().replace(/\s+/g, " "),
   };
 }
