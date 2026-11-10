@@ -393,3 +393,8 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   jawaban akhir memakai model run (Claude), 6000 token, dan jawaban akhir terpotong yang sudah berisi teks diterima.
 - Sumber didominasi buku (29 jurnal, 43 buku): kuota campuran dulu mengisi slot kosong dengan buku. Sekarang slot kosong
   tidak diisi non-jurnal (maks. ±25% per jenis, 40% total per query), jurnal tetap mayoritas.
+- Keputusan pemilik 2026-11-10: fokus utama jurnal; cari semaksimal mungkin semua jurnal relevan, jangan memaksa jurnal
+  melenceng; sumber lain hanya pelengkap terbaik. Diterapkan: kandidat per penyedia dinaikkan (Semantic Scholar/OpenAlex 50,
+  Crossref 40), verifikasi DOI maks. 45 per query, saringan relevansi (minimal sepertiga kata kunci query di judul/abstrak),
+  non-jurnal maks. ±30% per query (tiap jenis ±20%), prompt menegaskan jurnal dominan. Uji langsung: query Inggris
+  14 hasil (10 jurnal, 4 preprint), query Indonesia 8 jurnal.

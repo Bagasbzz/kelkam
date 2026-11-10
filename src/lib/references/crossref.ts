@@ -137,7 +137,7 @@ export async function fetchVerificationJson(url: string): Promise<
 }
 
 export async function searchCrossref(query: string, options: SearchOptions = {}): Promise<ProviderPaper[]> {
-  const rows = Math.min(Number(options.limit || 6), 20);
+  const rows = Math.min(Number(options.limit || 6), 40);
   const url = new URL(CROSSREF_BASE);
   url.searchParams.set("query.bibliographic", String(query || ""));
   url.searchParams.set("rows", String(rows));

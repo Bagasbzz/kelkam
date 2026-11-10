@@ -30,7 +30,7 @@ function reconstructAbstract(index: Record<string, unknown>) {
  * for simplicity and then applies lightweight post-filtering.
  */
 export async function searchOpenAlex(query: string, options: SearchOptions = {}): Promise<ProviderPaper[]> {
-  const limit = Math.min(Number(options.limit || 6), 25);
+  const limit = Math.min(Number(options.limit || 6), 50);
   const url = new URL(OPENALEX_BASE);
   url.searchParams.set("search", String(query || ""));
   url.searchParams.set("per-page", String(limit));

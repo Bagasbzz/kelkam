@@ -264,6 +264,13 @@ function queryTerms(query: string) {
   ));
 }
 
+/** Bagian kata kunci query (0..1) yang muncul di judul atau abstrak. */
+function termCoverage(p: ProviderPaper, terms: string[]) {
+  if (!terms.length) return 1;
+  const haystack = `${normalizeTitle(p.title)} ${String(p.abstract || "").toLowerCase()}`;
+  return terms.filter((term) => haystack.includes(term)).length / terms.length;
+}
+
 /**
  * Skor 0-100: relevansi kata kunci (judul berbobot 2x, abstrak 1x) ~60%,
  * kebaruan tahun ~30%, sitasi (log) ~10%. Dipakai untuk urutan prioritas.
@@ -320,8 +327,9 @@ type Candidate = { paper: ProviderPaper; kind: SourceKind; score: number };
  */
 function pickWithQuota<T extends Candidate>(items: T[], kinds: SourceKind[], limit: number): T[] {
   if (kinds.length === 1 || !kinds.includes("journal")) return items.slice(0, limit);
-  const perKind = Math.max(1, Math.round(limit / 4));
-  const nonJournalCap = Math.max(1, Math.floor(limit * 0.4));
+  const perKind = Math.max(1, Math.round(limit / 5));
+  // Sumber lain hanya pelengkap: maks. ±30% dari limit, diambil yang skornya paling tinggi.
+  const nonJournalCap = Math.max(1, Math.floor(limit * 0.3));
   const counts = new Map<SourceKind, number>();
   let nonJournal = 0;
   const picked: T[] = [];
@@ -344,7 +352,7 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
   const requested = normalizeSourceKinds(options.kinds);
   const kinds = requested.length ? requested : defaultKinds(options.requirement);
   const searchOptions: SearchOptions = {
-    limit: Math.min(limit * 3, 40),
+    limit: Math.min(limit * 3, 50),
     yearFrom: options.yearFrom ?? null,
     yearTo: options.yearTo ?? null,
     openAccessOnly: Boolean(options.openAccessOnly),
@@ -365,12 +373,14 @@ export async function findVerifiedSources(query: string, options: FindSourcesOpt
     .map((p) => ({ paper: p, kind: classifySourceKind(p), score: scoreSource(p, terms) }))
     // Tahap awal: hanya jenis yang diminta (tipe bisa diperjelas Crossref nanti) dan punya identitas yang bisa dicek.
     .filter(({ paper: p, kind }) => options.requireDoi === false || p.doi || kind === "book" || kind === "thesis")
+    // Hanya yang benar-benar relevan: minimal sepertiga kata kunci query muncul di judul/abstrak.
+    .filter(({ paper: p }) => termCoverage(p, terms) >= (terms.length <= 2 ? 0.5 : 1 / 3))
     .sort((a, b) => b.score - a.score);
   progress(`${candidates.length} kandidat (Semantic Scholar ${ss.length}, OpenAlex ${oa.length}, Crossref ${cr.length}${wantsBooks ? `, katalog buku ${books.length}` : ""}), memverifikasi DOI/ISBN…`);
 
-  // Verifikasi DOI hanya untuk kandidat teratas yang ber-DOI (maks. 30 panggilan Crossref).
-  const topCandidates = candidates.slice(0, Math.min(limit * 5, 60));
-  let doiBudget = Math.min(limit * 3, 30);
+  // Verifikasi DOI hanya untuk kandidat teratas yang ber-DOI (maks. 45 panggilan Crossref).
+  const topCandidates = candidates.slice(0, Math.min(limit * 5, 90));
+  let doiBudget = Math.min(limit * 3, 45);
   const checked = await Promise.all(
     topCandidates.map(async (candidate): Promise<Candidate | null> => {
       const paper = candidate.paper;

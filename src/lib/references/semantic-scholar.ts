@@ -10,7 +10,7 @@ const SEMANTIC_SCHOLAR_BASE = "https://api.semanticscholar.org/graph/v1/paper/se
  * - options: limit, yearFrom/yearTo, openAccessOnly
  */
 export async function searchSemanticScholar(query: string, options: SearchOptions = {}): Promise<ProviderPaper[]> {
-  const limit = Math.min(Number(options.limit || 6), 20);
+  const limit = Math.min(Number(options.limit || 6), 50);
   const fields = [
     "title",
     "authors",
