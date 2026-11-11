@@ -553,7 +553,7 @@ keyboard HP; modal dan panel muat di layar; tabel bisa digeser sendiri; teks pan
 Urutan (centang saat selesai):
 - Fase A, pengguna:
   0. ✅ Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
-  1. Beranda `/`
+  1. ✅ Beranda `/`
   2. Login/daftar `/login`
   3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
   4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
@@ -605,3 +605,16 @@ Dicek di 360, 768, 1024, 1280 (dev server + database lokal). Temuan dan perbaika
   Tailwind), `text-size-adjust`, `touch-action: manipulation`.
 - Feedback 👍/👎: area sentuh lebih besar, kolom komentar memenuhi lebar di HP.
 - Catatan: footer hanya ada di beranda (dicek di nomor 1). Tidak ada perubahan perilaku selain tata letak.
+
+### 23.2 Hasil nomor 1, Beranda (2026-11-11)
+
+Teks/isi tidak diubah (sesuai keinginan pemilik), hanya tata letak. Dicek di 360, 768, 1024, 1440.
+- Halaman di HP 7.515px → 4.932px. Kartu unggulan pertama dulu mulai di 497px (tombolnya di bawah layar pertama);
+  sekarang 356px dan tombol "Buat laporan" terlihat di layar pertama 360×780.
+- Judul hero 48px → 40-44px di HP, 60px di tablet, 72px di 1024, 96px di 1280+ (desktop besar tetap seperti semula);
+  jarak atas dan bawah hero dirapatkan di HP.
+- Studio, Tugas, dan 7 alat bantu di HP tampil sebagai baris ringkas (ikon, judul, deskripsi 2 baris, panah) alih-alih
+  kartu ±300px; mulai 768px tetap kartu penuh seperti sebelumnya (`FeatureCardLink compact`).
+- "Pertanyaan umum" menjadi daftar buka-tutup (`<details>`), teks tetap ada di HTML untuk mesin pencari; JSON-LD FAQ tetap.
+- Area sentuh tautan "Pelajari cara kerja", "Lihat cara kerja", tautan footer, dan tombol "Lihat fitur penyusun laporan"
+  diperbesar (≥40px).

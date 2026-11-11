@@ -23,9 +23,9 @@ export default function Home() {
       <HomeClient />
       {/* Penjelasan yang bisa dibaca mesin pencari dan asisten AI, tampil juga untuk pengguna. */}
       <section aria-labelledby="kenapa" className="w-full bg-white border-t border-slate-100">
-        <div className="mx-auto max-w-5xl px-6 py-16 text-left">
-          <h2 id="kenapa" className="text-2xl md:text-3xl font-black text-slate-900">Kenapa mahasiswa memakai {SITE_NAME}</h2>
-          <div className="mt-8 grid gap-8 md:grid-cols-2">
+        <div className="mx-auto max-w-5xl px-4 sm:px-6 py-12 md:py-16 text-left">
+          <h2 id="kenapa" className="text-xl sm:text-2xl md:text-3xl font-black text-slate-900">Kenapa mahasiswa memakai {SITE_NAME}</h2>
+          <div className="mt-6 md:mt-8 grid gap-8 md:grid-cols-2">
             {FEATURES.map((feature) => (
               <article key={feature.slug}>
                 <h3 className="text-lg font-bold text-slate-900">{feature.name}</h3>
@@ -33,25 +33,29 @@ export default function Home() {
                 <ul className="mt-3 space-y-1.5 text-sm text-slate-600">
                   {feature.benefits.map((benefit) => <li key={benefit.title}><b className="text-slate-800">{benefit.title}.</b> {benefit.text}</li>)}
                 </ul>
-                <Link href={`/fitur/${feature.slug}`} className="mt-3 inline-block text-sm font-bold text-blue-600 hover:underline">Lihat cara kerja {feature.name}</Link>
+                <Link href={`/fitur/${feature.slug}`} className="mt-2 inline-block py-2 text-sm font-bold text-blue-600 hover:underline">Lihat cara kerja {feature.name}</Link>
               </article>
             ))}
           </div>
-          <h2 className="mt-14 text-2xl font-black text-slate-900">Pertanyaan umum</h2>
-          <dl className="mt-6 space-y-5">
+          <h2 className="mt-12 md:mt-14 text-xl sm:text-2xl font-black text-slate-900">Pertanyaan umum</h2>
+          {/* Buka-tutup: teks tetap ada di HTML (terbaca mesin pencari), tapi halaman di HP tidak memanjang ±2.000px. */}
+          <div className="mt-4 md:mt-6 divide-y divide-slate-100 rounded-2xl border border-slate-200">
             {HOME_FAQ.map((item) => (
-              <div key={item.q}>
-                <dt className="font-bold text-slate-900">{item.q}</dt>
-                <dd className="mt-1 text-slate-600">{item.a}</dd>
-              </div>
+              <details key={item.q} className="group px-4 sm:px-5">
+                <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 py-3 font-bold text-slate-900 [&::-webkit-details-marker]:hidden">
+                  <h3 className="flex-1 text-base">{item.q}</h3>
+                  <span aria-hidden="true" className="text-slate-400 transition-transform group-open:rotate-45 text-xl leading-none">+</span>
+                </summary>
+                <p className="pb-4 text-slate-600">{item.a}</p>
+              </details>
             ))}
-          </dl>
+          </div>
         </div>
       </section>
-      <footer className="w-full bg-white py-8 text-center text-sm font-medium text-slate-500">
-        <nav aria-label="Tautan fitur" className="mb-3 flex flex-wrap justify-center gap-4">
-          <Link href="/fitur" className="hover:text-blue-600">Semua fitur</Link>
-          {FEATURES.map((feature) => <Link key={feature.slug} href={`/fitur/${feature.slug}`} className="hover:text-blue-600">{feature.name}</Link>)}
+      <footer className="w-full bg-white px-4 py-8 text-center text-sm font-medium text-slate-500">
+        <nav aria-label="Tautan fitur" className="mb-2 flex flex-wrap justify-center gap-x-5 gap-y-1">
+          <Link href="/fitur" className="py-2 hover:text-blue-600">Semua fitur</Link>
+          {FEATURES.map((feature) => <Link key={feature.slug} href={`/fitur/${feature.slug}`} className="py-2 hover:text-blue-600">{feature.name}</Link>)}
         </nav>
         <p>&copy; {new Date().getFullYear()} {SITE_NAME}</p>
       </footer>

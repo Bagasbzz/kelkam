@@ -190,39 +190,54 @@ const ACCENT: Record<FeatureCard["accent"], { bg: string; text: string; border: 
   },
 };
 
-function FeatureCardLink({ card, large = false, badge, points }: { card: FeatureCard; large?: boolean; badge?: string; points?: string[] }) {
+/**
+ * Kartu fitur. `compact`: di HP tampil sebagai baris ringkas (ikon, judul, deskripsi 2 baris, panah) agar daftar alat
+ * tidak memanjang ±300px per kartu; mulai 768px tampil sebagai kartu penuh seperti biasa.
+ */
+function FeatureCardLink({ card, large = false, badge, points, compact = false }: { card: FeatureCard; large?: boolean; badge?: string; points?: string[]; compact?: boolean }) {
   const a = ACCENT[card.accent];
   const Icon = card.icon;
   return (
     <Link
       href={card.href}
-      className={`group flex flex-col items-start text-left p-6 md:p-8 rounded-[2rem] bg-white/60 backdrop-blur-sm border border-slate-200 ${a.border} hover:shadow-2xl transition-all duration-500 relative overflow-hidden ${
-        large ? "lg:col-span-2" : ""
-      }`}
+      className={`group flex text-left bg-white/60 backdrop-blur-sm border border-slate-200 ${a.border} hover:shadow-2xl transition-all duration-500 relative overflow-hidden ${
+        compact
+          ? "flex-row items-center gap-4 p-4 rounded-2xl md:flex-col md:items-start md:gap-0 md:p-8 md:rounded-[2rem]"
+          : "flex-col items-start p-5 sm:p-6 md:p-8 rounded-[1.75rem] md:rounded-[2rem]"
+      } ${large ? "lg:col-span-2" : ""}`}
     >
       <div className={`absolute top-0 right-0 w-32 h-32 ${a.glow} rounded-full blur-3xl -mr-16 -mt-16 opacity-0 group-hover:opacity-100 transition-opacity duration-500`} />
       <div
-        className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-gradient-to-br ${a.bg} ${a.text} flex items-center justify-center mb-5 md:mb-6 group-hover:scale-110 group-hover:rotate-3 transition-transform duration-500 shadow-sm`}
+        className={`shrink-0 rounded-2xl bg-gradient-to-br ${a.bg} ${a.text} flex items-center justify-center group-hover:scale-110 group-hover:rotate-3 transition-transform duration-500 shadow-sm ${
+          compact ? "w-12 h-12 md:w-16 md:h-16 md:mb-6" : "w-14 h-14 md:w-16 md:h-16 mb-5 md:mb-6"
+        }`}
       >
-        <Icon className="w-7 h-7 md:w-8 md:h-8" />
+        <Icon className={compact ? "w-6 h-6 md:w-8 md:h-8" : "w-7 h-7 md:w-8 md:h-8"} />
       </div>
-      {badge && <span className="absolute top-6 right-6 rounded-full bg-slate-900 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white">{badge}</span>}
-      <h2 className="text-lg md:text-2xl font-black mb-2 md:mb-3 text-slate-900 group-hover:text-slate-900 transition-colors">
-        {card.title}
-      </h2>
-      <p className="text-slate-500 text-sm md:text-base leading-relaxed mb-6 md:mb-8 flex-1 font-medium group-hover:text-slate-600 transition-colors">
-        {card.description}
-      </p>
-      {points && (
-        <ul className="-mt-3 mb-6 space-y-1.5 text-sm font-semibold text-slate-600">
-          {points.map((point) => <li key={point} className="flex gap-2"><span aria-hidden="true" className={a.text}>✓</span>{point}</li>)}
-        </ul>
-      )}
-      <div
-        className={`inline-flex items-center justify-center w-full py-3 md:py-3.5 rounded-xl bg-slate-50 font-bold text-sm md:text-base border border-slate-100 group-hover:border-transparent transition-all duration-300 ${a.btn}`}
-      >
-        {card.cta} <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+      {badge && <span className="absolute top-5 right-5 sm:top-6 sm:right-6 rounded-full bg-slate-900 px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-white">{badge}</span>}
+      <div className={compact ? "min-w-0 flex-1 md:flex md:w-full md:flex-col" : "contents"}>
+        <h2 className={`font-black text-slate-900 group-hover:text-slate-900 transition-colors ${compact ? "text-base md:text-2xl md:mb-3" : "text-xl md:text-2xl mb-2 md:mb-3"}`}>
+          {card.title}
+        </h2>
+        <p className={`text-slate-500 leading-relaxed font-medium group-hover:text-slate-600 transition-colors ${
+          compact ? "mt-0.5 text-sm line-clamp-2 md:line-clamp-none md:mt-0 md:text-base md:mb-8 md:flex-1" : "text-sm sm:text-base mb-6 md:mb-8 flex-1"
+        }`}>
+          {card.description}
+        </p>
+        {points && (
+          <ul className="-mt-3 mb-6 space-y-1.5 text-sm font-semibold text-slate-600">
+            {points.map((point) => <li key={point} className="flex gap-2"><span aria-hidden="true" className={a.text}>✓</span>{point}</li>)}
+          </ul>
+        )}
+        <div
+          className={`items-center justify-center w-full py-3 md:py-3.5 rounded-xl bg-slate-50 font-bold text-sm md:text-base border border-slate-100 group-hover:border-transparent transition-all duration-300 ${a.btn} ${
+            compact ? "hidden md:inline-flex" : "inline-flex"
+          }`}
+        >
+          {card.cta} <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+        </div>
       </div>
+      {compact && <ArrowRight aria-hidden="true" className={`h-5 w-5 shrink-0 md:hidden ${a.text}`} />}
     </Link>
   );
 }
@@ -243,23 +258,23 @@ export default function HomeClient() {
 
   return (
     <div className="min-h-screen flex flex-col bg-white text-slate-800 font-sans">
-      <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
-        <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
+      <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-6 pt-8 pb-14 sm:py-16 md:py-24 flex flex-col items-center text-center">
+        <h1 className="text-[2.5rem] min-[380px]:text-[2.75rem] sm:text-6xl lg:text-7xl xl:text-8xl font-black text-slate-900 mb-4 sm:mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
           Bantuan <span className="text-blue-600">tugas kuliah</span>
           <br />
           di satu tempat
         </h1>
-        <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
+        <p className="text-base sm:text-lg md:text-2xl text-slate-500 max-w-3xl mb-8 sm:mb-12 md:mb-20 leading-relaxed font-medium px-2 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
           Kumpulkan tugas, susun laporan, dan buat diagram tanpa ribet. Pilih yang kamu butuhkan di bawah.
         </p>
 
         {/* Fitur unggulan: Laporan dan Presentasi, selalu paling depan. */}
-        <section aria-label="Fitur unggulan" className="w-full max-w-6xl mb-10 md:mb-14 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
-          <div className="grid md:grid-cols-2 gap-6 md:gap-8 w-full">
+        <section aria-label="Fitur unggulan" className="w-full max-w-6xl mb-8 md:mb-14 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
+          <div className="grid md:grid-cols-2 gap-5 md:gap-8 w-full">
             {FEATURED.map((card) => (
               <div key={card.href} className="flex flex-col">
                 <FeatureCardLink card={card} badge="Unggulan" points={card.points} />
-                <Link href={card.learn} className="mt-3 text-sm font-bold text-slate-500 hover:text-blue-600">
+                <Link href={card.learn} className="mt-1 py-2.5 text-sm font-bold text-slate-500 hover:text-blue-600">
                   Pelajari cara kerja {card.title} →
                 </Link>
               </div>
@@ -267,31 +282,31 @@ export default function HomeClient() {
           </div>
         </section>
 
-        <section className="w-full max-w-6xl mb-16 md:mb-24 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
-          <div className="grid md:grid-cols-2 gap-6 md:gap-8 w-full">
+        <section className="w-full max-w-6xl mb-12 md:mb-24 animate-in fade-in slide-in-from-bottom-12 duration-700 delay-300">
+          <div className="grid md:grid-cols-2 gap-3 md:gap-8 w-full">
             {PRIMARY_FEATURES.map((card) => (
-              <FeatureCardLink key={card.href} card={card} />
+              <FeatureCardLink key={card.href} card={card} compact />
             ))}
           </div>
         </section>
 
         {/* Utility features, sisanya, dikasih section header biar jelas. */}
         <section className="w-full max-w-6xl animate-in fade-in slide-in-from-bottom-12 duration-700 delay-500">
-          <div className="mb-8 md:mb-10">
-            <h2 className="text-2xl md:text-3xl font-bold text-slate-900">
+          <div className="mb-5 md:mb-10">
+            <h2 className="text-xl sm:text-2xl md:text-3xl font-bold text-slate-900">
               Alat bantu lainnya
             </h2>
           </div>
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 md:gap-8 w-full">
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-8 w-full">
             {UTILITY_FEATURES.map((card) => (
-              <FeatureCardLink key={card.href} card={card} />
+              <FeatureCardLink key={card.href} card={card} compact />
             ))}
           </div>
         </section>
 
         <button
           onClick={handleSkripsiClick}
-          className="mt-16 md:mt-20 text-xs font-bold text-slate-400 hover:text-blue-600 transition-colors"
+          className="mt-12 md:mt-20 px-3 py-2.5 text-sm font-bold text-slate-400 hover:text-blue-600 transition-colors"
         >
           Lihat fitur penyusun laporan →
         </button>
