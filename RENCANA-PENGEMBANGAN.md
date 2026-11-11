@@ -552,7 +552,7 @@ keyboard HP; modal dan panel muat di layar; tabel bisa digeser sendiri; teks pan
 
 Urutan (centang saat selesai):
 - Fase A, pengguna:
-  0. Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
+  0. ✅ Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
   1. Beranda `/`
   2. Login/daftar `/login`
   3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
@@ -583,3 +583,25 @@ Database lokal untuk uji (disetujui pemilik 2026-11-11, terpasang): PostgreSQL 1
   `mahasiswa@contoh.test` (pengguna dengan 9 laporan termasuk percakapan panjang & draft, 3 presentasi, tugas di course
   `/tugas/kelas-demo`), `user01..24@contoh.test`. Data analitik 30 hari (kunjungan, login, pemakaian AI, feedback) dan
   pengaturan batas biaya ikut terisi.
+
+### 23.1 Hasil nomor 0, komponen global (2026-11-11)
+
+Dicek di 360, 768, 1024, 1280 (dev server + database lokal). Temuan dan perbaikan:
+- Tombol "Cara pakai?" melayang di kanan bawah menutupi kotak chat dan tombol kirim di HP (dan teks panel di desktop).
+  Sekarang GuidedTour mendaftar ke `src/lib/client/tour-registry.ts`; Navbar menampilkannya di navbar (1024px+, ikon;
+  1280px+ dengan label) dan di bagian atas menu HP/tablet. Panduan otomatis kunjungan pertama tetap jalan.
+- Menu lengkap desktop baru muncul di 1280px, padahal laptop 1366px dengan skala Windows 125% hanya ±1093px → dulu
+  mendapat menu hamburger. Sekarang menu desktop mulai 1024px (teks kecil di 1024-1279, normal di 1280+);
+  "by Bazzcreate" hanya di 1536px+ dan di dalam menu HP.
+- Menu HP: 11 item satu kolom harus digulir. Sekarang "Fitur utama" (4 item besar) + "Alat lainnya" grid 2 kolom, muat
+  tanpa gulir di 360×780; tablet berupa panel lebar 384px di kanan; tinggi memakai `dvh` (aman dengan bar alamat HP).
+- Tombol akun di HP hanya ikon sehingga pengunjung baru tidak melihat "Masuk". Sekarang "Masuk" selalu terlihat saat belum
+  login; saat login hanya ikon di bawah 1280px (email di 1280px+); saat memuat hanya ikon (nama situs tidak terpotong).
+  Tombol akun dan hamburger 44px. Nama situs tidak terpotong di 360px (ukuran teks/jarak menyesuaikan di bawah 380px).
+- Tinggi navbar 76-80px melebihi jarak konten 72px (isi teratas sedikit tertutup). Sekarang maksimal 72px.
+- Modal login/daftar: input 16px di HP (cegah zoom iPhone), `<form>` (Enter & pengelola sandi), `autocomplete`
+  username/current-password/new-password, tombol lihat sandi, tautan "Daftar/Masuk" lebih besar.
+- Global (`globals.css`): semua input/select/textarea 16px di layar <640px (aturan tanpa layer, menang atas text-sm
+  Tailwind), `text-size-adjust`, `touch-action: manipulation`.
+- Feedback 👍/👎: area sentuh lebih besar, kolom komentar memenuhi lebar di HP.
+- Catatan: footer hanya ada di beranda (dicek di nomor 1). Tidak ada perubahan perilaku selain tata letak.

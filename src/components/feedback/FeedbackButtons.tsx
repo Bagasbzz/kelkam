@@ -22,8 +22,8 @@ export default function FeedbackButtons({ feature, targetId }: { feature: "lapor
 
   const button = (value: 1 | -1, label: string, Icon: typeof ThumbsUp) => (
     <button type="button" aria-label={label} aria-pressed={rating === value} onClick={() => void send(value)}
-      className={`rounded-md p-1 transition ${rating === value ? "bg-slate-900 text-white" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"}`}>
-      <Icon className="h-3.5 w-3.5" />
+      className={`rounded-lg p-2 -m-0.5 transition ${rating === value ? "bg-slate-900 text-white" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"}`}>
+      <Icon className="h-4 w-4" />
     </button>
   );
 
@@ -33,9 +33,9 @@ export default function FeedbackButtons({ feature, targetId }: { feature: "lapor
       {button(-1, "Jawaban ini kurang membantu", ThumbsDown)}
       {rating === 1 && <span>Terima kasih.</span>}
       {rating === -1 && !sent && (
-        <form className="flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); void send(-1, comment.trim()); }}>
-          <input value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} placeholder="Apa yang kurang? (opsional)" className="w-56 rounded-md border border-slate-200 px-2 py-1 text-xs text-slate-700" />
-          <button type="submit" className="rounded-md border border-slate-200 px-2 py-1 font-semibold text-slate-600 hover:bg-slate-50">Kirim</button>
+        <form className="flex w-full items-center gap-1.5 sm:w-auto" onSubmit={(e) => { e.preventDefault(); void send(-1, comment.trim()); }}>
+          <input value={comment} onChange={(e) => setComment(e.target.value)} maxLength={500} placeholder="Apa yang kurang? (opsional)" className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2.5 py-2 text-base text-slate-700 sm:w-64 sm:flex-none sm:text-xs" />
+          <button type="submit" className="shrink-0 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 sm:text-xs">Kirim</button>
         </form>
       )}
       {rating === -1 && sent && <span>Masukan tersimpan, terima kasih.</span>}

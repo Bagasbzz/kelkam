@@ -9,7 +9,8 @@
  * Target dicari lewat atribut data-tour; bila tidak terlihat, kartu tampil di tengah.
  */
 import { useCallback, useEffect, useState } from "react";
-import { HelpCircle, X } from "lucide-react";
+import { X } from "lucide-react";
+import { registerTour } from "@/lib/client/tour-registry";
 
 export interface TourStep { target?: string; title: string; text: string }
 
@@ -54,6 +55,9 @@ export default function GuidedTour({ id, steps, label = "Cara pakai?" }: { id: s
     return () => window.cancelAnimationFrame(frame);
   }, [index, steps]);
 
+  // Tombol "Cara pakai?" ditampilkan Navbar (tidak melayang menutupi isi/tombol kirim di HP).
+  useEffect(() => registerTour({ label, start: () => setIndex(0) }), [label]);
+
   useEffect(() => {
     if (index === null) return;
     const onKey = (event: KeyboardEvent) => {
@@ -65,12 +69,7 @@ export default function GuidedTour({ id, steps, label = "Cara pakai?" }: { id: s
     return () => window.removeEventListener("keydown", onKey);
   }, [index, steps.length, finish]);
 
-  const launcher = (
-    <button type="button" onClick={() => setIndex(0)} className="fixed bottom-5 right-5 z-[150] inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2.5 text-sm font-bold text-white shadow-lg hover:bg-slate-800">
-      <HelpCircle className="h-4 w-4" /> {label}
-    </button>
-  );
-  if (index === null) return launcher;
+  if (index === null) return null;
 
   const step = steps[index];
   const pad = 8;
@@ -96,15 +95,15 @@ export default function GuidedTour({ id, steps, label = "Cara pakai?" }: { id: s
       <div className="absolute rounded-2xl bg-white p-5 text-slate-800 shadow-2xl" style={{ ...style, width: cardW }}>
         <div className="flex items-start justify-between gap-3">
           <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Langkah {index + 1} dari {steps.length}</p>
-          <button type="button" onClick={finish} aria-label="Tutup panduan" className="-m-1 rounded-full p-1 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={finish} aria-label="Tutup panduan" className="-m-2 rounded-full p-2 text-slate-400 hover:bg-slate-100"><X className="h-5 w-5" /></button>
         </div>
         <h2 id="tour-title" className="mt-1 text-lg font-black text-slate-900">{step.title}</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-600">{step.text}</p>
         <div className="mt-4 flex items-center gap-2">
-          <button type="button" onClick={finish} className="text-sm font-semibold text-slate-500 hover:text-slate-800">Lewati</button>
+          <button type="button" onClick={finish} className="py-2 text-sm font-semibold text-slate-500 hover:text-slate-800">Lewati</button>
           <div className="ml-auto flex gap-2">
-            {index > 0 && <button type="button" onClick={() => setIndex(index - 1)} className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm font-bold text-slate-700 hover:bg-slate-50">Kembali</button>}
-            <button type="button" onClick={() => (last ? finish() : setIndex(index + 1))} className="rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-bold text-white hover:bg-blue-700">{last ? "Selesai" : "Lanjut"}</button>
+            {index > 0 && <button type="button" onClick={() => setIndex(index - 1)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Kembali</button>}
+            <button type="button" onClick={() => (last ? finish() : setIndex(index + 1))} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700">{last ? "Selesai" : "Lanjut"}</button>
           </div>
         </div>
         <div className="mt-3 flex gap-1" aria-hidden="true">

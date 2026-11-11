@@ -22,6 +22,25 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
   overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/*
+ * HP: kolom isian minimal 16px agar iPhone/Safari tidak memperbesar layar saat mengetik.
+ * Sengaja di luar @layer: aturan tanpa layer menang atas utilitas Tailwind (text-sm/text-xs) tanpa !important.
+ */
+@media (max-width: 639px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Ketuk cepat tanpa jeda zoom dua kali pada tombol & tautan. */
+a, button, [role="button"], label, summary {
+  touch-action: manipulation;
 }
 
 @keyframes bounce {

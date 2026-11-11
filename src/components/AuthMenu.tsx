@@ -27,7 +27,7 @@
 
 import { getErrorMessage } from "@/lib/errors";
 import { useEffect, useState } from "react";
-import { LogIn, LogOut, UserRound, X } from "lucide-react";
+import { Eye, EyeOff, LogIn, LogOut, UserRound, X } from "lucide-react";
 import { subscribeLoginModal, useAuth } from "@/components/AuthProvider";
 
 export default function AuthMenu() {
@@ -39,6 +39,7 @@ export default function AuthMenu() {
   const [name, setName] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Subscribe ke global trigger supaya komponen manapun (mis. SubmissionForm)
   // bisa minta buka modal login tanpa harus lewat props drilling.
@@ -110,10 +111,13 @@ export default function AuthMenu() {
           setOpen(true);
           setMode("login");
         }}
-        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white/90 px-3 py-2 text-xs font-black text-slate-700 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-700"
+        aria-label={loading ? "Memuat akun" : user ? `Akun: ${user.email}` : "Masuk atau daftar"}
+        className="inline-flex h-11 min-w-11 items-center justify-center gap-1.5 sm:gap-2 rounded-xl border border-slate-200 bg-white/90 px-2.5 sm:px-3 text-sm font-black text-slate-700 shadow-sm transition-colors hover:border-blue-300 hover:text-blue-700"
       >
-        {user ? <UserRound className="h-4 w-4" /> : <LogIn className="h-4 w-4" />}
-        <span className="hidden sm:inline max-w-32 truncate">{loading ? "Memuat…" : user?.email || "Masuk"}</span>
+        {user ? <UserRound className="h-5 w-5 xl:h-4 xl:w-4" /> : <LogIn className="h-4 w-4" />}
+        {/* Belum login: "Masuk" selalu terlihat (juga di HP). Sudah login: email di layar lebar (1280px+), selain itu ikon saja. */}
+        {/* Saat memuat cukup ikon (agar lebar tombol tidak melompat dan nama situs tidak terpotong di HP). */}
+        {!loading && <span className={`${user ? "hidden xl:inline" : "inline"} max-w-40 truncate`}>{user?.email || "Masuk"}</span>}
       </button>
 
       {/* Modal login / register */}
@@ -127,7 +131,7 @@ export default function AuthMenu() {
           }}
           className="fixed inset-0 z-[250] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm overflow-y-auto"
         >
-          <div className="w-full max-w-md my-auto max-h-[calc(100vh-2rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
+          <div className="w-full max-w-md my-auto max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 sm:p-6 shadow-2xl">
             <div className="mb-6 flex items-start justify-between gap-4">
               <div>
                 <h2 id="auth-modal-title" className="text-xl font-black text-slate-900">
@@ -173,8 +177,14 @@ export default function AuthMenu() {
                 </button>
               </div>
             ) : (
-              // Form login / register
-              <div className="space-y-3">
+              // Form login / register. Teks input 16px di HP agar iPhone tidak memperbesar layar saat mengetik.
+              <form
+                className="space-y-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submit();
+                }}
+              >
                 {mode === "register" && (
                   <div>
                     <label className="block text-xs font-black uppercase tracking-wider text-slate-500" htmlFor="auth-name">
@@ -185,7 +195,8 @@ export default function AuthMenu() {
                       value={name}
                       onChange={(event) => setName(event.target.value)}
                       placeholder="Nama panggilan"
-                      className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                      autoComplete="name"
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-base sm:text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                     />
                   </div>
                 )}
@@ -196,36 +207,45 @@ export default function AuthMenu() {
                   <input
                     id="auth-email"
                     type="email"
+                    inputMode="email"
+                    autoComplete={mode === "login" ? "username" : "email"}
+                    autoCapitalize="none"
+                    required
                     value={email}
                     onChange={(event) => setEmail(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void submit();
-                    }}
                     placeholder="nama@email.com"
-                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-base sm:text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-black uppercase tracking-wider text-slate-500" htmlFor="auth-password">
                     Password
                   </label>
-                  <input
-                    id="auth-password"
-                    type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") void submit();
-                    }}
-                    placeholder={mode === "register" ? "Minimal 8 karakter" : "Password"}
-                    className="mt-1 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
-                  />
+                  <div className="relative mt-1">
+                    <input
+                      id="auth-password"
+                      type={showPassword ? "text" : "password"}
+                      autoComplete={mode === "login" ? "current-password" : "new-password"}
+                      required
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      placeholder={mode === "register" ? "Minimal 8 karakter" : "Password"}
+                      className="w-full rounded-xl border border-slate-200 py-3 pl-4 pr-12 text-base sm:text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                      className="absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-r-xl text-slate-400 hover:text-slate-700"
+                    >
+                      {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </div>
                 <button
-                  type="button"
-                  onClick={() => void submit()}
+                  type="submit"
                   disabled={busy}
-                  className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-black text-white disabled:opacity-50"
+                  className="w-full rounded-xl bg-blue-600 px-4 py-3.5 text-base sm:text-sm font-black text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   {busy ? "Memproses…" : mode === "login" ? "Masuk" : "Daftar"}
                 </button>
@@ -235,11 +255,11 @@ export default function AuthMenu() {
                     setStatus(null);
                     setMode(mode === "login" ? "register" : "login");
                   }}
-                  className="w-full text-xs font-bold text-slate-500 hover:text-blue-600"
+                  className="w-full rounded-xl py-2.5 text-sm font-bold text-slate-600 hover:bg-slate-50 hover:text-blue-600"
                 >
-                  {mode === "login" ? "Belum punya akun? Daftar" : "Sudah punya akun? Masuk"}
+                  {mode === "login" ? <>Belum punya akun? <span className="text-blue-600">Daftar</span></> : <>Sudah punya akun? <span className="text-blue-600">Masuk</span></>}
                 </button>
-              </div>
+              </form>
             )}
 
             {status && <p className="mt-4 rounded-xl bg-blue-50 p-3 text-sm font-semibold text-blue-800">{status}</p>}
