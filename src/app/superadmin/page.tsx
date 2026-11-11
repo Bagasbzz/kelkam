@@ -7,6 +7,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser, isSuperAdmin } from "@/lib/server/auth";
 import { loadSuperAdminStats } from "@/lib/server/superadmin-stats";
+import { loadAiCostOverview } from "@/lib/server/ai-cost";
+import AiCostPanel from "@/components/superadmin/AiCostPanel";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Super Admin", robots: { index: false, follow: false } };
@@ -50,7 +52,7 @@ export default async function SuperAdminPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?redirect=/");
   if (!isSuperAdmin(user)) notFound();
-  const s = await loadSuperAdminStats();
+  const [s, aiCost] = await Promise.all([loadSuperAdminStats(), loadAiCostOverview()]);
   const maxSignup = Math.max(1, ...s.signupsByDay.map((day) => day.count));
 
   return (
@@ -116,6 +118,10 @@ export default async function SuperAdminPage() {
           <Table head={["Fitur/operasi (7 hari)", "Panggilan", "Token"]} rows={s.ai.byOperation.map((row) => [row.operation, row.calls, row.tokens])} />
         </div>
         <div className="mt-4"><Table head={["Pengguna AI terbanyak (7 hari)", "Panggilan", "Token"]} rows={s.ai.topUsers.map((row) => [row.email, row.calls, row.tokens])} /></div>
+      </Section>
+
+      <Section title="Batas biaya AI (rupiah)">
+        <AiCostPanel initial={aiCost} />
       </Section>
 
       <Section title="Feedback pengguna (30 hari)">

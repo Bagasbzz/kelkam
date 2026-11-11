@@ -983,3 +983,14 @@ model AdminAuditLog {
   @@index([targetId])
   @@map("admin_audit_logs")
 }
+
+/// Pengaturan sistem yang bisa diubah super admin tanpa deploy (Tahap 2). Satu baris per kunci, isi JSON.
+/// Kunci "ai_cost": batas biaya AI dalam rupiah (global & per pengguna, harian/mingguan/bulanan) + harga model.
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedBy String?  @map("updated_by")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}

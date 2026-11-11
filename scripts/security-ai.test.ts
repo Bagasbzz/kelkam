@@ -50,6 +50,7 @@ test("writer model is AI_MODEL (Claude by default) and known-slow GPT-5/6 IDs fa
         if (id === "openai" || id === "@/lib/ai/guard" || id === "@/lib/server/safe-fetch") return {};
         if (id === "@/lib/server/ai-budget") return { budgetLimit };
         if (id === "@/lib/server/analytics") return { recordAiUsage: () => undefined, usageFromResponse: async () => ({}) };
+        if (id === "@/lib/server/ai-cost") return { assertAiCostAllowed: async () => undefined };
         throw new Error(`Unexpected dependency: ${id}`);
       },
     });

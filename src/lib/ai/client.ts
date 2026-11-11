@@ -3,6 +3,7 @@ import { AI_SECURITY_POLICY, AI_SECURITY_POLICY_MARKER, leaksSystemPrompt, sanit
 import { safeFetch } from "@/lib/server/safe-fetch";
 import { AiBudgetError, budgetLimit, estimateAiCharge, getAiOwnerContext, reserveAiBudget } from "@/lib/server/ai-budget";
 import { recordAiUsage, usageFromResponse } from "@/lib/server/analytics";
+import { assertAiCostAllowed } from "@/lib/server/ai-cost";
 
 /**
  * Model routing (dikembalikan 2026-11-10 ke perilaku sebelum audit keamanan 844dd00, yang terbukti
@@ -138,6 +139,8 @@ export async function budgetedAiFetch(input: RequestInfo | URL, init?: RequestIn
   if (kind === "chat" && body.model !== AI_MODEL_FAST && body.model !== AI_MODEL_REVIEW && body.model !== AI_MODEL_DEFAULT || kind === "image" && body.model !== AI_MODEL_IMAGE) throw new AiBudgetError("Model AI belum diizinkan.");
   const charge = estimateAiCharge(body, kind, AI_MODEL_FAST);
   charge.provider = configured.hostname;
+  // Batas biaya rupiah dari panel super admin (global & per pengguna), dicek sebelum kuota harian lama.
+  await assertAiCostAllowed(context.ownerId, charge);
   await reserveAiBudget(context, charge);
   const signal = context.signal && init.signal ? AbortSignal.any([context.signal, init.signal]) : context.signal ?? init.signal;
   signal?.throwIfAborted();

@@ -56,7 +56,7 @@ Terakhir diperbarui: 2026-11-09
 |---|---|---|---|
 | K1 | Batas per pengguna | **Belum dipakai.** User bebas. Nanti bisa dinyalakan, lalu mungkin premium. | Diterapkan 2026-11-07 (lihat Log) |
 | K2 | Saklar batas & premium | Dirancang terpisah (rem global selalu aktif, kuota on/off, premium on/off bergantung kuota). Pemilik belum memutuskan detail. | Rancangan |
-| K3 | Satuan kuota (per pemakaian tool / kredit / token) | Belum diputuskan; perlu dijelaskan ulang ke pemilik dengan contoh. | Terbuka |
+| K3 | Satuan kuota (per pemakaian tool / kredit / token) | **Rupiah saldo** (keputusan pemilik 2026-11-11): batas global dan per pengguna ditulis dalam rupiah, diatur dari panel super admin, periode harian/mingguan/bulanan. Kurs Mindaku 1 USD = Rp1.000 (batas Rp50.000 = kredit 50 USD). Token input/output dihitung sistem dari tabel harga per model. Lihat bagian 21. | Diterapkan 2026-11-11 |
 | K4 | Akses isi prompt | Boleh keduanya: ringkasan tema keluhan **dan** isi mentah bila pemilik meminta. Akses mentah hanya super admin, tercatat (audit), ada masa simpan. | Disetujui |
 | K5 | Identitas super admin | Dikunci ke ID akun di DB + role, bukan teks email; ditambah 2FA atau login Google yang terikat. | Disetujui |
 | K6 | Login sandi setelah ada Google | Tetap ada. | Disetujui |
@@ -114,10 +114,10 @@ Terakhir diperbarui: 2026-11-09
 |---|---|---|
 | 0 | Lepas batas AI per pengguna (user bebas), rem global dinaikkan | ✅ Selesai 2026-11-07 |
 | 1 | Role `SUPER_ADMIN`/`PENGAJAR` + tutup celah reset sandi & ubah role + log audit | ✅ 2026-11-11 (versi tanpa ubah enum DB, lihat bagian 19) |
-| 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | Belum mulai |
+| 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | Sebagian: tabel `app_settings` ada (2026-11-11, dipakai batas biaya); mode maintenance belum |
 | 3 | Pencatatan data: aktivitas, login, last_seen, token aktual, feedback 👍/👎 | ✅ Kode selesai 2026-11-10; aktif setelah SQL `database-hotfix-2026-11-10-analytics.sql` dijalankan |
 | 4 | Dashboard analitik ringkasan + detail pengguna | Belum mulai |
-| 5 | Mesin kuota di DB (posisi mati) | Belum mulai |
+| 5 | Mesin kuota di DB (posisi mati) | ✅ 2026-11-11 dalam bentuk batas biaya rupiah (bagian 21), posisi mati sampai diaktifkan di panel |
 | 6 | Paket premium + pembayaran manual QRIS (posisi mati) | Belum mulai |
 | 7 | Halaman kebijakan privasi & syarat layanan, lalu login Google (+ layanan email bila perlu) | Belum mulai |
 
@@ -463,3 +463,43 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   `scripts/report-chat.test.ts`.
 - Sesi lama yang sudah tersimpan `minSources = 50`: pengguna cukup klik "Setujui & eksekusi" lalu "Tetap tulis dengan
   47 sumber", atau bilang ke agen bahwa 50 itu maksimal (agen akan menghapus syarat minimal).
+
+## 21. Batas biaya AI dalam rupiah dari panel super admin (2026-11-11, SELESAI DIKERJAKAN)
+
+- Permintaan pemilik: batas global dan per pengguna diatur dari dashboard admin, satuannya **nominal saldo rupiah**,
+  bukan token. Contoh: saldo Mindaku diisi Rp100.000, batas dipasang Rp50.000 (= kredit 50 USD, kurs 1 USD = Rp1.000).
+  Hitungan token input/output diserahkan ke sistem.
+- Kondisi sekarang: rem global hanya lewat env (`AI_DAILY_UNITS_GLOBAL`, satuan "unit" perkiraan), batas per pengguna lewat
+  env `AI_USER_LIMITS_ENABLED`. Belum bisa diubah dari panel. Token aktual per panggilan sudah tercatat di `ai_usage`
+  (Tahap 3), jadi biaya rupiah bisa dihitung dari data itu.
+- Usulan teknis (gabungan Tahap 2 + Tahap 5): tabel `settings` (kurs Rp/USD, batas global Rp, batas per pengguna Rp,
+  saklar on/off) + tabel harga per model (USD per 1 juta token input/output, bisa diedit di panel; bawaan claude-sonnet-5
+  2/10, model lain diisi pemilik dari daftar harga Mindaku). Sebelum panggilan AI: cadangan perkiraan; sesudah: koreksi
+  dengan token aktual dari `ai_usage`. Panel menampilkan "terpakai Rp X dari Rp Y" global dan per pengguna. Super admin
+  dikecualikan. Rem byte/unit lama tetap sebagai pengaman cadangan.
+- Perkiraan biaya satu skripsi lengkap ±100 halaman (±30.000 kata), claude-sonnet-5 harga 2/10 USD per 1 juta token,
+  dihitung dari kode (bukan data nyata): tahap chat (rencana, cari sumber, matriks) ±0,3-0,6 juta token input; penulisan
+  ±12-15 bagian × ±18 ribu token input dan ±7 ribu output; audit bab + audit akhir + perbaikan ±0,1-0,3 juta input.
+  Total ±0,8-1,3 juta input + ±0,15-0,25 juta output ≈ 3,5-5 USD ≈ **Rp3.500-5.000**; dengan revisi, percobaan ulang,
+  gambar, dan diagram **±Rp5.000-10.000**. Perlu dicocokkan dengan data `ai_usage` dari skripsi nyata di panel.
+- Jawaban pemilik: periode bisa diatur **harian, mingguan, dan bulanan**; pemilik meminta fitur ini dikerjakan lebih dulu.
+- **Dikerjakan 2026-11-11:**
+  - Tabel `app_settings` (kunci `ai_cost`, isi JSON): migrasi `20261111120000_app_settings` + SQL manual
+    `database-hotfix-2026-11-11-app-settings.sql` (wajib dijalankan di phpPgAdmin; `db-health` ikut mengecek).
+  - `src/lib/server/ai-cost.ts`: pengaturan (saklar, kurs Rp/USD bawaan 1.000, batas global dan per pengguna untuk
+    harian/mingguan/bulanan, kosong = tanpa batas, harga model USD per 1 juta token input/output, harga bawaan untuk model
+    yang belum diisi = 2/10, harga gambar bawaan 0,05 USD). Periode WIB: hari, minggu mulai Senin, bulan mulai tanggal 1.
+    Biaya = token di `ai_usage` (semua baris, termasuk yang gagal, agar aman) x harga x kurs.
+  - Pengecekan di `budgetedAiFetch` (`src/lib/ai/client.ts`) sebelum tiap panggilan provider: terpakai + perkiraan panggilan
+    ini (input perkiraan + max_tokens) > batas → ditolak dengan pesan jelas ("Batas pemakaian AI akun Anda untuk hari ini
+    sudah tercapai. Coba lagi besok." / versi global). Super admin dikecualikan dari batas per pengguna; batas global
+    berlaku untuk semua. Cache: pengaturan 30 dtk, pemakaian 10 dtk, jadi proses paralel bisa sedikit melewati batas.
+    Bila DB/`ai_usage` bermasalah, pengecekan dilewati (rem harian lama di `ai-budget.ts` tetap aktif).
+  - Panel `/superadmin` seksi "Batas biaya AI (rupiah)" (`src/components/superadmin/AiCostPanel.tsx`): kartu terpakai
+    hari/minggu/bulan ini vs batas global, form batas + kurs + harga model (daftar model diambil dari pemakaian 30 hari),
+    tabel pengguna dengan biaya terbesar bulan ini. API `GET/PUT /api/admin/ai-cost` (super admin saja, tercatat di log audit
+    `set-ai-cost`). Input rupiah menerima "50.000".
+  - Tes `scripts/ai-cost.test.ts`; seluruh 335 tes lulus, typecheck bersih. Belum dicek di browser (butuh login + DB).
+- Langkah pemilik setelah deploy: (1) jalankan `database-hotfix-2026-11-11-app-settings.sql` (dan SQL analytics
+  2026-11-10 bila belum); (2) buka `/superadmin`, isi harga model sesuai Mindaku, isi batas, centang "Batas biaya aktif",
+  simpan.
