@@ -101,3 +101,15 @@ test("old persisted provider failures are redacted without rewriting regular cha
     assert.equal(toPublicAssistantMessage(content), content);
   }
 });
+
+test("maksimal sumber tidak diperlakukan sebagai syarat minimal, dan syarat minimal bisa dihapus", async () => {
+  const assistant = await readFile(new URL("../src/lib/server/laporan/assistant.ts", import.meta.url), "utf8");
+  assert.match(assistant, /maxSources: \{ type: "number"/);
+  assert.match(assistant, /'maksimal N', 'sekitar N', 'N aja' BUKAN minimal/);
+  assert.match(assistant, /if \(p\.minSources > 0\)[^\n]*\n\s*else delete next\.minSources;/);
+  assert.match(assistant, /code: "min_sources"/);
+  const page = await readFile(new URL("../src/app/dashboard/page.tsx", import.meta.url), "utf8");
+  assert.match(page, /execute\(true\)[\s\S]{0,120}Tetap tulis dengan/);
+  const message = "Sumber tercentang baru 47, sedangkan syarat minimal di brief 50. Anda bisa tetap menulis dengan 47 sumber, atau minta asisten mencari sumber lagi.";
+  assert.equal(getErrorMessage(new Error(message)), message);
+});

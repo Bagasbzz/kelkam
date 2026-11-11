@@ -5,7 +5,7 @@
 import { NextResponse } from "next/server";
 import { authenticateRequestFromCookie } from "@/lib/server/auth";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
-import { executeSession } from "@/lib/server/laporan/assistant";
+import { executeSession, MinSourcesError } from "@/lib/server/laporan/assistant";
 import { toPublicErrorMessage } from "@/lib/errors";
 
 export const runtime = "nodejs";
@@ -24,6 +24,9 @@ export async function POST(req: Request, context: { params: Promise<{ sessionId:
     return NextResponse.json({ success: true, ...result }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
     if (error instanceof ApiRequestError) return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
+    if (error instanceof MinSourcesError) {
+      return NextResponse.json({ success: false, error: error.message, code: "min_sources", usable: error.usable, minSources: error.minSources }, { status: 409 });
+    }
     console.error("laporan execute failed:", error);
     if (error instanceof Error) {
       const notFound = /tidak ditemukan/i.test(error.message);

@@ -75,7 +75,12 @@ const KIND_BADGE: Record<SourceKind, string> = {
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authenticatedFetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers || {}) } });
   const data = (await res.json().catch(() => null)) as (T & { success?: boolean; error?: string }) | null;
-  if (!res.ok || !data?.success) throw new Error(data?.error || `Permintaan gagal (${res.status}).`);
+  if (!res.ok || !data?.success) {
+    const err = new Error(data?.error || `Permintaan gagal (${res.status}).`) as Error & { code?: string; data?: unknown };
+    err.code = (data as { code?: string } | null)?.code;
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
@@ -112,6 +117,8 @@ export default function LaporanPage() {
   const sendLockRef = useRef(false);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const [executing, setExecuting] = useState(false);
+  /** Eksekusi ditolak karena sumber di bawah syarat minimal: tawarkan tetap lanjut. */
+  const [sourceShortfall, setSourceShortfall] = useState<{ usable: number; message: string } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -376,13 +383,18 @@ export default function LaporanPage() {
 
   const execute = async (ignoreMinSources = false) => {
     if (!activeId || executing) return;
-    setExecuting(true); setError(null);
+    setExecuting(true); setError(null); setSourceShortfall(null);
     try {
       const data = await api<{ jobId: string }>(`/api/laporan/sessions/${activeId}/execute`, { method: "POST", body: JSON.stringify({ ignoreMinSources }) });
       await loadDetail(activeId);
       setJob(await peekJob(data.jobId));
       pollJob(data.jobId);
-    } catch (e) { setError(getErrorMessage(e)); }
+    } catch (e) {
+      const info = e as { code?: string; data?: { usable?: number } };
+      const message = getErrorMessage(e);
+      if (info.code === "min_sources" && info.data?.usable) setSourceShortfall({ usable: info.data.usable, message });
+      setError(message);
+    }
     finally { setExecuting(false); }
   };
 
@@ -900,6 +912,11 @@ export default function LaporanPage() {
           <div className="border-t border-slate-200 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:px-6">
             <div className="mx-auto max-w-3xl">
               {error && <div role="alert" className="mb-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{getErrorMessage(error)}</div>}
+              {sourceShortfall && error === sourceShortfall.message && !jobActive && (
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <Chip onClick={() => execute(true)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> Tetap tulis dengan {sourceShortfall.usable} sumber</Chip>
+                </div>
+              )}
               {detail && (
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
@@ -1001,7 +1018,7 @@ function BriefView({ brief }: { brief: ReportBrief }) {
     ["Jenis", brief.documentType], ["Judul", brief.title], ["Topik", brief.topic], ["Mata kuliah", brief.course], ["Kampus", brief.institution],
     ["Penyusun", [brief.studentName, brief.studentId && `NIM ${brief.studentId}`].filter(Boolean).join(" · ") || undefined],
     ["Dosen", brief.lecturer], ["Prodi", [brief.program, brief.faculty].filter(Boolean).join(" · ") || undefined],
-    ["Sitasi", brief.citationStyle], ["Syarat jurnal", brief.journalRequirement ? `${brief.journalRequirement}${brief.minSources ? ` · min ${brief.minSources}` : ""}${brief.yearFrom ? ` · ≥${brief.yearFrom}` : ""}` : undefined],
+    ["Sitasi", brief.citationStyle], ["Syarat jurnal", brief.journalRequirement ? `${brief.journalRequirement}${brief.minSources ? ` · min ${brief.minSources}` : ""}${brief.maxSources ? ` · maks ${brief.maxSources}` : ""}${brief.yearFrom ? ` · ≥${brief.yearFrom}` : ""}` : undefined],
     ["Format", brief.formatRules], ["Target", brief.targetLength],
   ];
   const filled = rows.filter(([, v]) => v);

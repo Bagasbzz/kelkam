@@ -447,3 +447,19 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   origin admin diizinkan di `csrf-origin.ts` (atau env `ADMIN_ORIGIN`). Sesi login di subdomain terpisah dari domain utama.
   Langkah cPanel: buat subdomain `admin`, salin blok `Passenger...` dari `.htaccess` domain utama ke `.htaccess`
   document root subdomain, aktifkan SSL (AutoSSL). Sampai itu selesai, panel bisa dibuka di `/superadmin`.
+
+## 20. Perbaikan: "maksimal 50 sumber" terbaca sebagai syarat minimal (2026-11-11)
+
+- Kasus: pengguna menulis "50 aja maksimal nya". Agen menyimpan `brief.minSources = 50`. Setelah 47 sumber tercentang,
+  tombol "Setujui & eksekusi" ditolak ("syarat minimal 50"), walaupun pengguna sudah menegaskan kurang sedikit tidak apa-apa
+  dan agen menjawab "aman". Penyebab: (1) field `minSources` di tool `updateBrief` tanpa penjelasan, tidak ada field
+  maksimal; (2) `mergeBrief` tidak bisa menghapus `minSources` (nilai 0 diabaikan); (3) agen hanya menjawab tanpa
+  memperbarui brief; (4) tombol UI tidak punya pilihan tetap lanjut, dan pesan error berisi nama tool internal.
+- Perbaikan (`src/lib/server/laporan/assistant.ts`, `src/app/dashboard/page.tsx`, route `execute`):
+  field baru `brief.maxSources` (batas atas, tidak memblokir); `minSources: 0` menghapus syarat; deskripsi tool dan prompt
+  membedakan "minimal N" vs "maksimal/sekitar N" dan mewajibkan `updateBrief` saat pengguna melonggarkan syarat; state
+  prompt menampilkan syarat min/maks; tombol eksekusi yang ditolak karena kurang sumber kini menampilkan pesan yang jelas
+  dan tombol "Tetap tulis dengan N sumber" (memakai `ignoreMinSources` yang sudah ada di server). Tes di
+  `scripts/report-chat.test.ts`.
+- Sesi lama yang sudah tersimpan `minSources = 50`: pengguna cukup klik "Setujui & eksekusi" lalu "Tetap tulis dengan
+  47 sumber", atau bilang ke agen bahwa 50 itu maksimal (agen akan menghapus syarat minimal).
