@@ -566,7 +566,7 @@ Urutan (centang saat selesai):
   11. Rapikan Format `/fix-format`
   12. PDF, Word & Gambar `/tools`
   13. Pantau Progres `/tracker`
-  14. Halaman publik fitur `/fitur`, `/fitur/laporan-ai`, `/fitur/ppt-ai`; `/maintenance`; halaman 404
+  14. ✅ Halaman publik fitur `/fitur`, `/fitur/laporan-ai`, `/fitur/ppt-ai`; `/maintenance`; halaman 404
   15. `/research/new` (tidak ada di menu; cek apakah masih dipakai)
 - Fase B, dosen/admin Tugas: `/tugas/admin694` (daftar course), `/tugas/admin694/users`, `/tugas/admin694/insights`,
   `/tugas/[token]/admin` (kelola course), `.../admin/mahasiswas`, `.../admin/tugas/new`, `.../admin/tugas/[id]/edit`,
@@ -639,3 +639,13 @@ Dicek di 360, 768, 1280 (mode masuk dan daftar), tanpa geser samping. Teks tidak
 - Tautan "Beranda" dan tombol "Belum punya akun?/Sudah punya akun?" kini area sentuh 44px; catatan cookie 11px → 12px.
 - Tinggi halaman memperhitungkan navbar (dulu `min-h-screen` + jarak 72px membuat halaman selalu bisa digulir);
   jarak dalam kartu 24px di HP (32px mulai 640px).
+
+### 23.5 Hasil nomor 14, halaman publik (2026-11-11)
+
+`/fitur`, `/fitur/laporan-ai`, `/maintenance`, 404. Dicek di 360, 768, 1280, tanpa geser samping. Teks lama tidak diubah.
+- Jarak tepi/atas halaman lebih rapat di HP (16px/32px), judul 30px di HP (36px tablet, 48px desktop seperti semula).
+- `/fitur`: tautan "Cara kerja"/"Buka aplikasi" area sentuh 44px; seluruh kartu "Alat lain" kini bisa diketuk.
+- `/fitur/[slug]`: dua tombol ajakan selebar layar di HP; tautan breadcrumb dan "Fitur lain" lebih tinggi (36px).
+- `/maintenance`: tombol 44px, jarak kartu menyesuaikan HP.
+- Baru: `src/app/not-found.tsx` (dulu memakai 404 bawaan Next.js berbahasa Inggris): "Halaman tidak ditemukan", tombol
+  "Kembali ke beranda" dan "Lihat semua fitur", `noindex`.

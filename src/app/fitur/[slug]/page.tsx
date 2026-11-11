@@ -25,20 +25,20 @@ export default async function FeaturePage({ params }: { params: Promise<{ slug: 
     ],
   };
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-14 text-slate-800">
+    <main className="mx-auto w-full max-w-4xl px-4 py-8 text-slate-800 sm:px-6 sm:py-14">
       <JsonLd data={appJsonLd(feature)} />
       <JsonLd data={howToJsonLd(feature)} />
       <JsonLd data={faqJsonLd(feature.faq)} />
       <JsonLd data={breadcrumb} />
-      <nav aria-label="Breadcrumb" className="text-sm text-slate-500"><Link href="/" className="hover:underline">Beranda</Link> / <Link href="/fitur" className="hover:underline">Fitur</Link> / {feature.name}</nav>
-      <h1 className="mt-4 text-4xl md:text-5xl font-black leading-tight text-slate-900">{feature.title}</h1>
-      <p className="mt-5 text-lg text-slate-600">{feature.description}</p>
+      <nav aria-label="Breadcrumb" className="text-sm text-slate-500"><Link href="/" className="inline-block py-2 hover:underline">Beranda</Link> / <Link href="/fitur" className="inline-block py-2 hover:underline">Fitur</Link> / {feature.name}</nav>
+      <h1 className="mt-2 text-3xl sm:mt-4 sm:text-4xl md:text-5xl font-black leading-tight text-slate-900">{feature.title}</h1>
+      <p className="mt-4 text-base text-slate-600 sm:mt-5 sm:text-lg">{feature.description}</p>
       <div className="mt-8 flex flex-wrap gap-3">
-        <Link href={feature.appHref} className="rounded-xl bg-blue-600 px-5 py-3 font-bold text-white hover:bg-blue-700">Coba {feature.name} sekarang</Link>
-        <Link href={`${feature.appHref}?panduan=1`} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-bold text-slate-700 hover:border-blue-400">Lihat panduan interaktif</Link>
+        <Link href={feature.appHref} className="w-full rounded-xl bg-blue-600 px-5 py-3 text-center font-bold sm:w-auto text-white hover:bg-blue-700">Coba {feature.name} sekarang</Link>
+        <Link href={`${feature.appHref}?panduan=1`} className="w-full rounded-xl border border-slate-300 bg-white px-5 py-3 text-center font-bold sm:w-auto text-slate-700 hover:border-blue-400">Lihat panduan interaktif</Link>
       </div>
 
-      <h2 className="mt-14 text-2xl font-black text-slate-900">Cara kerja</h2>
+      <h2 className="mt-10 text-2xl sm:mt-14 font-black text-slate-900">Cara kerja</h2>
       <p className="mt-3 text-slate-600">{feature.summary}</p>
       <ol className="mt-6 space-y-4">
         {feature.steps.map((step, i) => (
@@ -49,7 +49,7 @@ export default async function FeaturePage({ params }: { params: Promise<{ slug: 
         ))}
       </ol>
 
-      <h2 className="mt-14 text-2xl font-black text-slate-900">Keunggulan</h2>
+      <h2 className="mt-10 text-2xl sm:mt-14 font-black text-slate-900">Keunggulan</h2>
       <div className="mt-6 grid gap-5 md:grid-cols-2">
         {feature.benefits.map((benefit) => (
           <article key={benefit.title} className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -59,15 +59,15 @@ export default async function FeaturePage({ params }: { params: Promise<{ slug: 
         ))}
       </div>
 
-      <h2 className="mt-14 text-2xl font-black text-slate-900">Pertanyaan umum</h2>
+      <h2 className="mt-10 text-2xl sm:mt-14 font-black text-slate-900">Pertanyaan umum</h2>
       <dl className="mt-6 space-y-5">
         {feature.faq.map((item) => (
           <div key={item.q}><dt className="font-bold text-slate-900">{item.q}</dt><dd className="mt-1 text-slate-600">{item.a}</dd></div>
         ))}
       </dl>
 
-      <p className="mt-14 text-sm text-slate-500">
-        Fitur lain: {FEATURES.filter((item) => item.slug !== feature.slug).map((item) => <Link key={item.slug} href={`/fitur/${item.slug}`} className="font-bold text-blue-600 hover:underline">{item.name}</Link>)} · <Link href="/fitur" className="font-bold text-blue-600 hover:underline">semua alat</Link>
+      <p className="mt-10 text-sm text-slate-500 sm:mt-14">
+        Fitur lain: {FEATURES.filter((item) => item.slug !== feature.slug).map((item) => <Link key={item.slug} href={`/fitur/${item.slug}`} className="mr-1 inline-block py-2 font-bold text-blue-600 hover:underline">{item.name}</Link>)} · <Link href="/fitur" className="inline-block py-2 font-bold text-blue-600 hover:underline">semua alat</Link>
       </p>
     </main>
   );
