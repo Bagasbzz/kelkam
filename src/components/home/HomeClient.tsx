@@ -245,12 +245,12 @@ export default function HomeClient() {
     <div className="min-h-screen flex flex-col bg-white text-slate-800 font-sans">
       <main className="flex-1 w-full max-w-6xl mx-auto px-6 py-16 md:py-24 flex flex-col items-center text-center">
         <h1 className="text-5xl md:text-7xl lg:text-8xl font-black text-slate-900 mb-6 md:mb-8 tracking-tight leading-[1.05] animate-in fade-in slide-in-from-bottom-6 duration-700 delay-100">
-          Laporan dan PPT kuliah,
+          Bantuan <span className="text-blue-600">tugas kuliah</span>
           <br />
-          <span className="text-blue-600">dibantu AI</span>
+          di satu tempat
         </h1>
         <p className="text-lg md:text-2xl text-slate-500 max-w-3xl mb-12 md:mb-20 leading-relaxed font-medium px-4 md:px-0 animate-in fade-in slide-in-from-bottom-8 duration-700 delay-200">
-          Susun laporan lengkap dengan sumber asli dan buat presentasi dengan desain unik, semuanya bisa diedit dan diunduh. Alat bantu kuliah lain ada di bawah.
+          Kumpulkan tugas, susun laporan, dan buat diagram tanpa ribet. Pilih yang kamu butuhkan di bawah.
         </p>
 
         {/* Fitur unggulan: Laporan dan Presentasi, selalu paling depan. */}

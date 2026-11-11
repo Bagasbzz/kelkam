@@ -64,7 +64,7 @@ Terakhir diperbarui: 2026-11-09
 | K8 | Proses AI saat maintenance | **Dijeda**, bukan dibiarkan selesai. | Disetujui |
 | K9 | Pembayaran premium | **Manual**: QRIS → pengguna unggah bukti bayar → bisa chat WA pemilik → pemilik verifikasi & aktifkan manual. Belum pakai payment gateway. | Disetujui (arah) |
 | K10 | Akun lama tanpa verifikasi email | Usulan: tidak dipaksa verifikasi. Login Google pertama dengan email sama → akun ditautkan, sesi lama dicabut, sandi lama wajib diatur ulang. | Menunggu konfirmasi |
-| K11 | Subdomain admin | Usulan: tidak perlu subdomain; super admin login lewat `/login` biasa yang tetap terbuka saat maintenance. | Menunggu konfirmasi |
+| K11 | Subdomain admin | **Pakai subdomain khusus super admin** (keputusan pemilik 2026-11-10) untuk mengurus Tugas dan seluruh sistem (analitik, akun, maintenance), terpisah dari admin Tugas `/tugas/admin694` (admin course/pengajar). Dikerjakan bersama Tahap 1 (role) dan Tahap 4 (dashboard). | Disetujui |
 | K12 | Anggaran rem darurat AI | Default sementara 200 juta unit, 20.000 panggilan, 300 gambar per hari untuk seluruh situs (bisa diubah via env). | Sementara, perlu konfirmasi |
 | K13 | Jenis sumber Laporan | Tambah: buku & bab buku, skripsi/tesis/preprint, dokumen resmi/regulasi, artikel web/berita tepercaya (selain jurnal/prosiding). Tiap jenis punya verifikasi sendiri (DOI, ISBN, domain tepercaya). | Disetujui 2026-11-09 |
 | K14 | Urutan & pencarian web | Bertahap: buku + skripsi dulu (gratis). Dokumen resmi & web menyusul setelah pemilik mendaftar kunci API pencarian web (Brave/Tavily). | Disetujui 2026-11-09 |
@@ -418,3 +418,14 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
   `PageTracker` di layout, `recordLogin` di login/register, `recordAiUsage` di `budgetedAiFetch`,
   `POST /api/feedback` + `FeedbackButtons` di chat Laporan dan Presentasi.
 - Berikutnya: Tahap 4 dashboard analitik (membaca tabel-tabel ini).
+
+## 18. Catatan 2026-11-10 malam
+
+- Teks hero beranda dikembalikan ke aslinya ("Bantuan tugas kuliah di satu tempat" + subjudul lama); pemilik tidak ingin
+  teks lama diganti tanpa diminta. Kartu unggulan Laporan/Presentasi tetap.
+- Run chat Laporan tampil "Berjalan (langkah 1/20)" 76 menit: dimulai 19.51 tepat saat restart deploy; proses lama
+  terus memperpanjang lock tanpa kemajuan. Ditambah watchdog di `agent-runs/engine.ts`: tanpa kemajuan > 5 menit,
+  heartbeat berhenti dan run dilepas untuk diteruskan proses lain.
+- Pemilik ingin subdomain admin khusus (K11 diperbarui). Rencana: `admin.keluhkampus.my.id` (subdomain cPanel diarahkan ke
+  aplikasi Node yang sama), `src/proxy.ts` memetakan host admin ke halaman `/superadmin/*`, hanya role SUPER_ADMIN.
+  Isi awal: dashboard analitik (Tahap 4), daftar akun, dan pintasan ke admin Tugas. Dikerjakan setelah Tahap 1.

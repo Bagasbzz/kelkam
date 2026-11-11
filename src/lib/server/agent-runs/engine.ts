@@ -110,6 +110,7 @@ export type AgentStreamEvent =
 
 /** Lock dianggap mati bila heartbeat lebih tua dari ini → run boleh diambil alih. */
 export const LOCK_STALE_MS = 90_000;
+const STALL_ABORT_MS = 5 * 60_000;
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const STEP_TIMEOUT_MS = 90_000;
 /** Sisa budget minimum untuk memulai langkah baru. */
@@ -625,6 +626,8 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
 
   // Event ditulis ke DB dengan throttle supaya mode "attach" dan cron bisa melihat progres.
   let lastEventFlush = 0;
+  /** Watchdog: proses yang tidak membuat kemajuan apa pun selama ini dianggap macet dan melepas run. */
+  let lastProgressAt = Date.now();
   let flushing: Promise<unknown> = Promise.resolve();
   const flushEvents = (force = false) => {
     if (!force && Date.now() - lastEventFlush < 2_000) return flushing;
@@ -635,6 +638,7 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
     return flushing;
   };
   const emit = (text: string, level: AgentEvent["level"] = "info") => {
+    lastProgressAt = Date.now();
     const ev: AgentEvent = { t: nowIso(), text: sanitizePublicErrorText(text).slice(0, 400), level };
     events.push(ev);
     if (events.length > EVENT_LIMIT) events.splice(0, events.length - EVENT_LIMIT);
@@ -646,6 +650,9 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
     void (async () => {
       const current = await prisma.agentRun.findUnique({ where: { id: runId }, select: { lockToken: true, control: true } });
       if (!current || current.lockToken !== token || current.control) { controller.abort(new Error("Run dihentikan atau klaim berubah.")); return; }
+      // Tanpa kemajuan > 5 menit (mis. proses lama tertinggal saat restart deploy): berhenti memperpanjang lock
+      // agar run dilepas dan diteruskan proses lain, bukan tampil "Berjalan" selamanya.
+      if (Date.now() - lastProgressAt > STALL_ABORT_MS) { controller.abort(new Error("Langkah macet tanpa kemajuan, dilanjutkan ulang.")); return; }
       await prisma.agentRun.updateMany({ where: { id: runId, lockToken: token }, data: { heartbeatAt: new Date() } });
     })().catch(() => controller.abort(new Error("Heartbeat run gagal.")));
   }, HEARTBEAT_INTERVAL_MS);
