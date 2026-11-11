@@ -109,6 +109,7 @@ function isPollingEndpoint(pathname: string) {
  * handle auth state sendiri. `/tugas/admin694` juga dicek di page level.
  */
 const PROTECTED_PAGE_PREFIXES = [
+  "/superadmin",
   "/studio",
   "/dashboard",
   "/presentasi",
@@ -138,7 +139,12 @@ function getJwtSecret(): Uint8Array {
 // ---------------------------------------------------------------------------
 
 export async function proxy(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname: rawPathname } = request.nextUrl;
+  // Subdomain super admin (admin.keluhkampus.my.id): beranda subdomain = panel /superadmin.
+  // Halaman ini sendiri memeriksa super admin; proxy hanya memastikan sudah login.
+  const host = (request.headers.get("x-forwarded-host") || request.headers.get("host") || "").split(",")[0].trim().toLowerCase();
+  const adminHost = host.startsWith("admin.");
+  const pathname = adminHost && rawPathname === "/" ? "/superadmin" : rawPathname;
 
   // Skip publik endpoint (waitlist + by-token course lookup rate-limit dirinya sendiri).
   if (pathname === "/api/waitlist") return NextResponse.next();
@@ -163,7 +169,7 @@ export async function proxy(request: NextRequest) {
       );
     }
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("redirect", pathname);
+    loginUrl.searchParams.set("redirect", rawPathname);
     return NextResponse.redirect(loginUrl);
   }
 
@@ -190,6 +196,7 @@ export async function proxy(request: NextRequest) {
     // Forward userId ke downstream handler via header.
     const headers = new Headers(request.headers);
     headers.set("x-keluh-user-id", userId);
+    if (pathname !== rawPathname) return NextResponse.rewrite(new URL(pathname, request.url), { request: { headers } });
     return NextResponse.next({ request: { headers } });
   } catch {
     // JWT invalid / expired / corrupt.
@@ -214,5 +221,5 @@ export const config = {
   // dengan batas `proxyClientMaxBodySize` dan memotong body di atas batas itu
   // secara diam-diam → file tersimpan rusak. Route tersebut melakukan auth
   // (requireAdmin) + rate limit sendiri.
-  matcher: ["/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*", "/presentasi/:path*"],
+  matcher: ["/", "/superadmin/:path*", "/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*", "/presentasi/:path*"],
 };

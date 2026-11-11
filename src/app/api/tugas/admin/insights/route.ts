@@ -11,12 +11,12 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse } from "@/lib/server/request-guards";
-import { requireAdmin } from "@/lib/server/auth";
+import { requireSuperAdmin } from "@/lib/server/auth";
 import { sendToAIForPurpose } from "@/lib/ai/client";
 
 export async function POST() {
   try {
-    const user = await requireAdmin();
+    const user = await requireSuperAdmin();
     const limit = enforceRateLimit(`tugas-admin-insights:${user.id}`, {
       limit: 10,
       windowMs: 10 * 60 * 1000,

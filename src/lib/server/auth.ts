@@ -288,6 +288,31 @@ export async function destroySession() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Super admin (Tahap 1, K5): dikunci ke ID akun lewat env `SUPER_ADMIN_USER_IDS` (pisahkan koma) DAN role ADMIN.
+ * Selama env itu belum diisi, sementara dicocokkan dengan `SUPER_ADMIN_EMAILS` (bawaan email pemilik) agar
+ * pemilik tidak terkunci. Tidak ada endpoint yang bisa memberi status super admin.
+ */
+const OWNER_EMAIL_FALLBACK = "hensellbagas@gmail.com";
+function envList(value: string | undefined) {
+  return (value || "").split(",").map((item) => item.trim()).filter(Boolean);
+}
+export function isSuperAdmin(user: { id: string; email: string; role: string } | null | undefined): boolean {
+  if (!user || user.role !== "ADMIN") return false;
+  const ids = envList(process.env.SUPER_ADMIN_USER_IDS);
+  if (ids.length) return ids.includes(user.id);
+  const emails = envList(process.env.SUPER_ADMIN_EMAILS || OWNER_EMAIL_FALLBACK).map((email) => email.toLowerCase());
+  return emails.includes(user.email.toLowerCase());
+}
+
+/** Hanya super admin (pengelola seluruh sistem). Admin Tugas/pengajar biasa ditolak. */
+export async function requireSuperAdmin(): Promise<SessionUser> {
+  const user = await getCurrentUser();
+  if (!user) throw new ApiRequestError(401, "Silakan masuk terlebih dahulu untuk melanjutkan.");
+  if (!isSuperAdmin(user)) throw new ApiRequestError(403, "Hanya super admin yang boleh melakukan aksi ini.");
+  return user;
+}
+
+/**
  * Hard-require role=ADMIN. Throw ApiRequestError(403) kalau tidak.
  * Pakai di API route yang butuh privilege global (mis. bikin course baru).
  */

@@ -7,7 +7,7 @@
  */
 import { NextResponse } from "next/server";
 import { aiClient, AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW } from "@/lib/ai/client";
-import { requireAdmin } from "@/lib/server/auth";
+import { requireSuperAdmin } from "@/lib/server/auth";
 import { runWithAiOwner } from "@/lib/server/ai-budget";
 import { publicErrorResponse } from "@/lib/server/request-guards";
 
@@ -39,7 +39,7 @@ async function probe(model: string, label = "standar", extra: Record<string, unk
 
 export async function GET() {
   try {
-    const admin = await requireAdmin();
+    const admin = await requireSuperAdmin();
     const models = Array.from(new Set([AI_MODEL, AI_MODEL_FAST, AI_MODEL_REVIEW]));
     // Varian untuk model penulis: membuktikan apakah "thinking" tersembunyi memakan max_tokens.
     const results = await runWithAiOwner(admin.id, "admin:ai-check", () => Promise.all([

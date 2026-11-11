@@ -153,6 +153,11 @@ export default function AuthMenu() {
                 <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-700">
                   Masuk sebagai <strong>{user.email || user.id}</strong>
                 </div>
+                {user.superAdmin && (
+                  <a href="/superadmin" className="mt-3 inline-flex w-full items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+                    Panel super admin
+                  </a>
+                )}
                 <button
                   type="button"
                   onClick={async () => {

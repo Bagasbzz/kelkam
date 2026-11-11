@@ -113,7 +113,7 @@ Terakhir diperbarui: 2026-11-09
 | Tahap | Isi | Status |
 |---|---|---|
 | 0 | Lepas batas AI per pengguna (user bebas), rem global dinaikkan | ✅ Selesai 2026-11-07 |
-| 1 | Role `SUPER_ADMIN`/`PENGAJAR` + tutup celah reset sandi & ubah role + log audit | Belum mulai |
+| 1 | Role `SUPER_ADMIN`/`PENGAJAR` + tutup celah reset sandi & ubah role + log audit | ✅ 2026-11-11 (versi tanpa ubah enum DB, lihat bagian 19) |
 | 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | Belum mulai |
 | 3 | Pencatatan data: aktivitas, login, last_seen, token aktual, feedback 👍/👎 | ✅ Kode selesai 2026-11-10; aktif setelah SQL `database-hotfix-2026-11-10-analytics.sql` dijalankan |
 | 4 | Dashboard analitik ringkasan + detail pengguna | Belum mulai |
@@ -429,3 +429,21 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
 - Pemilik ingin subdomain admin khusus (K11 diperbarui). Rencana: `admin.keluhkampus.my.id` (subdomain cPanel diarahkan ke
   aplikasi Node yang sama), `src/proxy.ts` memetakan host admin ke halaman `/superadmin/*`, hanya role SUPER_ADMIN.
   Isi awal: dashboard analitik (Tahap 4), daftar akun, dan pintasan ke admin Tugas. Dikerjakan setelah Tahap 1.
+
+## 19. Tahap 1 + panel super admin (2026-11-11)
+
+- Tanpa mengubah enum DB: `ADMIN` = admin Tugas/pengajar; **super admin** = role ADMIN **dan** ID akun ada di env
+  `SUPER_ADMIN_USER_IDS` (pisahkan koma). Selama env kosong, sementara dicocokkan dengan `SUPER_ADMIN_EMAILS`
+  (bawaan hensellbagas@gmail.com). Helper `isSuperAdmin`/`requireSuperAdmin` di `src/lib/server/auth.ts`.
+  Pemilik perlu menambah env `SUPER_ADMIN_USER_IDS` = ID akun (tampil di panel) di cPanel → Setup Node.js App.
+- Hanya super admin: `/api/admin/users` (reset sandi, ubah role), `/api/admin/db-health`, `/api/admin/ai-check`,
+  `/api/tugas/admin/insights`, daftar waitlist, cache referensi. Akun super admin tidak bisa direset/diturunkan dari panel.
+  Admin Tugas lain (role ADMIN) tetap bisa mengelola course seperti biasa.
+- Log audit: tabel `admin_audit_logs` (reset sandi, ubah role). SQL manual `database-hotfix-2026-11-11-admin-audit.sql`.
+- Panel `/superadmin` (Tahap 4 ringkas): pengguna, online, aktif, login, pendaftaran 14 hari, kunjungan & per fitur,
+  pemakaian AI per model/operasi/pengguna, feedback 👍/👎 + komentar, log audit, pintasan ke admin Tugas/daftar akun.
+  Tautan "Panel super admin" di menu akun (hanya super admin). Non-super admin mendapat 404.
+- Subdomain `admin.keluhkampus.my.id`: `src/proxy.ts` memetakan "/" di host `admin.*` ke `/superadmin` (wajib login);
+  origin admin diizinkan di `csrf-origin.ts` (atau env `ADMIN_ORIGIN`). Sesi login di subdomain terpisah dari domain utama.
+  Langkah cPanel: buat subdomain `admin`, salin blok `Passenger...` dari `.htaccess` domain utama ke `.htaccess`
+  document root subdomain, aktifkan SSL (AutoSSL). Sampai itu selesai, panel bisa dibuka di `/superadmin`.

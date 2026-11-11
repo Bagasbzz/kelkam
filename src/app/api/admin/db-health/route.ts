@@ -5,12 +5,12 @@
  * terapply dan kolom/tabel yang dibutuhkan kode saat ini ada.
  * Return { ok, applied: [...], missingColumns: [...], missingTables: [...] }.
  *
- * Auth: requireAdmin (role ADMIN global). Tidak pernah mengembalikan nilai
+ * Auth: requireSuperAdmin (role ADMIN global). Tidak pernah mengembalikan nilai
  * data, hanya nama kolom/tabel.
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
-import { requireAdmin } from "@/lib/server/auth";
+import { requireSuperAdmin } from "@/lib/server/auth";
 import { publicErrorResponse } from "@/lib/server/request-guards";
 
 export const dynamic = "force-dynamic";
@@ -23,11 +23,11 @@ const REQUIRED_COLUMNS: Array<[table: string, column: string]> = [
   ["report_jobs", "heartbeat_at"],
   ["report_job_steps", "tokens_used"],
 ];
-const REQUIRED_TABLES = ["activity_events", "user_presence", "login_events", "ai_usage", "feedbacks", "extracted_texts", "submission_analyses", "admin_chat_sessions", "report_job_steps", "image_jobs", "report_sessions", "report_messages", "agent_runs", "tugas_attachments"];
+const REQUIRED_TABLES = ["admin_audit_logs", "activity_events", "user_presence", "login_events", "ai_usage", "feedbacks", "extracted_texts", "submission_analyses", "admin_chat_sessions", "report_job_steps", "image_jobs", "report_sessions", "report_messages", "agent_runs", "tugas_attachments"];
 
 export async function GET() {
   try {
-    await requireAdmin();
+    await requireSuperAdmin();
 
     const [columns, tables, migrations] = await Promise.all([
       prisma.$queryRaw<Array<{ table_name: string; column_name: string }>>`

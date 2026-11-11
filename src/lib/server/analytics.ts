@@ -102,3 +102,10 @@ export async function usageFromResponse(response: Response, estimatedInput: numb
   if (usage) return { input: usage.prompt_tokens ?? 0, output: usage.completion_tokens ?? 0, actual: true };
   return { input: estimatedInput, output: Math.ceil(contentChars / 3), actual: false };
 }
+
+/** Log audit aksi admin (reset sandi, ubah role, dll.). Gagal mencatat tidak membatalkan aksi. */
+export async function recordAdminAction(input: { actorId: string; action: string; targetId?: string | null; detail?: string }) {
+  try {
+    await prisma.adminAuditLog.create({ data: { actorId: input.actorId, action: input.action.slice(0, 60), targetId: input.targetId ?? null, detail: (input.detail || "").slice(0, 500) } });
+  } catch (error) { swallow(error); }
+}

@@ -1,5 +1,5 @@
 /**
- * /api/admin/users, manajemen akun oleh ADMIN global.
+ * /api/admin/users, manajemen akun oleh SUPER ADMIN saja (Tahap 1). Akun super admin tidak bisa diubah lewat sini.
  *   GET  ?q=&page=  → daftar user (cari email/nama), tanpa hash.
  *   POST { userId, action: "reset-password", newPassword }
  *        → ganti sandi (argon2id) + cabut semua sesi user tsb.
@@ -8,7 +8,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { hashPassword, requireAdmin } from "@/lib/server/auth";
+import { hashPassword, isSuperAdmin, requireSuperAdmin } from "@/lib/server/auth";
+import { recordAdminAction } from "@/lib/server/analytics";
 import { ApiRequestError, enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
 
 export const runtime = "nodejs";
@@ -17,7 +18,7 @@ const PAGE_SIZE = 50;
 
 export async function GET(req: Request) {
   try {
-    await requireAdmin();
+    await requireSuperAdmin();
     const url = new URL(req.url);
     const q = (url.searchParams.get("q") || "").trim().slice(0, 100);
     const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
       total,
       page,
       pageSize: PAGE_SIZE,
-      users: users.map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, createdAt: u.createdAt, submissions: u._count.submissions, activeSessions: u._count.sessions })),
+      users: users.map((u) => ({ id: u.id, email: u.email, name: u.name, role: u.role, superAdmin: isSuperAdmin(u), createdAt: u.createdAt, submissions: u._count.submissions, activeSessions: u._count.sessions })),
     }, NO_STORE);
   } catch (error) {
     if (error instanceof ApiRequestError) return NextResponse.json({ success: false, error: error.publicMessage }, { status: error.status });
@@ -68,7 +69,7 @@ const BodySchema = z.discriminatedUnion("action", [
 
 export async function POST(req: Request) {
   try {
-    const admin = await requireAdmin();
+    const admin = await requireSuperAdmin();
     const rl = enforceRateLimit(`admin-users:${admin.id}`, { limit: 60, windowMs: 10 * 60 * 1000 });
     if (rl) return rl;
 
@@ -78,6 +79,10 @@ export async function POST(req: Request) {
 
     const target = await prisma.user.findUnique({ where: { id: body.userId }, select: { id: true, email: true, role: true } });
     if (!target) return NextResponse.json({ success: false, error: "User tidak ditemukan." }, { status: 404 });
+    // Akun super admin (termasuk milik sendiri) tidak bisa direset atau diturunkan dari panel ini.
+    if (isSuperAdmin(target)) {
+      return NextResponse.json({ success: false, error: "Akun super admin tidak bisa diubah dari panel ini." }, { status: 403 });
+    }
 
     if (body.action === "reset-password") {
       const passwordHash = await hashPassword(body.newPassword);
@@ -87,13 +92,12 @@ export async function POST(req: Request) {
         prisma.session.deleteMany({ where: { userId: target.id } }),
       ]);
       console.info(`[admin-users] ${admin.email} reset password untuk ${target.email}`);
+      await recordAdminAction({ actorId: admin.id, action: "reset-password", targetId: target.id, detail: target.email });
       return NextResponse.json({ success: true, message: `Sandi ${target.email} diganti. Semua sesi lamanya dicabut.` }, NO_STORE);
     }
 
-    if (target.id === admin.id && body.role !== "ADMIN") {
-      return NextResponse.json({ success: false, error: "Tidak bisa mencabut role admin diri sendiri." }, { status: 400 });
-    }
     await prisma.user.update({ where: { id: target.id }, data: { role: body.role } });
+    await recordAdminAction({ actorId: admin.id, action: "set-role", targetId: target.id, detail: `${target.email}: ${target.role} -> ${body.role}` });
     console.info(`[admin-users] ${admin.email} set role ${target.email} → ${body.role}`);
     return NextResponse.json({ success: true, message: `Role ${target.email} sekarang ${body.role}.` }, NO_STORE);
   } catch (error) {

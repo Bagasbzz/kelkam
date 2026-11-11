@@ -28,7 +28,11 @@ export function assertSameOriginJsonRequest(req: Request): void {
     const url = new URL(req.url);
     if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) expectedOrigin = url.origin;
   }
-  if (!origin || origin !== expectedOrigin) {
+  // Subdomain super admin (admin.<domain>) berbagi aplikasi yang sama; ADMIN_ORIGIN bisa menimpa.
+  const adminUrl = new URL(expectedOrigin);
+  adminUrl.hostname = `admin.${adminUrl.hostname.replace(/^www\./, "")}`;
+  const adminOrigin = process.env.ADMIN_ORIGIN ? new URL(process.env.ADMIN_ORIGIN).origin : adminUrl.origin;
+  if (!origin || (origin !== expectedOrigin && origin !== adminOrigin)) {
     throw new ApiRequestError(403, "Permintaan lintas situs ditolak.");
   }
   if (fetchSite && fetchSite !== "same-origin") {

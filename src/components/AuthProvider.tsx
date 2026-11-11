@@ -67,6 +67,8 @@ interface AuthUser {
   email: string;
   name: string | null;
   role: "USER" | "ADMIN";
+  /** Pengelola seluruh sistem (panel /superadmin). */
+  superAdmin?: boolean;
 }
 
 interface AuthContextValue {

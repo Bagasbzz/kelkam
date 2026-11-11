@@ -17,12 +17,12 @@
  */
 
 import { NextResponse } from "next/server";
-import { getCurrentUser } from "@/lib/server/auth";
+import { getCurrentUser, isSuperAdmin } from "@/lib/server/auth";
 
 export async function GET() {
   const user = await getCurrentUser();
   return NextResponse.json(
-    { success: true, user },
+    { success: true, user: user ? { ...user, superAdmin: isSuperAdmin(user) } : null },
     { headers: { "Cache-Control": "private, no-store" } }
   );
 }

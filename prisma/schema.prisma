@@ -969,3 +969,17 @@ model Feedback {
   @@index([feature, createdAt])
   @@map("feedbacks")
 }
+
+/// Log audit aksi super admin (Tahap 1).
+model AdminAuditLog {
+  id        String   @id @default(cuid())
+  actorId   String   @map("actor_id")
+  action    String
+  targetId  String?  @map("target_id")
+  detail    String   @default("")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([targetId])
+  @@map("admin_audit_logs")
+}

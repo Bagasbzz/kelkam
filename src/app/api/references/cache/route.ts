@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { clearReferenceCache, getCacheStats } from "@/lib/references/provider-client";
-import { requireAdmin } from "@/lib/server/auth";
+import { requireSuperAdmin } from "@/lib/server/auth";
 import { publicErrorResponse } from "@/lib/server/request-guards";
 
 /** Bandingkan token tanpa membocorkan timing. */
@@ -14,7 +14,7 @@ function tokenMatches(supplied: string | null, expected: string): boolean {
 
 export async function GET() {
   try {
-    await requireAdmin();
+    await requireSuperAdmin();
     const stats = getCacheStats();
     return NextResponse.json({ success: true, stats });
   } catch (error) {

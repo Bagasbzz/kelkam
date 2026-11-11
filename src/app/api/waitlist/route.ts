@@ -26,7 +26,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db/prisma";
 import { enforceRateLimit, publicErrorResponse, readJsonBody } from "@/lib/server/request-guards";
-import { requireAdmin } from "@/lib/server/auth";
+import { requireSuperAdmin } from "@/lib/server/auth";
 
 /** Identitas pembeda untuk rate limiter publik. Pakai IP, bukan user. */
 function clientKey(req: Request) {
@@ -80,7 +80,7 @@ export async function POST(req: Request) {
 /** Admin-only: list semua entry waitlist (untuk monitoring). */
 export async function GET() {
   try {
-    await requireAdmin();
+    await requireSuperAdmin();
     const items = await prisma.waitlist.findMany({
       orderBy: { createdAt: "desc" },
       take: 500,
