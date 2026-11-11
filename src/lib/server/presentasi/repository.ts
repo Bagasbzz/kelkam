@@ -219,6 +219,31 @@ export async function recordPlanImageJob(ownerId: string, projectId: string, ind
   });
 }
 
+/**
+ * Server-side placement of a finished plan image (owner decision 2026-11-09, poin G 2026-11-11): the picture goes onto
+ * its slide even when the editor is closed or busy. Only slides that are still empty and unlocked are touched.
+ * The deck is updated in place (same revision) so an open editor with unsaved edits does not get a revision conflict;
+ * the editor re-applies the same picture locally when it sees the finished job.
+ */
+export async function placeFinishedPlanImage(ownerId: string, projectId: string, jobId: string, fileId: string) {
+  return prisma.$transaction(async (tx) => {
+    const state = await lockedProject(tx, ownerId, projectId);
+    const image = state.plan?.images?.find((item) => item.jobId === jobId);
+    if (!image) return false;
+    const slide = state.deck.slides.find((item) => item.id === image.slideId);
+    if (!slide || slide.art || slide.locked) return false;
+    const deck: PresentationDeck = {
+      ...state.deck,
+      slides: state.deck.slides.map((item) => item.id === slide.id
+        ? { ...item, art: { fileId, role: image.role, alt: image.prompt.slice(0, 300) }, adjustments: (item.adjustments || []).filter((entry) => entry.target !== "art") }
+        : item),
+    };
+    await validatePresentationArt(ownerId, projectId, deck, state.deck, tx);
+    await writeProject(tx, ownerId, { ...state, deck, updatedAt: new Date().toISOString() });
+    return true;
+  });
+}
+
 /** Per-deck identity: a style example adjusted by the AI's colors, with a fresh seed so every generate differs. */
 export function planDesign(state: PresentationEnvelope, seed = Math.floor(Math.random() * 1_000_000)): DeckDesign | undefined {
   const plan = state.plan;

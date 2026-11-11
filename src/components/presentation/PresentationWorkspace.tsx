@@ -9,7 +9,7 @@ import { deckSchema, LAYOUT_IDS, type PresentationDeck, type PresentationSlide }
 import { renderSlideSvg } from "@/lib/presentation/layout";
 import { sceneFor, STYLE_EXAMPLES } from "@/lib/presentation/design";
 import PresentationChat, { type ChatMessage } from "./PresentationChat";
-import PresentationPlanPanel, { type ArtPlacement, type ChatMaterial, type ChatPlan, type ChatSource } from "./PresentationPlanPanel";
+import PresentationPlanPanel, { type ArtJob, type ArtPlacement, type ChatMaterial, type ChatPlan, type ChatSource } from "./PresentationPlanPanel";
 import SlideCanvas, { TARGET_LABELS, type EditTarget } from "./SlideCanvas";
 import SlidePlayer from "./SlidePlayer";
 import VisualControls from "./VisualControls";
@@ -190,6 +190,47 @@ function DeckEditor({ initial, onClose }: { initial: Project; onClose: () => voi
       setNotice(items.length > 1 ? `${items.length} gambar dipasang dan disimpan.` : "Gambar dipasang dan disimpan.");
     });
   }
+
+  // Gambar AI usulan rencana dipasang server ke slide kosong saat selesai (poin G). Editor memantau job-nya di
+  // semua tampilan (Chat AI maupun Edit slide): tanpa perubahan lokal → muat ulang hasil server; ada perubahan
+  // belum disimpan → pasang di editor juga agar tidak tertimpa saat disimpan.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => { dirtyRef.current = dirty; }, [dirty]);
+  const [handledArt, setHandledArt] = useState<string[]>([]);
+  const pendingArt = (project.plan?.images ?? []).filter((image) => image.jobId && image.slideId && !handledArt.includes(image.jobId) && !deck.slides.find((item) => item.id === image.slideId)?.art);
+  const pendingArtKey = pendingArt.map((image) => image.jobId).join("|");
+  useEffect(() => {
+    if (!pendingArtKey) return;
+    let stopped = false;
+    const check = async () => {
+      let jobs: ArtJob[];
+      try { jobs = (await api<{ jobs: ArtJob[] }>(`${root}/art`)).jobs; } catch { return; }
+      if (stopped) return;
+      const finished = pendingArt.flatMap((image) => {
+        const job = jobs.find((item) => item.id === image.jobId);
+        return job && (job.status === "done" || job.status === "failed") ? [{ image, job }] : [];
+      });
+      if (!finished.length) return;
+      if (!dirtyRef.current && busyRef.current) return; // tunggu proses AI selesai, lalu muat ulang
+      setHandledArt((current) => [...current, ...finished.map(({ image }) => image.jobId!)]);
+      const placed = finished.filter(({ job }) => job.status === "done" && job.fileId);
+      if (!placed.length) return;
+      if (dirtyRef.current) {
+        setDeck((current) => ({ ...current, slides: current.slides.map((item) => {
+          const hit = placed.find(({ image }) => image.slideId === item.id);
+          return hit && !item.art && !item.locked ? { ...item, art: { fileId: hit.job.fileId!, role: hit.image.role, alt: hit.image.prompt.slice(0, 300) }, adjustments: (item.adjustments || []).filter((entry) => entry.target !== "art") } : item;
+        }) }));
+        setNotice("Gambar AI selesai dan dipasang. Simpan perubahan untuk menyimpannya.");
+      } else {
+        try { adopt((await api<{ project: Project }>(root)).project); setNotice(placed.length > 1 ? `${placed.length} gambar AI selesai dan dipasang.` : "Gambar AI selesai dan dipasang."); } catch { /* dicoba lagi saat muat ulang berikutnya */ }
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 6000);
+    return () => { stopped = true; window.clearInterval(timer); };
+    // pendingArt diturunkan dari pendingArtKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingArtKey, root]);
   useEffect(() => {
     let disposed = false;
     fetchActiveRun(`${root}/run`).then((active) => {

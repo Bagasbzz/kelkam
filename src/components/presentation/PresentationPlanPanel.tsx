@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, FileText, ImagePlus, Loader2, Trash2 } from "lucide-react";
 import { authenticatedFetch } from "@/components/AuthProvider";
 import { getErrorMessage } from "@/lib/errors";
@@ -18,7 +18,7 @@ export interface ChatPlan {
 }
 export interface ChatSource { kind: "report"; sessionId: string; title: string; draftChars: number }
 export interface ArtPlacement { slideId: string; fileId: string; role: PlanImage["role"]; alt: string }
-interface ArtJob { id: string; status: "queued" | "running" | "done" | "failed"; title: string; fileId: string | null; error: string | null }
+export interface ArtJob { id: string; status: "queued" | "running" | "done" | "failed"; title: string; fileId: string | null; error: string | null }
 
 const DENSITY_LABEL = { ringkas: "Teks ringkas", seimbang: "Teks seimbang", padat: "Teks padat" } as const;
 const ROLE_LABEL = { hero: "Gambar utama", background: "Latar belakang", cutout: "Ilustrasi terpisah" } as const;
@@ -92,17 +92,8 @@ function PlannedImages({ root, revision, images, deck, canStart, onApply, onProj
     return job?.status === "done" && job.fileId && slide && slide.art?.fileId !== job.fileId ? [{ slideId: slide.id, fileId: job.fileId, role: image.role, alt: image.prompt.slice(0, 300) }] : [];
   });
   const waiting = images.map((image, index) => ({ image, index })).filter(({ image }) => !image.jobId);
-  // Finished AI pictures go onto slides that are still empty without another click (owner decision 2026-11-09).
-  const autoPlace = ready.filter((item) => !deck.slides.find((s) => s.id === item.slideId)?.art);
-  const autoKey = autoPlace.map((item) => `${item.slideId}:${item.fileId}`).join("|");
-  const placedKey = useRef("");
-  useEffect(() => {
-    if (!autoKey || autoKey === placedKey.current) return;
-    placedKey.current = autoKey;
-    onApply(autoPlace);
-    // autoPlace is derived from autoKey.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoKey]);
+  // Gambar yang selesai dipasang otomatis oleh server ke slide kosong; editor (PresentationWorkspace) menyesuaikan
+  // tampilannya. Panel ini hanya menampilkan status dan tombol "Pasang ke slide" untuk slide yang sudah berisi gambar lain.
 
   async function start(indexes: number[]) {
     if (starting || !canStart) return;

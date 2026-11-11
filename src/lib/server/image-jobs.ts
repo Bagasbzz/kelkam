@@ -20,6 +20,7 @@ import { generateImage } from "@/lib/ai/client";
 import { saveUpload } from "@/lib/storage/upload";
 import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 import { runWithAiOwner, budgetLimit } from "@/lib/server/ai-budget";
+import { maintenanceBlocks } from "@/lib/server/maintenance";
 
 export type ImageJobStatus = "queued" | "running" | "done" | "failed";
 
@@ -161,6 +162,9 @@ export async function tickImageJobs(limit = 1): Promise<{ processed: string[] }>
 }
 
 async function runImageJob(id: string) {
+  // Mode maintenance (K8): biarkan tetap antre, dikerjakan setelah maintenance selesai.
+  const pending = await prisma.imageJob.findUnique({ where: { id }, select: { ownerId: true } });
+  if (!pending || await maintenanceBlocks(pending.ownerId)) return;
   // Klaim atomik: hanya satu proses yang berhasil mengubah ke running.
   const staleBefore = new Date(Date.now() - IMAGE_STALE_MS);
   const claimed = await prisma.imageJob.updateMany({
@@ -181,10 +185,17 @@ async function runImageJob(id: string) {
       originalName: `${safeName}.png`,
       mime: "image/png",
     });
-    await prisma.imageJob.updateMany({
+    const finished = await prisma.imageJob.updateMany({
       where: { id, status: "running", attempts: job.attempts, startedAt: job.startedAt },
       data: { status: "done", fileUploadId: upload.id, finishedAt: new Date(), error: null },
     });
+    // Gambar usulan Presentasi langsung dipasang ke slidenya di server (editor tidak perlu terbuka).
+    if (finished.count && job.sessionId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(job.sessionId)) {
+      const sessionId = job.sessionId;
+      await import("@/lib/server/presentasi/repository")
+        .then(({ placeFinishedPlanImage }) => placeFinishedPlanImage(job.ownerId, sessionId, id, upload.id))
+        .catch((error) => console.warn(`[image-jobs] ${id} gagal dipasang otomatis:`, error instanceof Error ? error.message.slice(0, 200) : error));
+    }
   } catch (err) {
     const message = toPublicErrorMessage(err, "Generate gambar gagal.");
     const exhausted = job.attempts >= MAX_ATTEMPTS;

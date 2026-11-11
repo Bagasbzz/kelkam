@@ -114,9 +114,9 @@ Terakhir diperbarui: 2026-11-09
 |---|---|---|
 | 0 | Lepas batas AI per pengguna (user bebas), rem global dinaikkan | ✅ Selesai 2026-11-07 |
 | 1 | Role `SUPER_ADMIN`/`PENGAJAR` + tutup celah reset sandi & ubah role + log audit | ✅ 2026-11-11 (versi tanpa ubah enum DB, lihat bagian 19) |
-| 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | Sebagian: tabel `app_settings` ada (2026-11-11, dipakai batas biaya); mode maintenance belum |
+| 2 | Tabel `settings` (saklar) + mode maintenance (dibangun, posisi mati) | ✅ 2026-11-11 (bagian 22), saklar di /superadmin |
 | 3 | Pencatatan data: aktivitas, login, last_seen, token aktual, feedback 👍/👎 | ✅ Kode selesai 2026-11-10; aktif setelah SQL `database-hotfix-2026-11-10-analytics.sql` dijalankan |
-| 4 | Dashboard analitik ringkasan + detail pengguna | Belum mulai |
+| 4 | Dashboard analitik ringkasan + detail pengguna | ✅ 2026-11-11 (bagian 22): tren 30 hari, retensi, online, /superadmin/pengguna + detail |
 | 5 | Mesin kuota di DB (posisi mati) | ✅ 2026-11-11 dalam bentuk batas biaya rupiah (bagian 21), posisi mati sampai diaktifkan di panel |
 | 6 | Paket premium + pembayaran manual QRIS (posisi mati) | Belum mulai |
 | 7 | Halaman kebijakan privasi & syarat layanan, lalu login Google (+ layanan email bila perlu) | Belum mulai |
@@ -503,3 +503,39 @@ Permintaan pemilik: semua fitur mudah ditemukan di Google dan bisa dijelaskan de
 - Langkah pemilik setelah deploy: (1) jalankan `database-hotfix-2026-11-11-app-settings.sql` (dan SQL analytics
   2026-11-10 bila belum); (2) buka `/superadmin`, isi harga model sesuai Mindaku, isi batas, centang "Batas biaya aktif",
   simpan.
+
+## 22. Mode maintenance, gambar Presentasi otomatis di server, dashboard analitik lengkap (2026-11-11)
+
+Permintaan pemilik: kerjakan mode maintenance, poin G (gambar AI Presentasi otomatis), dan dashboard analitik, lalu push.
+
+- **Mode maintenance** (`src/lib/server/maintenance.ts`, kunci `app_settings` "maintenance", butuh SQL
+  `database-hotfix-2026-11-11-app-settings.sql`):
+  - Saklar + pesan + perkiraan selesai di `/superadmin` (`MaintenancePanel`, API `GET/PUT /api/admin/maintenance`, log audit
+    `maintenance-on/off`). Berlaku dalam ±10 detik (cache per proses).
+  - `src/proxy.ts`: matcher diperluas ke semua halaman tanpa ekstensi file; saat aktif, halaman di-rewrite ke `/maintenance`
+    (503), API → JSON 503 `{maintenance: true}` dengan pesan jelas. Terbuka untuk semua: `/maintenance`, `/login`,
+    `/api/auth/*`. Super admin (cek ID akun dari JWT ke DB, cache 60 dtk) tetap bisa memakai seluruh situs. Cron tick ikut 503.
+  - Lapis kedua: `requireAdmin` menolak admin non-super saat maintenance (route unggah besar yang tidak lewat proxy).
+  - Proses latar dijeda, bukan digagalkan (K8): agent run (`engine.ts`) melepas run ke `queued` sebelum langkah berikutnya,
+    job laporan (`report-jobs.ts`) tidak memulai langkah baru, job gambar tetap antre. Langkah yang sedang berjalan selesai
+    dulu. Semua berlanjut otomatis setelah dimatikan (polling klien/cron). Milik super admin tidak dijeda.
+  - Tanpa DB/tabel → dianggap mati (situs tidak pernah tertutup karena error).
+- **Poin G, gambar AI Presentasi terpasang otomatis**: saat job gambar usulan rencana selesai, `image-jobs.ts` memanggil
+  `placeFinishedPlanImage` (`presentasi/repository.ts`) yang memasang gambar ke slidenya bila slide masih kosong dan tidak
+  dikunci, langsung di server (editor tidak perlu terbuka, tidak terganggu AI yang sedang berjalan). Deck diubah tanpa
+  menaikkan revisi agar editor yang punya perubahan belum disimpan tidak kena konflik. Editor (`PresentationWorkspace`)
+  memantau job di semua tampilan: tanpa perubahan lokal → muat ulang hasil server; ada perubahan → gambar ikut dipasang
+  di editor. Pemasangan otomatis lama di panel Rencana dihapus (tombol "Pasang ke slide" manual tetap ada).
+- **Dashboard analitik lengkap** (`src/lib/server/superadmin-analytics.ts`, UI `src/components/superadmin/ui.tsx`):
+  - `/superadmin`: ringkasan hari ini (termasuk biaya AI), daftar yang sedang online (tautan ke detail), tren 30 hari
+    (akun aktif, pengunjung unik, halaman, pendaftaran, panggilan AI, biaya AI per hari), retensi (akun aktif di ≥2 hari
+    berbeda), akun aktif 7/30 hari, rata-rata aktif harian. "Aktif" = membuka halaman atau memakai AI hari itu.
+  - `/superadmin/pengguna`: cari email/nama, urut terakhir aktif/terbaru/AI terbanyak/biaya bulan ini; kolom login,
+    halaman, panggilan AI (30 hari), jumlah laporan & presentasi, biaya bulan ini.
+  - `/superadmin/pengguna/[id]`: ringkasan, grafik harian (halaman, AI, biaya), fitur yang dipakai, operasi AI + biaya,
+    daftar laporan & job, presentasi (judul saja, tanpa isi percakapan, sesuai K4), login terakhir, feedback, gambar AI.
+    Membuka detail tercatat di log audit (`view-user`).
+- Tes: `scripts/maintenance.test.ts` (termasuk simulasi proxy saat maintenance aktif); seluruh 342 tes lulus, typecheck
+  bersih. Dicek di dev server lokal: `/`, `/fitur`, `/login`, `/maintenance` normal, `/dashboard` & `/superadmin` tetap
+  minta login. Panel super admin belum dicek di browser (butuh login + DB).
+- Langkah pemilik: pastikan `database-hotfix-2026-11-11-app-settings.sql` sudah dijalankan (dipakai maintenance & batas biaya).

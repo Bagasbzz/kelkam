@@ -57,7 +57,7 @@ export async function loadSuperAdminStats() {
         byFeature: byFeature.map((row) => ({ feature: String(row.feature), views: num(row.views), visitors: num(row.visitors) })),
       };
     }),
-    safe("ai_usage", { callsToday: 0, tokensToday: 0, tokensWeek: 0, actualShare: 0, byModel: [] as { model: string; calls: number; input: number; output: number; failed: number }[], byOperation: [] as { operation: string; calls: number; tokens: number }[], topUsers: [] as { email: string; calls: number; tokens: number }[] }, async () => {
+    safe("ai_usage", { callsToday: 0, tokensToday: 0, tokensWeek: 0, actualShare: 0, byModel: [] as { model: string; calls: number; input: number; output: number; failed: number }[], byOperation: [] as { operation: string; calls: number; tokens: number }[], topUsers: [] as { id: string; email: string; calls: number; tokens: number }[] }, async () => {
       const [totals] = await prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
         SELECT COUNT(*) FILTER (WHERE created_at >= ${today}) AS calls_today,
                COALESCE(SUM(input_tokens + output_tokens) FILTER (WHERE created_at >= ${today}), 0) AS tokens_today,
@@ -71,16 +71,16 @@ export async function loadSuperAdminStats() {
         SELECT operation, COUNT(*) AS calls, SUM(input_tokens + output_tokens) AS tokens
         FROM ai_usage WHERE created_at >= ${week} GROUP BY operation ORDER BY 3 DESC LIMIT 12`);
       const topUsers = await prisma.$queryRaw<Array<Record<string, unknown>>>(Prisma.sql`
-        SELECT COALESCE(u.email, a.owner_id) AS email, COUNT(*) AS calls, SUM(a.input_tokens + a.output_tokens) AS tokens
+        SELECT a.owner_id AS id, COALESCE(u.email, a.owner_id) AS email, COUNT(*) AS calls, SUM(a.input_tokens + a.output_tokens) AS tokens
         FROM ai_usage a LEFT JOIN users u ON u.id = a.owner_id
-        WHERE a.created_at >= ${week} GROUP BY 1 ORDER BY 3 DESC LIMIT 10`);
+        WHERE a.created_at >= ${week} GROUP BY 1, 2 ORDER BY 4 DESC LIMIT 10`);
       const callsWeek = num(totals?.calls_week);
       return {
         callsToday: num(totals?.calls_today), tokensToday: num(totals?.tokens_today), tokensWeek: num(totals?.tokens_week),
         actualShare: callsWeek ? Math.round((num(totals?.actual_calls) / callsWeek) * 100) : 0,
         byModel: byModel.map((row) => ({ model: String(row.model), calls: num(row.calls), input: num(row.input), output: num(row.output), failed: num(row.failed) })),
         byOperation: byOperation.map((row) => ({ operation: String(row.operation), calls: num(row.calls), tokens: num(row.tokens) })),
-        topUsers: topUsers.map((row) => ({ email: String(row.email), calls: num(row.calls), tokens: num(row.tokens) })),
+        topUsers: topUsers.map((row) => ({ id: String(row.id), email: String(row.email), calls: num(row.calls), tokens: num(row.tokens) })),
       };
     }),
     safe("feedbacks", { summary: [] as { feature: string; up: number; down: number }[], negative: [] as { at: string; feature: string; comment: string }[] }, async () => {

@@ -11,6 +11,7 @@
  */
 import { Prisma } from "@prisma/client";
 import { AiBudgetError, type BudgetCharge } from "@/lib/server/ai-budget";
+import { isSuperAdminId } from "@/lib/server/maintenance";
 
 export type CostPeriod = "day" | "week" | "month";
 export const COST_PERIODS: CostPeriod[] = ["day", "week", "month"];
@@ -260,18 +261,6 @@ async function cachedSpend(config: AiCostConfig, ownerId: string | null) {
   return spend;
 }
 
-const superAdminCache = new Map<string, { at: number; value: boolean }>();
-async function ownerIsSuperAdmin(ownerId: string) {
-  const hit = superAdminCache.get(ownerId);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.value;
-  const { isSuperAdmin } = await import("@/lib/server/auth");
-  const user = await (await db()).user.findUnique({ where: { id: ownerId }, select: { id: true, email: true, role: true } });
-  const value = isSuperAdmin(user);
-  if (superAdminCache.size > 2000) superAdminCache.clear();
-  superAdminCache.set(ownerId, { at: Date.now(), value });
-  return value;
-}
-
 let warned = false;
 
 /** Dipanggil sebelum setiap panggilan provider AI. Melempar AiBudgetError bila batas rupiah terlampaui. */
@@ -287,7 +276,7 @@ export async function assertAiCostAllowed(ownerId: string, charge: Pick<BudgetCh
       const period = exceededPeriod(await cachedSpend(config, null), config.global, extra);
       if (period) throw new AiBudgetError(costLimitMessage("global", period));
     }
-    if (hasUser && !(await ownerIsSuperAdmin(ownerId))) {
+    if (hasUser && !(await isSuperAdminId(ownerId))) {
       const period = exceededPeriod(await cachedSpend(config, ownerId), config.perUser, extra);
       if (period) throw new AiBudgetError(costLimitMessage("user", period));
     }

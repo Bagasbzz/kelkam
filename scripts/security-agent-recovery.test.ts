@@ -117,6 +117,7 @@ function harness(overrides: Partial<Row> = {}) {
         toPublicErrorMessage: (error: unknown) => error instanceof Error ? error.message : String(error),
       };
       if (id === "@/lib/server/ai-budget") return { AiBudgetError: OfflineBudgetError, runWithAiOwner: (_owner: string, _operation: string, work: () => unknown) => work() };
+      if (id === "@/lib/server/maintenance") return { maintenanceBlocks: async () => false };
       if (id === "@/lib/server/laporan/assistant") return { laporanAgentDriver: driver };
       throw new Error(`Unexpected dependency: ${id}`);
     },

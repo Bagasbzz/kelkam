@@ -30,6 +30,7 @@ import { aiClient, stripDashes, stripThinking, AI_MODEL_FAST } from "@/lib/ai/cl
 import { detectInjection, injectionWarning } from "@/lib/ai/guard";
 import { sanitizePublicErrorText, toPublicAssistantMessage, toPublicErrorMessage } from "@/lib/errors";
 import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
+import { maintenanceBlocks } from "@/lib/server/maintenance";
 import { providerFailureDiagnostic } from "./provider-diagnostics";
 
 export type AgentKind = "laporan" | "tugas" | "presentasi";
@@ -726,6 +727,8 @@ async function runLoop(runId: string, token: string, opts: LoopOptions, controll
       // 3. Budget segmen habis → lepas lock, status queued (klien/cron melanjutkan).
       const remaining = opts.budgetMs - (Date.now() - startedAt);
       if (remaining < MIN_STEP_BUDGET_MS) return release("queued", "Segmen waktu server habis, melanjutkan otomatis di segmen berikutnya…");
+      // Mode maintenance (K8): jeda sebelum langkah berikutnya; dilanjutkan setelah maintenance dimatikan.
+      if (await maintenanceBlocks(row0.ownerId)) return release("queued", "Situs sedang dalam pemeliharaan. Proses dijeda dan dilanjutkan otomatis setelah selesai.");
 
       // 4. Panggil model.
       const isLast = stepCount === stepLimit - 1 && autoContinues >= AUTO_CONTINUE_LIMIT;

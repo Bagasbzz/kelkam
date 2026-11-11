@@ -237,6 +237,7 @@ test("gateway exempts exact presentation art polling while retaining auth and li
     jose: { jwtVerify: async () => ({ payload: { sub: "offline-owner" } }) },
     "@/lib/server/auth": { SESSION_COOKIE_NAME: "offline-session" },
     "@/lib/server/request-guards": { enforceRateLimit: (key: string) => { limited.push(key); return new Response(null, { status: 429 }); } },
+    "@/lib/server/maintenance": { isMaintenanceExemptPath: () => false, isSuperAdminId: async () => false, loadMaintenance: async () => ({ enabled: false }), maintenanceText: () => "" },
   };
   const exports: { proxy?: (request: unknown) => Promise<Response> } = {};
   runInNewContext(compiled.outputText, {

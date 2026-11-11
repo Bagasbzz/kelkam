@@ -41,6 +41,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 import { SESSION_COOKIE_NAME } from "@/lib/server/auth";
 import { enforceRateLimit } from "@/lib/server/request-guards";
+import { isMaintenanceExemptPath, isSuperAdminId, loadMaintenance, maintenanceText } from "@/lib/server/maintenance";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -135,6 +136,30 @@ function getJwtSecret(): Uint8Array {
 }
 
 // ---------------------------------------------------------------------------
+// Maintenance
+// ---------------------------------------------------------------------------
+
+async function sessionUserId(request: NextRequest) {
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) return "";
+  try { return String((await jwtVerify(token, getJwtSecret())).payload.sub || ""); } catch { return ""; }
+}
+
+/** Respons penutup bila maintenance aktif, atau null bila request boleh lewat. */
+async function maintenanceResponse(request: NextRequest, pathname: string) {
+  if (isMaintenanceExemptPath(pathname)) return null;
+  const state = await loadMaintenance();
+  if (!state.enabled) return null;
+  const userId = await sessionUserId(request);
+  if (userId && await isSuperAdminId(userId)) return null;
+  const headers = { "Retry-After": "600", "Cache-Control": "no-store" };
+  if (pathname.startsWith("/api/")) {
+    return NextResponse.json({ success: false, maintenance: true, error: maintenanceText(state) }, { status: 503, headers });
+  }
+  return NextResponse.rewrite(new URL("/maintenance", request.url), { status: 503, headers });
+}
+
+// ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
 
@@ -145,6 +170,10 @@ export async function proxy(request: NextRequest) {
   const host = (request.headers.get("x-forwarded-host") || request.headers.get("host") || "").split(",")[0].trim().toLowerCase();
   const adminHost = host.startsWith("admin.");
   const pathname = adminHost && rawPathname === "/" ? "/superadmin" : rawPathname;
+
+  // Mode maintenance: semua halaman & API ditutup kecuali untuk super admin (cek DB, ter-cache).
+  const blocked = await maintenanceResponse(request, pathname);
+  if (blocked) return blocked;
 
   // Skip publik endpoint (waitlist + by-token course lookup rate-limit dirinya sendiri).
   if (pathname === "/api/waitlist") return NextResponse.next();
@@ -221,5 +250,7 @@ export const config = {
   // dengan batas `proxyClientMaxBodySize` dan memotong body di atas batas itu
   // secara diam-diam → file tersimpan rusak. Route tersebut melakukan auth
   // (requireAdmin) + rate limit sendiri.
-  matcher: ["/", "/superadmin/:path*", "/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*", "/presentasi/:path*"],
+  // Halaman lain (tanpa ekstensi file) ikut dilewatkan proxy agar mode maintenance bisa menutup seluruh situs;
+  // halaman publik langsung diteruskan tanpa cek login.
+  matcher: ["/", "/superadmin/:path*", "/api/((?!files/upload-(?:video|admin)).*)", "/studio/:path*", "/dashboard/:path*", "/research/:path*", "/presentasi/:path*", "/((?!api/|_next/|maintenance)[^.]*)"],
 };

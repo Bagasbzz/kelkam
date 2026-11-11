@@ -49,6 +49,7 @@ import { sanitizePublicErrorText, toPublicErrorMessage } from "@/lib/errors";
 import { stripDashes } from "@/lib/ai/client";
 import { figurePlaceholders, normalizeFigureKey, reconcileFigurePlaceholders } from "@/lib/report/figure-placeholders";
 import { AiBudgetError, runWithAiOwner } from "@/lib/server/ai-budget";
+import { maintenanceBlocks } from "@/lib/server/maintenance";
 import { blocksApproval, checkReportLocally, fixInstructions, MAX_FIX_ROUNDS, parseVerdict, reviewReport, type ReviewChapter, type ReviewSeverity } from "@/lib/report/final-review";
 
 // ---------------------------------------------------------------------------
@@ -667,6 +668,8 @@ async function runNextStep(row: JobRow, ownerId: string, controller: AbortContro
 
   // Step "running" milik proses lain yang masih hidup → tunggu.
   if (hasLiveStep(row, now)) return toPublic(row);
+  // Mode maintenance (K8): jangan mulai langkah baru; job tetap antre dan berlanjut setelah maintenance selesai.
+  if (await maintenanceBlocks(ownerId)) return toPublic(row);
   if (countedSteps(steps) > MAX_TOTAL_STEPS || countedAttempts(steps) >= MAX_TOTAL_ATTEMPTS) {
     await appendLog(row.id, log, "error", "Batas langkah atau percobaan laporan tercapai.", { status: "failed", error: "Batas pemrosesan laporan tercapai." });
     return toPublic((await readJob(row.id, ownerId))!);

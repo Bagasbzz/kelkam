@@ -324,6 +324,12 @@ export async function requireAdmin(): Promise<SessionUser> {
   if (user.role !== "ADMIN") {
     throw new ApiRequestError(403, "Hanya admin yang boleh melakukan aksi ini.");
   }
+  // Lapis kedua mode maintenance untuk route admin yang tidak dilewati proxy (unggah file besar).
+  if (!isSuperAdmin(user)) {
+    const { loadMaintenance, maintenanceText } = await import("@/lib/server/maintenance");
+    const state = await loadMaintenance();
+    if (state.enabled) throw new ApiRequestError(503, maintenanceText(state));
+  }
   return user;
 }
 
