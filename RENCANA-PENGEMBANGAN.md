@@ -618,3 +618,15 @@ Teks/isi tidak diubah (sesuai keinginan pemilik), hanya tata letak. Dicek di 360
 - "Pertanyaan umum" menjadi daftar buka-tutup (`<details>`), teks tetap ada di HTML untuk mesin pencari; JSON-LD FAQ tetap.
 - Area sentuh tautan "Pelajari cara kerja", "Lihat cara kerja", tautan footer, dan tombol "Lihat fitur penyusun laporan"
   diperbesar (≥40px).
+
+### 23.3 Keputusan pemilik 2026-11-11: urutan dikerjakan & hemat token
+
+- Dikerjakan dulu (paling sering dipakai): **2 Login, 14 Halaman publik, 5 Tugas mahasiswa, 3 Laporan, 4 Presentasi,
+  7 Diagram** (urutan dari yang kecil/cepat ke yang besar).
+- **Ditunda (dicatat saja):** 6 Studio, 8 Editor Dokumen, 9 Olah Data, 10 Alat Bantu AI, 11 Rapikan Format,
+  12 PDF/Word/Gambar, 13 Pantau Progres, 15 `/research/new`, seluruh Fase B (dosen) dan Fase C (super admin).
+- Cara kerja hemat token (permintaan pemilik): kerjakan di sesi baru (riwayat sesi lama sangat panjang), ukur dengan
+  satu skrip DOM per lebar layar (geser samping, input <16px, tombol <40px, elemen terpotong) alih-alih banyak
+  screenshot; screenshot hanya kecil (skala 0,5) untuk bukti akhir; baca bagian file yang relevan saja; satu commit + push
+  per halaman; tes penuh hanya sebelum push.
+- Rencana per halaman menunggu persetujuan pemilik (lihat percakapan 2026-11-11).
