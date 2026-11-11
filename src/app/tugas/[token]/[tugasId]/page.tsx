@@ -59,7 +59,7 @@ export default function TugasDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50">
         <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
       </div>
     );
@@ -67,13 +67,13 @@ export default function TugasDetailPage() {
 
   if (error || !course || !tugas) {
     return (
-      <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
+      <div className="min-h-[calc(100dvh-72px)] bg-slate-50 px-4 py-16 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <h1 className="text-2xl font-bold text-slate-900">Tugas tidak ditemukan</h1>
           {error && <p className="text-sm text-slate-600">{error}</p>}
           <Link
             href={`/tugas/${token}`}
-            className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
+            className="inline-flex min-h-11 items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
           >
             <ArrowLeft className="h-4 w-4" />
             Kembali ke mata kuliah
@@ -84,17 +84,17 @@ export default function TugasDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
-      <div className="mx-auto max-w-3xl space-y-6">
+    <div className="min-h-[calc(100dvh-72px)] bg-slate-50 px-4 py-6 md:px-8 md:py-12">
+      <div className="mx-auto max-w-3xl space-y-4 sm:space-y-6">
         <Link
           href={`/tugas/${token}`}
-          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900"
+          className="-ml-1 inline-flex min-h-11 max-w-full items-center gap-2 px-1 text-sm font-medium text-slate-500 hover:text-slate-900"
         >
-          <ArrowLeft className="h-4 w-4" />
-          {course.name}
+          <ArrowLeft className="h-4 w-4 shrink-0" />
+          <span className="truncate">{course.name}</span>
         </Link>
 
-        <Card>
+        <Card padding="none" className="p-5 sm:p-8">
           <div className="flex flex-wrap items-center gap-2 text-sm text-slate-500">
             <span>{course.code}</span>
             {tugas.class && (
@@ -103,7 +103,7 @@ export default function TugasDetailPage() {
               </span>
             )}
           </div>
-          <h1 className="mt-2 text-2xl font-bold text-slate-900 md:text-3xl">{tugas.title}</h1>
+          <h1 className="mt-2 break-words text-2xl font-bold text-slate-900 md:text-3xl">{tugas.title}</h1>
           {tugas.description && (
             <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700 md:text-base">
               {tugas.description}
@@ -119,7 +119,7 @@ export default function TugasDetailPage() {
                   <a
                     href={downloadUrl}
                     download={a.name}
-                    className="inline-flex flex-none items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:border-blue-400 hover:text-blue-700"
+                    className="inline-flex flex-none items-center gap-1 min-h-10 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:border-blue-400 hover:text-blue-700"
                   >
                     <Download className="h-3.5 w-3.5" />
                     Unduh

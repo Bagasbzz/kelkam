@@ -61,9 +61,9 @@ export default function TugasLanding() {
   const showManage = isAdmin || managedCourses.length > 0;
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
+    <div className="min-h-[calc(100dvh-72px)] bg-slate-50 px-4 py-8 md:px-8 md:py-16">
       <div className="mx-auto max-w-xl">
-        <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
           <h1 className="text-2xl font-bold text-slate-900">Masuk ke mata kuliah</h1>
           <p className="mt-2 text-sm text-slate-600">
             Masukkan token 8 huruf yang dibagikan dosen atau asisten.
@@ -76,6 +76,8 @@ export default function TugasLanding() {
               placeholder="Contoh: ABCD2345"
               maxLength={20}
               autoComplete="off"
+              autoCapitalize="characters"
+              spellCheck={false}
               autoFocus
               aria-label="Token mata kuliah"
               className="font-mono uppercase tracking-widest"
@@ -97,7 +99,7 @@ export default function TugasLanding() {
         {showManage && (
           <div className="mt-4 text-center text-sm text-slate-600">
             {isAdmin ? (
-              <Link href="/tugas/admin694" className="font-medium text-blue-600 hover:underline">
+              <Link href="/tugas/admin694" className="inline-block py-2.5 font-medium text-blue-600 hover:underline">
                 Kelola mata kuliah
               </Link>
             ) : (
@@ -108,7 +110,7 @@ export default function TugasLanding() {
                     {i > 0 && ", "}
                     <Link
                       href={`/tugas/${c.token}/admin`}
-                      className="font-medium text-blue-600 hover:underline"
+                      className="inline-block py-2.5 font-medium text-blue-600 hover:underline"
                     >
                       {c.name}
                     </Link>

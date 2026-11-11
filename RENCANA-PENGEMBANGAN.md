@@ -557,7 +557,7 @@ Urutan (centang saat selesai):
   2. ✅ Login/daftar `/login`
   3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
   4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
-  5. Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
+  5. ✅ Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
   6. Studio `/studio`
   7. Diagram `/uml-builder`
   8. Editor Dokumen `/template-generator` → `/editor`
@@ -649,3 +649,19 @@ Dicek di 360, 768, 1280 (mode masuk dan daftar), tanpa geser samping. Teks tidak
 - `/maintenance`: tombol 44px, jarak kartu menyesuaikan HP.
 - Baru: `src/app/not-found.tsx` (dulu memakai 404 bawaan Next.js berbahasa Inggris): "Halaman tidak ditemukan", tombol
   "Kembali ke beranda" dan "Lihat semua fitur", `noindex`.
+
+### 23.6 Hasil nomor 5, Tugas mahasiswa (2026-11-11)
+
+`/tugas`, `/tugas/KELAS-DEMO`, `/tugas/KELAS-DEMO/[tugasId]`. Dicek di 360, 768, 1280, tanpa geser samping. Teks tidak diubah.
+- Jarak atas 96px di bawah navbar (ruang kosong besar di HP) → 24px HP / 48px desktop; tinggi halaman memperhitungkan navbar.
+- Kartu mata kuliah/tugas/materi: jarak dalam 32px → 20px di HP (komponen `Card` global tidak diubah).
+- Kartu tugas: judul panjang tidak lagi terpotong "…" di HP (maks. 2 baris); tombol "Lihat & kumpulkan" selebar kartu
+  di HP dan 44px di HP/tablet.
+- Form kumpul: label terhubung ke input (ketuk label memfokuskan isian), tombol "Kumpulkan" selebar form di HP, tombol
+  hapus file 24px → 40px, "Ganti file"/"Pakai file lama lagi" 40px.
+- Tautan kembali ("Ganti mata kuliah", nama mata kuliah) 44px dan nama panjang terpotong rapi; tombol unduh lampiran 40px.
+- Isian token: huruf besar otomatis di keyboard HP, tanpa koreksi ejaan.
+- Data contoh: token course `kelas-demo` diganti `KELAS-DEMO` di `scripts/dev-seed.ts` (aplikasi selalu mencari token huruf
+  besar, jadi course contoh dulu tidak bisa dibuka).
+- Catatan: eslint `react-hooks` melaporkan 4 error lama di `src/app/tugas/page.tsx` dan `SubmissionForm.tsx` (setState di
+  effect, `Date.now` saat render); bukan dari perubahan ini, belum diperbaiki.

@@ -80,7 +80,7 @@ export default function CoursePage() {
 
   if (loading || authLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50">
         <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
       </div>
     );
@@ -88,7 +88,7 @@ export default function CoursePage() {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8">
+      <div className="min-h-[calc(100dvh-72px)] bg-slate-50 px-4 py-16 md:px-8">
         <div className="mx-auto max-w-xl space-y-4 text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-red-100 text-red-600">
             <KeyRound className="h-6 w-6" />
@@ -97,7 +97,7 @@ export default function CoursePage() {
           <p className="text-sm text-slate-600">Periksa lagi token yang kamu masukkan.</p>
           <Link
             href="/tugas"
-            className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
+            className="inline-flex min-h-11 items-center gap-2 text-sm font-bold text-blue-600 hover:underline"
           >
             <ArrowLeft className="h-4 w-4" />
             Masukkan token lagi
@@ -110,17 +110,17 @@ export default function CoursePage() {
   if (!course) return null;
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-24 md:px-8 md:py-28">
-      <div className="mx-auto max-w-[1100px] space-y-6">
+    <div className="min-h-[calc(100dvh-72px)] bg-slate-50 px-4 py-6 md:px-8 md:py-12">
+      <div className="mx-auto max-w-[1100px] space-y-4 sm:space-y-6">
         <Link
           href="/tugas"
-          className="inline-flex items-center gap-2 text-sm font-medium text-slate-500 hover:text-slate-900"
+          className="-ml-1 inline-flex min-h-11 items-center gap-2 px-1 text-sm font-medium text-slate-500 hover:text-slate-900"
         >
           <ArrowLeft className="h-4 w-4" />
           Ganti mata kuliah
         </Link>
 
-        <Card>
+        <Card padding="none" className="p-5 sm:p-8">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="min-w-0">
               <p className="text-sm text-slate-500">{course.code}</p>
@@ -143,7 +143,7 @@ export default function CoursePage() {
             {user?.role === "ADMIN" && (
               <Link
                 href={`/tugas/${course.token}/admin`}
-                className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                className="inline-flex min-h-11 items-center gap-2 rounded-2xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 <Settings className="h-4 w-4" />
                 Kelola
@@ -153,7 +153,7 @@ export default function CoursePage() {
         </Card>
 
         {materials.length > 0 && (
-          <Card>
+          <Card padding="none" className="p-5 sm:p-8">
             <h2 className="text-lg font-bold text-slate-900">Materi pertemuan</h2>
             <div className="mt-4 divide-y divide-slate-100">
               {materials.map((material) => (
@@ -172,7 +172,7 @@ export default function CoursePage() {
                   </div>
                   <a
                     href={`/api/tugas/courses/${course.id}/materials/${material.id}/download?token=${encodeURIComponent(course.token)}`}
-                    className="inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:underline"
+                    className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-blue-700 hover:underline"
                   >
                     <Download className="h-4 w-4" />
                     Unduh
@@ -183,7 +183,7 @@ export default function CoursePage() {
           </Card>
         )}
 
-        <Card>
+        <Card padding="none" className="p-5 sm:p-8">
           <h2 className="text-lg font-bold text-slate-900">Tugas aktif</h2>
           <p className="mt-1 text-sm text-slate-600">
             {active.length === 0
@@ -200,7 +200,7 @@ export default function CoursePage() {
         </Card>
 
         {past.length > 0 && (
-          <Card>
+          <Card padding="none" className="p-5 sm:p-8">
             <h2 className="text-lg font-bold text-slate-900">Sudah lewat batas waktu</h2>
             <p className="mt-1 text-sm text-slate-600">
               Masih bisa dibuka untuk melihat detail dan riwayat pengumpulan kamu.

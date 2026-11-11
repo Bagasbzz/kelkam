@@ -536,7 +536,7 @@ export default function SubmissionForm({
       {popupDialog}
       <form
         onSubmit={onSubmit}
-        className="space-y-5 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"
+        className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
       >
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -568,8 +568,9 @@ export default function SubmissionForm({
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">NIM</label>
+            <label htmlFor="submission-nim" className="mb-1 block text-sm font-medium text-slate-700">NIM</label>
             <Input
+              id="submission-nim"
               value={nim}
               onChange={(e) => setNim(e.target.value)}
               placeholder="Nomor induk mahasiswa"
@@ -579,8 +580,9 @@ export default function SubmissionForm({
             />
           </div>
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">Nama</label>
+            <label htmlFor="submission-name" className="mb-1 block text-sm font-medium text-slate-700">Nama</label>
             <Input
+              id="submission-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Nama lengkap"
@@ -592,10 +594,11 @@ export default function SubmissionForm({
         </div>
 
         <div>
-          <label className="mb-1 block text-sm font-medium text-slate-700">
+          <label htmlFor="submission-note" className="mb-1 block text-sm font-medium text-slate-700">
             Catatan <span className="text-slate-400">(boleh kosong)</span>
           </label>
           <Textarea
+            id="submission-note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="Tulis catatan untuk dosen/asisten kalau perlu"
@@ -623,7 +626,7 @@ export default function SubmissionForm({
               <button
                 type="button"
                 onClick={() => setDropExistingFile(true)}
-                className="text-xs font-medium text-blue-600 hover:underline"
+                className="min-h-10 shrink-0 rounded-lg px-2 text-xs font-medium text-blue-600 hover:underline"
               >
                 Ganti file
               </button>
@@ -634,7 +637,7 @@ export default function SubmissionForm({
               <span>Membaca file dari perangkat...</span>
             </div>
           ) : !file ? (
-            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500 transition hover:border-blue-200 hover:bg-blue-50/50">
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500 transition hover:border-blue-200 hover:bg-blue-50/50">
               <Upload className="h-5 w-5" />
               <span>
                 {isAdmin ? "Pilih file (admin: tanpa batas ukuran)" : `Pilih file (maksimal ${formatFileSize(MAX_FILE_BYTES)})`}
@@ -653,7 +656,7 @@ export default function SubmissionForm({
               <button
                 type="button"
                 onClick={clearFile}
-                className="rounded-full p-1 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
                 aria-label="Hapus file"
               >
                 <X className="h-4 w-4" />
@@ -664,7 +667,7 @@ export default function SubmissionForm({
             <button
               type="button"
               onClick={() => setDropExistingFile(false)}
-              className="mt-1 text-xs font-medium text-slate-500 hover:underline"
+              className="mt-1 min-h-10 text-xs font-medium text-slate-500 hover:underline"
             >
               Pakai file lama lagi
             </button>
@@ -692,7 +695,7 @@ export default function SubmissionForm({
         )}
 
         <div className="flex items-center justify-end gap-2">
-          <Button type="submit" variant="primary" size="md" isLoading={busy} disabled={busy || readingFile}>
+          <Button type="submit" variant="primary" size="md" isLoading={busy} disabled={busy || readingFile} className="w-full sm:w-auto">
             {busy ? progressLabel ?? "Mengirim..." : editing ? "Simpan perubahan" : "Kumpulkan"}
           </Button>
         </div>

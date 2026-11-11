@@ -191,9 +191,9 @@ async function main() {
   }
 
   // ---------------- Tugas ----------------
-  await prisma.course.deleteMany({ where: { token: { in: ["kelas-demo", "kelas-demo-2"] } } });
-  const course = await prisma.course.create({ data: { name: "Pemrograman Web Lanjut", code: "IF-301", description: "Mata kuliah praktikum pengembangan aplikasi web modern dengan Next.js dan basis data.", token: "kelas-demo", createdById: dosen.id } });
-  await prisma.course.create({ data: { name: "Basis Data", code: "IF-205", token: "kelas-demo-2", createdById: dosen.id } });
+  await prisma.course.deleteMany({ where: { token: { in: ["kelas-demo", "kelas-demo-2", "KELAS-DEMO", "KELAS-DEMO-2"] } } });
+  const course = await prisma.course.create({ data: { name: "Pemrograman Web Lanjut", code: "IF-301", description: "Mata kuliah praktikum pengembangan aplikasi web modern dengan Next.js dan basis data.", token: "KELAS-DEMO", createdById: dosen.id } });
+  await prisma.course.create({ data: { name: "Basis Data", code: "IF-205", token: "KELAS-DEMO-2", createdById: dosen.id } });
   await prisma.courseAdmin.create({ data: { courseId: course.id, userId: dosen.id } });
   const classA = await prisma.courseClass.create({ data: { courseId: course.id, name: "IF-3A" } });
   const classB = await prisma.courseClass.create({ data: { courseId: course.id, name: "IF-3B" } });

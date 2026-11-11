@@ -54,14 +54,14 @@ export default function TugasCard({
   const videoCount = tugas.attachments?.filter((a) => a.isVideo).length ?? 0;
   return (
     <div
-      className={`rounded-3xl border border-slate-200 bg-white p-5 shadow-sm transition hover:shadow-md ${
+      className={`rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5 transition hover:shadow-md ${
         isPast ? "opacity-80" : ""
       }`}
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-lg font-bold text-slate-900 truncate">{tugas.title}</h3>
+            <h3 className="line-clamp-2 break-words text-lg font-bold text-slate-900 sm:truncate">{tugas.title}</h3>
             {tugas.pertemuan != null && (
               <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-bold text-blue-700">
                 Pertemuan {tugas.pertemuan}
@@ -136,8 +136,8 @@ export default function TugasCard({
               )}
             </>
           ) : (
-            <Link href={href}>
-              <Button variant={isPast ? "outline" : "primary"} size="sm">
+            <Link href={href} className="w-full sm:w-auto">
+              <Button variant={isPast ? "outline" : "primary"} size="sm" className="min-h-11 w-full sm:w-auto lg:min-h-0">
                 {isPast ? "Lihat" : "Lihat & kumpulkan"}
               </Button>
             </Link>
