@@ -4,7 +4,7 @@ import { getErrorMessage } from "@/lib/errors";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { ArrowLeft, ArrowRight, LogIn, LogOut, UserPlus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Eye, EyeOff, LogIn, LogOut, UserPlus } from "lucide-react";
 import Button from "@/components/ui/Button";
 import { useAuth } from "@/components/AuthProvider";
 
@@ -23,7 +23,7 @@ export default function LoginPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50">
           <p className="text-sm text-slate-500">Memuat…</p>
         </div>
       }
@@ -44,6 +44,7 @@ function LoginPageInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,7 +116,7 @@ function LoginPageInner() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+      <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50">
         <p className="text-sm text-slate-500">Memuat sesi…</p>
       </div>
     );
@@ -123,8 +124,8 @@ function LoginPageInner() {
 
   if (user) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-16">
-        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl">
+      <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50 px-4 py-8 sm:py-16">
+        <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
           <h1 className="text-2xl font-bold text-slate-900">Kamu sudah masuk</h1>
           <p className="mt-2 text-sm text-slate-600">
             Masuk sebagai <strong>{user.email || user.id}</strong>.
@@ -154,17 +155,17 @@ function LoginPageInner() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-16">
-      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-8 shadow-xl">
+    <div className="flex min-h-[calc(100dvh-72px)] items-center justify-center bg-slate-50 px-4 py-8 sm:py-16">
+      <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
         <Link
           href="/"
-          className="inline-flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-blue-600"
+          className="-ml-2 inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-sm font-bold text-slate-500 hover:text-blue-600"
         >
-          <ArrowLeft className="h-3 w-3" />
+          <ArrowLeft className="h-4 w-4" />
           Beranda
         </Link>
 
-        <div className="mt-6 flex items-center gap-2 text-sm font-medium text-blue-600">
+        <div className="mt-4 flex items-center gap-2 text-sm font-medium text-blue-600">
           {mode === "login" ? (
             <LogIn className="h-4 w-4" />
           ) : (
@@ -197,7 +198,7 @@ function LoginPageInner() {
                 placeholder="Nama panggilan"
                 maxLength={80}
                 autoComplete="name"
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-blue-500"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base outline-none transition focus:border-blue-500 sm:text-sm"
               />
             </div>
           )}
@@ -214,9 +215,9 @@ function LoginPageInner() {
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               placeholder="nama@email.com"
-              autoComplete="email"
+              autoComplete={mode === "login" ? "username" : "email"}
               required
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-blue-500"
+              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-base outline-none transition focus:border-blue-500 sm:text-sm"
             />
           </div>
           <div>
@@ -226,16 +227,26 @@ function LoginPageInner() {
             >
               Password
             </label>
+            <div className="relative">
             <input
               id="login-password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder={mode === "register" ? "Minimal 8 karakter" : "Password"}
               autoComplete={mode === "register" ? "new-password" : "current-password"}
               required
-              className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-blue-500"
+              className="w-full rounded-xl border border-slate-200 py-3 pl-4 pr-12 text-base outline-none transition focus:border-blue-500 sm:text-sm"
             />
+            <button
+              type="button"
+              onClick={() => setShowPassword((value) => !value)}
+              aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+              className="absolute inset-y-0 right-0 flex w-12 items-center justify-center rounded-r-xl text-slate-400 hover:text-slate-700"
+            >
+              {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+            </button>
+            </div>
           </div>
 
           {error && (
@@ -260,7 +271,7 @@ function LoginPageInner() {
           </Button>
         </form>
 
-        <div className="mt-6 border-t border-slate-100 pt-4 text-center text-sm">
+        <div className="mt-6 border-t border-slate-100 pt-3 text-center text-sm">
           {mode === "login" ? (
             <button
               type="button"
@@ -268,7 +279,7 @@ function LoginPageInner() {
                 setError(null);
                 setMode("register");
               }}
-              className="font-bold text-blue-600 hover:underline"
+              className="min-h-11 w-full rounded-xl px-3 py-2.5 font-bold text-blue-600 hover:bg-slate-50 hover:underline"
             >
               Belum punya akun? Daftar di sini
             </button>
@@ -279,14 +290,14 @@ function LoginPageInner() {
                 setError(null);
                 setMode("login");
               }}
-              className="font-bold text-blue-600 hover:underline"
+              className="min-h-11 w-full rounded-xl px-3 py-2.5 font-bold text-blue-600 hover:bg-slate-50 hover:underline"
             >
               Sudah punya akun? Masuk
             </button>
           )}
         </div>
 
-        <p className="mt-6 text-center text-[11px] text-slate-400">
+        <p className="mt-4 text-center text-xs text-slate-400">
           Kami memakai cookie agar kamu tetap masuk.
         </p>
       </div>

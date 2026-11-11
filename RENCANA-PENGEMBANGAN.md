@@ -554,7 +554,7 @@ Urutan (centang saat selesai):
 - Fase A, pengguna:
   0. ✅ Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
   1. ✅ Beranda `/`
-  2. Login/daftar `/login`
+  2. ✅ Login/daftar `/login`
   3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
   4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
   5. Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
@@ -630,3 +630,12 @@ Teks/isi tidak diubah (sesuai keinginan pemilik), hanya tata letak. Dicek di 360
   screenshot; screenshot hanya kecil (skala 0,5) untuk bukti akhir; baca bagian file yang relevan saja; satu commit + push
   per halaman; tes penuh hanya sebelum push.
 - Rencana per halaman menunggu persetujuan pemilik (lihat percakapan 2026-11-11).
+
+### 23.4 Hasil nomor 2, Login `/login` (2026-11-11)
+
+Dicek di 360, 768, 1280 (mode masuk dan daftar), tanpa geser samping. Teks tidak diubah.
+- Disamakan dengan modal login: input 16px di HP, `autocomplete` username/current-password/new-password, tombol lihat
+  sandi; `<form>` sudah ada sebelumnya.
+- Tautan "Beranda" dan tombol "Belum punya akun?/Sudah punya akun?" kini area sentuh 44px; catatan cookie 11px → 12px.
+- Tinggi halaman memperhitungkan navbar (dulu `min-h-screen` + jarak 72px membuat halaman selalu bisa digulir);
+  jarak dalam kartu 24px di HP (32px mulai 640px).
