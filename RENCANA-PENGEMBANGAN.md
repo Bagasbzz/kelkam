@@ -539,3 +539,47 @@ Permintaan pemilik: kerjakan mode maintenance, poin G (gambar AI Presentasi otom
   bersih. Dicek di dev server lokal: `/`, `/fitur`, `/login`, `/maintenance` normal, `/dashboard` & `/superadmin` tetap
   minta login. Panel super admin belum dicek di browser (butuh login + DB).
 - Langkah pemilik: pastikan `database-hotfix-2026-11-11-app-settings.sql` sudah dijalankan (dipakai maintenance & batas biaya).
+
+## 23. Audit UI/UX responsif semua halaman (permintaan 2026-11-11, RENCANA KERJA)
+
+Permintaan pemilik: fokus UI/UX, terutama responsif di semua perangkat dan kenyamanan (ukuran teks, tombol, posisi).
+Dicek berurutan: pengguna dulu, lalu dosen (admin Tugas), lalu super admin.
+
+Ukuran layar uji: 360 (Android kecil), 390/414 (iPhone), 768 (tablet tegak), 1024 (tablet mendatar/laptop kecil),
+1280 dan 1440 (desktop). Daftar cek tiap halaman: tidak ada geser samping; teks isi ≥14px dan input ≥16px (cegah zoom
+iOS); tombol/area sentuh ≥44px; elemen menempel (navbar, input chat, tombol "Cara pakai?") tidak menutupi isi atau
+keyboard HP; modal dan panel muat di layar; tabel bisa digeser sendiri; teks panjang (judul, email, URL) terpotong rapi.
+
+Urutan (centang saat selesai):
+- Fase A, pengguna:
+  0. Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
+  1. Beranda `/`
+  2. Login/daftar `/login`
+  3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
+  4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
+  5. Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
+  6. Studio `/studio`
+  7. Diagram `/uml-builder`
+  8. Editor Dokumen `/template-generator` → `/editor`
+  9. Olah Data `/data-synthesizer`
+  10. Alat Bantu AI `/ai-tools`
+  11. Rapikan Format `/fix-format`
+  12. PDF, Word & Gambar `/tools`
+  13. Pantau Progres `/tracker`
+  14. Halaman publik fitur `/fitur`, `/fitur/laporan-ai`, `/fitur/ppt-ai`; `/maintenance`; halaman 404
+  15. `/research/new` (tidak ada di menu; cek apakah masih dipakai)
+- Fase B, dosen/admin Tugas: `/tugas/admin694` (daftar course), `/tugas/admin694/users`, `/tugas/admin694/insights`,
+  `/tugas/[token]/admin` (kelola course), `.../admin/mahasiswas`, `.../admin/tugas/new`, `.../admin/tugas/[id]/edit`,
+  `.../admin/tugas/[id]/submissions`, `.../admin/insights`, `.../admin/assistant`.
+- Fase C, super admin: `/superadmin`, `/superadmin/pengguna`, `/superadmin/pengguna/[id]`.
+
+Database lokal untuk uji (disetujui pemilik 2026-11-11, terpasang): PostgreSQL 17 portable (tanpa installer) di
+`C:/Users/bagas/pgsql-local` (folder `pgsql/` + `data/`), port **5433**, database `keluhkampus_dev`, tidak menyentuh produksi.
+- `.env.local` (tidak di-commit) berisi `DATABASE_URL`/`DIRECT_URL` ke database itu dan `AUTH_ORIGIN="http://localhost:3000"`
+  (dev server berjalan dengan `--hostname 0.0.0.0`, tanpa ini login ditolak cek CSRF).
+- `node scripts/local-db.mjs start|stop|reset` (reset = migrasi + `scripts/dev-seed.ts`). Seed menolak berjalan bila
+  DATABASE_URL bukan localhost.
+- Akun contoh (sandi `devpass123`): `hensellbagas@gmail.com` (super admin), `dosen@contoh.test` (admin Tugas),
+  `mahasiswa@contoh.test` (pengguna dengan 9 laporan termasuk percakapan panjang & draft, 3 presentasi, tugas di course
+  `/tugas/kelas-demo`), `user01..24@contoh.test`. Data analitik 30 hari (kunjungan, login, pemakaian AI, feedback) dan
+  pengaturan batas biaya ikut terisi.
