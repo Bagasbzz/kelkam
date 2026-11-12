@@ -555,7 +555,7 @@ Urutan (centang saat selesai):
   0. ✅ Komponen global: Navbar + menu HP, menu akun, footer, tombol "Cara pakai?" dan panduan, modal login, feedback 👍/👎.
   1. ✅ Beranda `/`
   2. ✅ Login/daftar `/login`
-  3. Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
+  3. ✅ Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
   4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
   5. ✅ Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
   6. Studio `/studio`
@@ -665,3 +665,22 @@ Dicek di 360, 768, 1280 (mode masuk dan daftar), tanpa geser samping. Teks tidak
   besar, jadi course contoh dulu tidak bisa dibuka).
 - Catatan: eslint `react-hooks` melaporkan 4 error lama di `src/app/tugas/page.tsx` dan `SubmissionForm.tsx` (setState di
   effect, `Date.now` saat render); bukan dari perubahan ini, belum diperbaiki.
+
+### 23.7 Hasil nomor 3, Laporan `/dashboard` (2026-11-12)
+
+Dicek di 360, 390, 768, 1024, 1440 dengan sesi berisi draft dan 8 sumber. Teks tidak diubah.
+- Bug utama: halaman memakai `h-[100dvh]` + jarak atas 64/72px padahal layout sudah memberi jarak 72px untuk navbar.
+  Akibatnya ada ruang kosong di bawah navbar dan **kotak chat + tombol kirim terdorong 72px ke bawah layar** (halaman bisa
+  digulir). Sekarang tinggi `calc(100dvh - 72px)`, kotak chat selalu terlihat di bawah.
+- 1024-1279px: daftar sesi (300px) + panel kanan (460px) membuat area chat hanya 264px, judul hilang dan deretan tombol tab
+  menimpa panel. Sekarang di lebar itu daftar sesi dan panel saling menutup otomatis; panel 420px (1024), 460px (1280),
+  520px (1536+); deretan tab di judul disembunyikan saat panel terbuka (panel punya tab sendiri); label tab hanya ikon +
+  jumlah di bawah 1280px.
+- Deretan tombol di atas kotak chat (Tulis ulang, Revisi, Kirim DOCX, Lampirkan, Model teliti) dulu 3 baris di HP; sekarang
+  satu baris yang bisa digeser, tombol 40px.
+- Tab panel di lembar bawah HP (Rencana/Sumber/Bahan/Gambar/Draft) dulu melebar keluar layar 360px; sekarang bisa digeser.
+- Area sentuh: chip Sesi/tab 44px, tombol kirim 40px, tutup lembar 44px, hapus sesi/bahan 40px, filter sumber 36px,
+  "Pilih semua/Hapus pilihan/Unduh ZIP" 36px, kotak centang sumber 20px, tombol & tautan cek jurnal (`JournalCheck`) 36px.
+- Brief di tab Rencana: kolom label lebih sempit di HP dan teks panjang turun baris; tabel matriks tetap bisa digeser.
+- Catatan: tombol 👍/👎 (komponen global) masih 32px; eslint melaporkan 7 error lama di `dashboard/page.tsx` (bukan dari
+  perubahan ini).

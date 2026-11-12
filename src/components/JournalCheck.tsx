@@ -22,8 +22,8 @@ export interface JournalCheckProps {
   downloading?: boolean;
 }
 
-const linkClass = "text-blue-700 underline underline-offset-2 break-words focus-visible:outline-2 focus-visible:outline-offset-2";
-const buttonClass = "rounded border border-slate-300 px-2 py-1 text-xs font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2";
+const linkClass = "inline-block py-1.5 text-blue-700 underline underline-offset-2 break-words focus-visible:outline-2 focus-visible:outline-offset-2";
+const buttonClass = "inline-flex min-h-9 items-center rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2";
 const verificationLabels: Record<JournalVerificationStatus, string> = {
   verified: "Metadata cocok",
   not_found: "Tidak ditemukan kecocokan",
@@ -158,7 +158,7 @@ function JournalCheckEditor({ source, verification, onVerificationChange, onDown
         {confirmed?.evidenceUrl && <> <a href={confirmed.evidenceUrl} target="_blank" rel="noopener noreferrer" className={linkClass}>Bukti resmi</a></>}
       </p>
       <details className="mt-2">
-        <summary className="cursor-pointer font-semibold focus-visible:outline-2">Cek &amp; catat peringkat jurnal</summary>
+        <summary className="cursor-pointer py-2 font-semibold focus-visible:outline-2">Cek &amp; catat peringkat jurnal</summary>
         <p className="mt-2">Coba setiap ISSN dan judul secara terpisah. Jika pencarian resmi kosong, gunakan Google domain resmi. Cocokkan nama, ISSN, tahun akreditasi, serta tahun/kategori kuartil; hasil pencarian bukan bukti peringkat atau indeks Scopus.</p>
         <div className="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">
           {links.map((link) => <a key={link.url} href={link.url} target="_blank" rel="noopener noreferrer" className={linkClass}>{link.label}</a>)}

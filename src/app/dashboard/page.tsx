@@ -60,6 +60,8 @@ const TABS: ReadonlyArray<[Tab, string, typeof ListChecks]> = [
 
 /** Breakpoint `lg` Tailwind, di bawah ini panel samping jadi bottom sheet. */
 const isDesktop = () => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches;
+/** 1024-1279px: daftar sesi (300px) + panel kanan tidak muat bersamaan, jadi saling menutup. */
+const isNarrowDesktop = () => typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches;
 
 const STAGE_LABEL: Record<string, string> = { intake: "Ngobrol", planned: "Rencana siap", executing: "Menulis", drafted: "Draft jadi" };
 const PDF_LABEL: Record<string, string> = { verified: "PDF terbuka", landing_page: "Halaman penerbit", closed: "Berbayar", broken: "Tautan rusak", unknown: "PDF ?" };
@@ -163,7 +165,10 @@ export default function LaporanPage() {
   const focusTab = useCallback((key: Tab) => {
     setTab(key);
     setFresh(key);
-    if (isDesktop()) setPanelOpen(true);
+    if (isDesktop()) {
+      setPanelOpen(true);
+      if (isNarrowDesktop()) setSidebarOpen(false);
+    }
   }, []);
 
   /** Dipanggil user (klik chip/rail): toggle panel desktop atau buka sheet mobile. */
@@ -172,6 +177,7 @@ export default function LaporanPage() {
     if (isDesktop()) {
       if (panelOpen && tab === key) { setPanelOpen(false); return; }
       setTab(key); setPanelOpen(true);
+      if (isNarrowDesktop()) setSidebarOpen(false);
     } else {
       setTab(key); setSheet("panel");
     }
@@ -566,7 +572,7 @@ export default function LaporanPage() {
               <div className="truncate font-semibold">{s.title || "Tanpa judul"}</div>
               <div className={`text-xs ${s.id === activeId ? "text-slate-300" : "text-slate-500"}`}>{STAGE_LABEL[s.stage] || s.stage}</div>
             </button>
-            <button type="button" onClick={() => deleteSession(s.id)} className="opacity-60 group-hover:opacity-100 lg:opacity-0" title="Hapus"><Trash2 className="h-4 w-4" /></button>
+            <button type="button" onClick={() => deleteSession(s.id)} className="-mr-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg opacity-60 hover:bg-black/5 group-hover:opacity-100 lg:h-8 lg:w-8 lg:opacity-0" title="Hapus" aria-label="Hapus sesi"><Trash2 className="h-4 w-4" /></button>
           </div>
         ))}
         {!sessions.length && <p className="px-2 py-4 text-sm text-slate-500">Belum ada sesi. Mulai dari “Laporan baru”.</p>}
@@ -587,8 +593,8 @@ export default function LaporanPage() {
 
   /** Deretan chip pembuka panel: jelas bisa diklik (border, ikon, jumlah, chevron). */
   const tabChips = (
-    <div className="flex gap-2 overflow-x-auto px-3 py-2.5 [scrollbar-width:none] lg:hidden">
-      <button type="button" onClick={() => setSheet("sesi")} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 py-2 text-sm font-bold text-slate-700 shadow-sm active:scale-95">
+    <div className="flex gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none] lg:hidden">
+      <button type="button" onClick={() => setSheet("sesi")} className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3.5 py-2 text-sm font-bold text-slate-700 shadow-sm active:scale-95">
         <PanelLeft className="h-4 w-4" /> Sesi <span className="rounded-full bg-slate-100 px-1.5 text-xs">{sessions.length}</span><ChevronUp className="h-3.5 w-3.5 text-slate-400" />
       </button>
       {TABS.map(([key, label, Icon]) => {
@@ -596,7 +602,7 @@ export default function LaporanPage() {
         const isFresh = fresh === key;
         return (
           <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail}
-            className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm font-bold shadow-sm transition active:scale-95 disabled:opacity-40 ${isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}>
+            className={`relative inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-2 text-sm font-bold shadow-sm transition active:scale-95 disabled:opacity-40 ${isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 bg-white text-slate-700"}`}>
             <Icon className="h-4 w-4" /> {label}
             {n != null && <span className={`rounded-full px-1.5 text-xs ${isFresh ? "bg-blue-600 text-white" : "bg-slate-100"}`}>{n}</span>}
             <ChevronUp className="h-3.5 w-3.5 text-slate-400" />
@@ -682,7 +688,7 @@ export default function LaporanPage() {
                             onClick={() => setSourceFilter(k)}
                             aria-pressed={active}
                             title={k === "all" ? "Tampilkan semua jenis sumber" : SOURCE_KIND_DESCRIPTION[k]}
-                            className={`rounded-full border px-2.5 py-1 text-[13px] font-semibold transition ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
+                            className={`min-h-9 rounded-full border px-3 py-1.5 text-[13px] font-semibold transition ${active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-slate-400"}`}
                           >
                             {k === "all" ? "Semua" : SOURCE_KIND_LABEL[k]} <span className={active ? "text-white/70" : "text-slate-400"}>{count}</span>
                           </button>
@@ -694,9 +700,9 @@ export default function LaporanPage() {
                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
                         <span><b>{selectedCount}</b> dari {detail.sources.length} dipakai, <b>{fullCount}</b> dibaca penuh</span>
                        <span><b>{detail.sources.filter((s) => s.journalVerification).length}</b> hasil cek jurnal tersimpan</span>
-                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), true)} className="font-semibold text-blue-600 hover:underline">Pilih semua{filterLabel}</button>
-                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), false)} className="font-semibold text-slate-500 hover:underline">Hapus pilihan{filterLabel}</button>
-                       {downloadable.length > 0 && <button type="button" disabled={downloadingSources || downloadable.length > 10} onClick={() => void downloadSources(downloadable.map((s) => s.id), true)} className="font-semibold text-emerald-700 hover:underline disabled:opacity-50">{downloadingSources ? "Menyiapkan ZIP..." : `Unduh ${downloadable.length} PDF terpilih (ZIP, maks. 10)`}</button>}
+                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), true)} className="py-2 font-semibold text-blue-600 hover:underline">Pilih semua{filterLabel}</button>
+                       <button type="button" onClick={() => toggleSources(visible.map((s) => s.id), false)} className="py-2 font-semibold text-slate-500 hover:underline">Hapus pilihan{filterLabel}</button>
+                       {downloadable.length > 0 && <button type="button" disabled={downloadingSources || downloadable.length > 10} onClick={() => void downloadSources(downloadable.map((s) => s.id), true)} className="py-2 text-left font-semibold text-emerald-700 hover:underline disabled:opacity-50">{downloadingSources ? "Menyiapkan ZIP..." : `Unduh ${downloadable.length} PDF terpilih (ZIP, maks. 10)`}</button>}
                      </div>
                    )}
                   {!detail.sources.length && <p className="text-sm text-slate-500">Belum ada sumber. Asisten akan mencari setelah rencana dibuat.</p>}
@@ -705,7 +711,7 @@ export default function LaporanPage() {
                     const kind = sourceKindOf(s);
                     return (
                     <div key={s.id} className={`flex gap-2 rounded-xl border p-2.5 ${on ? "border-slate-200 bg-white" : "border-slate-100 bg-slate-50 opacity-70"}`}>
-                      <input type="checkbox" checked={on} onChange={(e) => toggleSources([s.id], e.target.checked)} className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-blue-600" aria-label="Pakai sumber ini" />
+                      <input type="checkbox" checked={on} onChange={(e) => toggleSources([s.id], e.target.checked)} className="mt-0.5 h-5 w-5 shrink-0 cursor-pointer accent-blue-600" aria-label="Pakai sumber ini" />
                       <div className="min-w-0 flex-1">
                         <div className="text-sm leading-snug text-slate-900">{s.citationApa}</div>
                         <div className="mt-1.5 flex flex-wrap gap-1">
@@ -735,7 +741,7 @@ export default function LaporanPage() {
                     <div key={m.id} className="flex items-center gap-2 rounded-xl border border-slate-100 px-2.5 py-2 text-sm">
                       <FileText className="h-4 w-4 text-slate-400" />
                       <div className="min-w-0 flex-1"><div className="truncate font-semibold">{m.title}</div><div className="text-[13px] text-slate-500">{m.kind} · {m.chars.toLocaleString("id-ID")} karakter</div></div>
-                      <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus"><Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" /></button>
+                      <button type="button" onClick={() => removeMaterial(m.id)} title="Hapus" aria-label="Hapus bahan" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg hover:bg-slate-50"><Trash2 className="h-4 w-4 text-slate-400 hover:text-red-600" /></button>
                     </div>
                   ))}
                 </div>
@@ -758,10 +764,10 @@ export default function LaporanPage() {
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(d.svg)}`} alt={d.title} className="mt-2 w-full rounded-lg border border-slate-100 bg-white" />
                           )}
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="text-[13px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
+                          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2">
+                            <span className="min-w-0 break-words text-[13px] text-slate-500">Placeholder: <code>[Gambar: {d.title} - keterangan]</code></span>
                             {isDiagramType(d.type) && ((d.diagramData?.nodes?.length ?? 0) > 0 || (!jobActive && !d.svg)) && (
-                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex items-center gap-1 text-[13px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" /> Buka di UML Builder</button>
+                              <button type="button" onClick={() => openInUmlBuilder(d)} className="inline-flex min-h-9 items-center gap-1 text-[13px] font-semibold text-indigo-600 hover:underline"><ExternalLink className="h-3.5 w-3.5" /> Buka di UML Builder</button>
                             )}
                           </div>
                         </div>
@@ -802,12 +808,12 @@ export default function LaporanPage() {
                   {detail.draft && (
                     <>
                       <div className="flex items-center gap-2">
-                        <select value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof DOCX_PRESETS)} className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm">
+                        <select value={preset} onChange={(e) => setPreset(e.target.value as keyof typeof DOCX_PRESETS)} className="min-h-10 min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm">
                           {Object.entries(DOCX_PRESETS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                         </select>
-                        <Button onClick={exportDocx} variant="primary" size="sm" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
+                        <Button onClick={exportDocx} variant="primary" size="sm" className="min-h-10 shrink-0" disabled={exporting}>{exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} DOCX</Button>
                       </div>
-                      <Button onClick={makePresentation} variant="outline" size="sm" disabled={makingDeck} className="w-full">{makingDeck ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Presentation className="h-3.5 w-3.5" />} Buat presentasi dari laporan ini</Button>
+                      <Button onClick={makePresentation} variant="outline" size="sm" disabled={makingDeck} className="min-h-10 w-full">{makingDeck ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Presentation className="h-3.5 w-3.5" />} Buat presentasi dari laporan ini</Button>
                       <div className="flex items-center gap-1 text-sm text-emerald-700"><CheckCircle2 className="h-3 w-3" /> {detail.draft.split(/\s+/).length.toLocaleString("id-ID")} kata · {draftSections.length} bagian</div>
                       <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-xl bg-slate-50 p-3 text-[15px] leading-relaxed text-slate-800">{detail.draft}</pre>
                       <p className="text-sm text-slate-500">Untuk revisi: ketik di chat “Revisi bagian ‘{draftSections[1] || "BAB II"}’: …”.</p>
@@ -819,19 +825,19 @@ export default function LaporanPage() {
   );
 
   const panelTabsBar = (
-    <div className="flex border-b border-slate-100 text-sm font-bold">
+    <div className="flex overflow-x-auto border-b border-slate-100 text-sm font-bold [scrollbar-width:none]">
       {TABS.map(([key, label, Icon]) => (
-        <button key={key} type="button" onClick={() => { setTab(key); setFresh((f) => (f === key ? null : f)); }} className={`flex flex-1 items-center justify-center gap-1.5 px-1 py-3 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}>
+        <button key={key} type="button" onClick={() => { setTab(key); setFresh((f) => (f === key ? null : f)); }} className={`flex min-h-11 shrink-0 grow items-center justify-center gap-1.5 whitespace-nowrap px-3 py-3 ${tab === key ? "border-b-2 border-slate-900 text-slate-900" : "text-slate-500"}`}>
           <Icon className="h-4 w-4" />{label}{tabCount[key] != null ? <span className="text-xs text-slate-400">{tabCount[key]}</span> : null}
         </button>
       ))}
     </div>
   );
 
-  const stageBadge = detail && <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">{STAGE_LABEL[detail.stage] || detail.stage}</span>;
+  const stageBadge = detail && <span className="shrink-0 whitespace-nowrap rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600 sm:px-3">{STAGE_LABEL[detail.stage] || detail.stage}</span>;
 
   return (
-    <div className="flex h-[100dvh] flex-col bg-slate-50 pt-[64px] md:pt-[72px]">
+    <div className="flex h-[calc(100dvh-72px)] flex-col bg-slate-50">
       <GuidedTour id="laporan" steps={LAPORAN_TOUR} />
       <div className="flex min-h-0 flex-1">
         {/* ------------------------------------ desktop: daftar sesi (bisa dilipat) */}
@@ -841,21 +847,21 @@ export default function LaporanPage() {
 
         {/* ------------------------------------------------------------- chat */}
         <section className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-3 md:px-5">
-            <button type="button" onClick={() => setSidebarOpen((v) => !v)} className="hidden rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:inline-flex" title={sidebarOpen ? "Sembunyikan daftar sesi" : "Tampilkan daftar sesi"}><PanelLeft className="h-5 w-5" /></button>
+          <header className="flex items-center gap-2 border-b border-slate-200 bg-white px-3 py-2.5 md:gap-3 md:px-5 lg:py-3">
+            <button type="button" onClick={() => { const next = !sidebarOpen; setSidebarOpen(next); if (next && isNarrowDesktop()) setPanelOpen(false); }} className="hidden shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 lg:inline-flex" title={sidebarOpen ? "Sembunyikan daftar sesi" : "Tampilkan daftar sesi"}><PanelLeft className="h-5 w-5" /></button>
             <div className="flex min-w-0 flex-1 items-center gap-2 text-base font-bold text-slate-900">
               <Bot className="h-5 w-5 shrink-0 text-blue-600" />
               <span className="truncate">{detail?.title || detail?.brief.title || "Asisten Laporan"}</span>
             </div>
             {stageBadge}
             {/* desktop: rail chip panel kanan */}
-            <div data-tour="lap-panel" className="ml-1 hidden items-center gap-1.5 lg:flex">
+            <div data-tour="lap-panel" className={`ml-1 hidden items-center gap-1.5 ${panelOpen ? "" : "lg:flex"}`}>
               {TABS.map(([key, label, Icon]) => {
                 const n = tabCount[key]; const isFresh = fresh === key; const activeTab = panelOpen && tab === key;
                 return (
                   <button key={key} type="button" onClick={() => openTab(key)} disabled={!detail} title={label}
-                    className={`relative inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-sm font-bold transition disabled:opacity-40 ${activeTab ? "border-slate-900 bg-slate-900 text-white" : isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
-                    <Icon className="h-4 w-4" /> {label}{n != null ? <span className={`rounded-md px-1.5 text-xs ${activeTab ? "bg-white/20" : "bg-slate-100"}`}>{n}</span> : null}
+                    className={`relative inline-flex shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-2 text-sm font-bold transition xl:px-3 disabled:opacity-40 ${activeTab ? "border-slate-900 bg-slate-900 text-white" : isFresh ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}>
+                    <Icon className="h-4 w-4" /> <span className="hidden xl:inline">{label}</span>{n != null ? <span className={`rounded-md px-1.5 text-xs ${activeTab ? "bg-white/20" : "bg-slate-100"}`}>{n}</span> : null}
                     {isFresh && !activeTab && <span className="absolute -right-1 -top-1 h-2.5 w-2.5 animate-pulse rounded-full bg-blue-500" />}
                   </button>
                 );
@@ -918,17 +924,17 @@ export default function LaporanPage() {
                 </div>
               )}
               {detail && (
-                <div className="mb-2 flex flex-wrap items-center gap-2">
+                <div className="-mx-3 mb-2 flex items-center gap-2 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
                   {detail.stage === "intake" && <Chip onClick={() => send("Menurutmu info sudah cukup? Kalau iya, buatkan rencananya dan carikan sumbernya.")}>Buat rencana</Chip>}
                   {detail.stage === "planned" && <Chip onClick={() => send("Cari sumber tambahan yang lebih relevan dengan topik ini.")}>Cari sumber lagi</Chip>}
                   {canExecute && !jobActive && <span data-tour="lap-eksekusi" className="inline-flex"><Chip onClick={() => execute(false)} tone="primary" disabled={executing}><Play className="h-3 w-3" /> {detail.stage === "drafted" ? "Tulis ulang semua" : "Setujui & eksekusi"}</Chip></span>}
                   {detail.stage === "drafted" && draftSections[1] && <Chip onClick={() => setInput(`Revisi bagian "${draftSections[1]}": `)}>Revisi bagian…</Chip>}
                   {detail.draft && <Chip onClick={() => send("Kirim file DOCX laporan terbaru.")}>Kirim file DOCX</Chip>}
-                  <label data-tour="lap-bahan" className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                  <label data-tour="lap-bahan" className="inline-flex min-h-10 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />} Lampirkan bahan
                     <input type="file" className="hidden" accept={MATERIAL_ACCEPT} multiple disabled={sending} onChange={(e) => { stageAttachments(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
                   </label>
-                  <label className="ml-auto inline-flex items-center gap-1 text-sm text-slate-500"><input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
+                  <label className="ml-auto inline-flex min-h-10 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap pl-1 text-sm text-slate-500"><input type="checkbox" className="h-4 w-4" checked={deep} onChange={(e) => setDeep(e.target.checked)} /> Model teliti</label>
                 </div>
               )}
               <form data-tour="lap-chat" onSubmit={(e) => { e.preventDefault(); send(); }} onPaste={(e) => { const files = clipboardFiles(e.clipboardData); if (files.length) { e.preventDefault(); stageAttachments(files); } }} className="rounded-2xl border border-slate-300 bg-white p-2 shadow-sm focus-within:border-slate-500">
@@ -940,7 +946,7 @@ export default function LaporanPage() {
                         <img src={attachment.preview} alt={`Pratinjau ${attachment.file.name}`} className="h-16 w-full rounded-md object-contain" />
                       ) : <FileText className="mx-auto h-16 w-8 text-slate-400" />}
                       <span className="mt-1 block truncate text-xs text-slate-600" title={attachment.file.name}>{attachment.file.name}</span>
-                      <button type="button" disabled={sending} onClick={() => removePendingAttachment(attachment.id)} aria-label={`Hapus lampiran ${attachment.file.name}`} className="absolute -right-1 -top-1 rounded-full border border-slate-200 bg-white p-1 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"><X className="h-3.5 w-3.5" /></button>
+                      <button type="button" disabled={sending} onClick={() => removePendingAttachment(attachment.id)} aria-label={`Hapus lampiran ${attachment.file.name}`} className="absolute -right-2 -top-2 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"><X className="h-3.5 w-3.5" /></button>
                     </div>)}
                   </div>
                   <p className="px-2 pt-1 text-xs text-slate-500">Belum diunggah. Lampiran dikirim saat kamu menekan Kirim.</p>
@@ -957,7 +963,7 @@ export default function LaporanPage() {
                   className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[15px] outline-none"
                   onInput={(e) => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight, 160)}px`; }}
                 />
-                <Button type="submit" aria-label="Kirim pesan" variant="primary" size="sm" disabled={!activeId || sending || (!input.trim() && !pendingAttachments.length)}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+                <Button type="submit" aria-label="Kirim pesan" variant="primary" size="sm" className="h-10 w-11 shrink-0 !px-0" disabled={!activeId || sending || (!input.trim() && !pendingAttachments.length)}>{sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
                 </div>
               </form>
             </div>
@@ -965,12 +971,12 @@ export default function LaporanPage() {
         </section>
 
         {/* ------------------------------------ desktop: panel kanan (drawer) */}
-        <aside className={`hidden shrink-0 flex-col border-l border-slate-200 bg-white transition-[width] lg:flex ${panelOpen ? "w-[460px] xl:w-[520px]" : "w-0 border-0"}`}>
+        <aside className={`hidden shrink-0 flex-col border-l border-slate-200 bg-white transition-[width] lg:flex ${panelOpen ? "w-[420px] xl:w-[460px] 2xl:w-[520px]" : "w-0 border-0"}`}>
           {panelOpen && (
             <>
               <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2">
                 <span className="text-xs font-black uppercase tracking-wide text-slate-500">Panel laporan</span>
-                <button type="button" onClick={() => setPanelOpen(false)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" title="Tutup panel"><PanelRightClose className="h-4 w-4" /></button>
+                <button type="button" onClick={() => setPanelOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" title="Tutup panel"><PanelRightClose className="h-4 w-4" /></button>
               </div>
               {panelTabsBar}
               <div className="min-h-0 flex-1 overflow-y-auto p-3 text-[15px]">
@@ -992,7 +998,7 @@ export default function LaporanPage() {
             </div>
             <div className="flex items-center justify-between px-4 pb-2">
               <span className="text-sm font-black text-slate-900">{sheet === "sesi" ? "Sesi laporan" : "Panel laporan"}</span>
-              <button type="button" onClick={() => setSheet(null)} className="rounded-lg p-1 text-slate-500 hover:bg-slate-100" aria-label="Tutup"><X className="h-5 w-5" /></button>
+              <button type="button" onClick={() => setSheet(null)} className="-mr-2 flex h-11 w-11 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Tutup"><X className="h-5 w-5" /></button>
             </div>
             {sheet === "panel" && panelTabsBar}
             <div className="min-h-0 flex-1 overflow-y-auto p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-[15px]">
@@ -1007,7 +1013,7 @@ export default function LaporanPage() {
 
 function Chip({ children, onClick, tone, disabled }: { children: React.ReactNode; onClick: () => void; tone?: "primary"; disabled?: boolean }) {
   return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex items-center gap-1.5 rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-50 ${tone === "primary" ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
+    <button type="button" onClick={onClick} disabled={disabled} className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-4 py-2 text-sm font-semibold disabled:opacity-50 ${tone === "primary" ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
       {children}
     </button>
   );
@@ -1024,7 +1030,7 @@ function BriefView({ brief }: { brief: ReportBrief }) {
   const filled = rows.filter(([, v]) => v);
   if (!filled.length) return <p className="text-sm text-slate-500">Brief masih kosong, ceritakan tugasmu di chat.</p>;
   return (
-    <dl className="grid grid-cols-[100px_1fr] gap-x-2 gap-y-1.5 text-sm">
+    <dl className="grid grid-cols-[88px_minmax(0,1fr)] gap-x-2 gap-y-1.5 text-sm sm:grid-cols-[100px_minmax(0,1fr)]">
       {filled.map(([k, v]) => <FragmentRow key={k} k={k} v={v!} />)}
       {brief.notes?.length ? <FragmentRow k="Catatan" v={brief.notes.join("; ")} /> : null}
     </dl>
@@ -1032,5 +1038,5 @@ function BriefView({ brief }: { brief: ReportBrief }) {
 }
 
 function FragmentRow({ k, v }: { k: string; v: string }) {
-  return (<><dt className="font-bold text-slate-500">{k}</dt><dd className="text-slate-900">{v}</dd></>);
+  return (<><dt className="font-bold text-slate-500">{k}</dt><dd className="break-words text-slate-900">{v}</dd></>);
 }
