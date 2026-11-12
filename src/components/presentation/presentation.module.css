@@ -1461,3 +1461,145 @@
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Audit responsif 2026-11-12: HP & tablet. */
+@media(max-width:900px) {
+  .chatColumn {
+    height: calc(100dvh - 72px);
+    max-height: 760px;
+  }
+}
+@media(max-width:800px),(pointer:coarse) {
+  .toolbar .back {
+    font-size: 13px;
+    min-height: 44px;
+  }
+  .toolbar .viewSwitch button {
+    min-height: 40px;
+  }
+  .toolbarActions button {
+    min-height: 44px;
+  }
+  .playerTop,.documentTitle span {
+    font-size: 12px;
+  }
+  .quickTools button {
+    min-height: 44px;
+    min-width: 44px;
+    font-size: 13px;
+  }
+  .player button,.filmstrip>button,.panel button,.proposal button,.runStatus button,.error button {
+    min-height: 44px;
+  }
+  .advanced summary,.quality summary,.planOutline summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+  .tabs button {
+    min-height: 44px;
+  }
+  .materialList button {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .plannedImages button {
+    min-height: 40px;
+  }
+}
+@media(max-width:639px) {
+  .landing {
+    padding: 20px 16px 48px;
+  }
+  .heroIcon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 14px;
+    border-radius: 16px;
+  }
+  .heroIcon svg {
+    width: 24px;
+    height: 24px;
+  }
+  .kicker {
+    margin-bottom: 12px;
+  }
+  .landing h1 {
+    margin-bottom: 14px;
+  }
+  .simpleHero>p:not(.kicker) {
+    line-height: 1.65;
+    margin-bottom: 18px;
+  }
+  .featureList {
+    margin-top: 0;
+    margin-bottom: 18px;
+  }
+  .uploadStart {
+    padding: 22px 16px;
+  }
+  .simpleHero small {
+    font-size: 12px;
+  }
+  .toolbar {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr) auto;
+    grid-template-areas: "back title title" "switch switch actions";
+    gap: 6px 10px;
+    padding: 6px 12px 10px;
+  }
+  .toolbar .back {
+    grid-area: back;
+    padding-right: 4px;
+  }
+  .documentTitle {
+    grid-area: title;
+    flex-basis: auto;
+  }
+  .viewSwitch {
+    grid-area: switch;
+    justify-self: start;
+  }
+  .toolbar .viewSwitch button {
+    padding: 7px 12px;
+  }
+  .toolbar .viewSwitch svg {
+    display: none;
+  }
+  .toolbarActions {
+    grid-area: actions;
+    justify-content: flex-end;
+    margin-left: 0;
+    gap: 6px;
+  }
+  .toolbarActions button {
+    min-width: 44px;
+    padding: 9px;
+  }
+  .actionLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .chatColumn {
+    height: calc(100dvh - 72px - 112px);
+  }
+  .editor :is(input:not([type=file]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),textarea,select) {
+    font-size: 16px;
+  }
+}
+.stageHeading,.previewNote {
+  font-size: 12px;
+}
+@media(pointer:coarse) {
+  .resizeHandle {
+    right: -11px;
+    bottom: -11px;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+  }
+}

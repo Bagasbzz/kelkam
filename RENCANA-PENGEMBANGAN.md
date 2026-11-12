@@ -556,7 +556,7 @@ Urutan (centang saat selesai):
   1. ✅ Beranda `/`
   2. ✅ Login/daftar `/login`
   3. ✅ Laporan `/dashboard` (riwayat kiri, chat, panel kanan Rencana/Sumber/Bahan/Gambar/Draft, progres job)
-  4. Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
+  4. ✅ Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
   5. ✅ Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
   6. Studio `/studio`
   7. Diagram `/uml-builder`
@@ -684,3 +684,19 @@ Dicek di 360, 390, 768, 1024, 1440 dengan sesi berisi draft dan 8 sumber. Teks t
 - Brief di tab Rencana: kolom label lebih sempit di HP dan teks panjang turun baris; tabel matriks tetap bisa digeser.
 - Catatan: tombol 👍/👎 (komponen global) masih 32px; eslint melaporkan 7 error lama di `dashboard/page.tsx` (bukan dari
   perubahan ini).
+
+### 23.8 Hasil nomor 4, Presentasi `/presentasi` (2026-11-12)
+
+Daftar, Chat AI + rencana, Edit slide, Tayangkan. Dicek di 360, 390, 768, 1024, 1440. Teks tidak diubah.
+- Daftar (HP): ikon, jarak, dan kotak "Buat presentasi" diringkas; kotak itu kini utuh di layar pertama 360×780
+  (dulu terpotong di bawah).
+- Bilah atas editor di HP dulu 4 baris (159px) dan "Unduh PPTX" pecah 2 baris. Sekarang 2 baris (115px): "Semua
+  presentasi" + judul, lalu Chat AI/Edit slide + tombol Tayangkan/Simpan/Unduh PPTX berupa ikon 44px (label tetap ada
+  untuk pembaca layar, tampil lagi mulai 640px).
+- Chat AI di HP: tinggi kolom chat disesuaikan sehingga kotak pesan + tombol kirim terlihat di layar pertama (dulu tepat
+  di tepi bawah/terpotong); tombol saran pembuka satu baris yang bisa digeser; tombol kirim 40px.
+- Edit slide di HP: isian teks 12px → 16px (cegah zoom iPhone; aturan global kalah oleh CSS modul); tombol alat cepat,
+  tab Edit/Tampilan/Versi, ringkasan "Isi dan pengaturan tambahan" 44px; teks petunjuk 10px → 12px.
+- Layar sentuh (HP/tablet, `pointer: coarse`): titik ubah ukuran objek 12px → 22px, tombol bilah atas 44px.
+- Mode tayang: tombol 44px, teks bilah atas 12px.
+- Catatan: kotak pilih objek di kanvas tetap kecil di HP (skala slide 320px); edit penuh lebih nyaman di tablet/laptop.

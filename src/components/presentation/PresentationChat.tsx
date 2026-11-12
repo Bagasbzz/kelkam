@@ -126,9 +126,9 @@ export default function PresentationChat({ root, messages, sourceTitle, question
     <div className="border-t border-slate-200 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 md:px-6">
       <div className="mx-auto max-w-3xl">
         {blocked && <p role="status" className="mb-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{blockedReason}</p>}
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          {!messages.length && starters.map((text) => <button key={text} type="button" disabled={busy || blocked} onClick={() => void send(text)} className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{text}</button>)}
-          <label className={`inline-flex items-center gap-1.5 rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 ${busy ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
+        <div className="-mx-3 mb-2 flex items-center gap-2 overflow-x-auto px-3 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0">
+          {!messages.length && starters.map((text) => <button key={text} type="button" disabled={busy || blocked} onClick={() => void send(text)} className="inline-flex min-h-10 shrink-0 items-center whitespace-nowrap rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 sm:whitespace-normal">{text}</button>)}
+          <label className={`inline-flex min-h-10 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 px-3.5 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 ${busy ? "pointer-events-none opacity-50" : "cursor-pointer"}`}>
             <Paperclip className="h-3.5 w-3.5" /> Lampirkan bahan
             <input type="file" className="hidden" accept={ACCEPT} multiple disabled={busy} onChange={(e) => { stage(Array.from(e.target.files ?? [])); e.target.value = ""; }} />
           </label>
@@ -137,7 +137,7 @@ export default function PresentationChat({ root, messages, sourceTitle, question
           {pending.length > 0 && <div className="mb-2 flex flex-wrap gap-2 border-b border-slate-100 pb-2" aria-label="Lampiran belum dikirim">
             {pending.map((file, index) => <span key={`${file.name}-${index}`} className="inline-flex max-w-[220px] items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700">
               <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" /><span className="truncate" title={file.name}>{file.name}</span>
-              <button type="button" disabled={busy} onClick={() => setPending((items) => items.filter((_, i) => i !== index))} aria-label={`Hapus lampiran ${file.name}`} className="text-slate-400 hover:text-red-600"><X className="h-3.5 w-3.5" /></button>
+              <button type="button" disabled={busy} onClick={() => setPending((items) => items.filter((_, i) => i !== index))} aria-label={`Hapus lampiran ${file.name}`} className="-my-1 -mr-1 flex h-8 w-8 shrink-0 items-center justify-center text-slate-400 hover:text-red-600"><X className="h-3.5 w-3.5" /></button>
             </span>)}
             <p className="w-full px-1 text-xs text-slate-500">Lampiran diunggah saat Anda menekan Kirim.</p>
           </div>}
@@ -154,7 +154,7 @@ export default function PresentationChat({ root, messages, sourceTitle, question
               aria-label="Pesan untuk AI presentasi"
               className="max-h-40 min-h-[40px] flex-1 resize-none bg-transparent px-2 py-2 text-[15px] outline-none"
             />
-            <Button type="submit" aria-label="Kirim pesan" variant="secondary" size="sm" disabled={busy || blocked || (!input.trim() && !pending.length)}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
+            <Button type="submit" aria-label="Kirim pesan" variant="secondary" size="sm" className="h-10 w-11 shrink-0 !px-0" disabled={busy || blocked || (!input.trim() && !pending.length)}>{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</Button>
           </div>
         </form>
       </div>
