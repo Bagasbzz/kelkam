@@ -21,7 +21,9 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
   const scene = sceneFor(deck, index, slide);
   const svg = renderSlideSvg(scene);
   const surface = useRef<HTMLDivElement>(null);
-  const gesture = useRef<{ pointer: number; target: EditTarget; mode: "move" | "resize"; origin: Bounds; left: number; top: number; width: number; height: number; startX: number; startY: number } | null>(null);
+  // started: gerakan baru dianggap geser setelah jari/mouse berpindah beberapa piksel, supaya ketukan untuk memilih
+  // objek di layar sentuh tidak ikut menggeser objek.
+  const gesture = useRef<{ pointer: number; target: EditTarget; mode: "move" | "resize"; origin: Bounds; left: number; top: number; width: number; height: number; startX: number; startY: number; started: boolean; slop: number } | null>(null);
   const [draft, setDraft] = useState<{ target: EditTarget; bounds: Bounds } | null>(null);
   const pendingBounds = useRef<{ target: EditTarget; bounds: Bounds } | null>(null);
   const elements = scene.elements.filter((element) => element.editKey);
@@ -32,13 +34,18 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
     const rect = surface.current.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     event.preventDefault(); event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId);
-    gesture.current = { pointer: event.pointerId, target, mode, origin: bounds, left: rect.left, top: rect.top, width: rect.width, height: rect.height, startX: event.clientX, startY: event.clientY };
+    const slop = event.pointerType === "mouse" ? 2 : 8;
+    gesture.current = { pointer: event.pointerId, target, mode, origin: bounds, left: rect.left, top: rect.top, width: rect.width, height: rect.height, startX: event.clientX, startY: event.clientY, started: mode === "resize", slop };
     pendingBounds.current = { target, bounds }; setDraft({ target, bounds });
   }
 
   function moved(event: PointerEvent<HTMLButtonElement>) {
     const current = gesture.current;
     if (!current || current.pointer !== event.pointerId) return;
+    if (!current.started) {
+      if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < current.slop) return;
+      current.started = true;
+    }
     const dx = (event.clientX - current.startX) / current.width * SLIDE_WIDTH;
     const dy = (event.clientY - current.startY) / current.height * SLIDE_HEIGHT;
     const next = { target: current.target, bounds: constrainBounds(current.mode === "move"
@@ -69,7 +76,7 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
 
   const previewSlide = draft ? setObjectBounds(slide, draft.target, draft.bounds) : slide;
   const previewSvg = draft ? renderSlideSvg(sceneFor(deck, index, previewSlide)) : svg;
-  return <div className={styles.canvasWrap} ref={surface}>
+  return <><div className={styles.canvasWrap} ref={surface}>
     <div className={styles.preview} role="img" aria-label={`Slide ${index + 1}: ${slide.title}`} dangerouslySetInnerHTML={{ __html: previewSvg }} />
     {elements.map((element) => {
       const target = element.editKey as EditTarget;
@@ -79,5 +86,11 @@ export default function SlideCanvas({ deck, index, disabled, selected, onSelect,
         {selected === target && !disabled && <button aria-label={`Ubah ukuran ${TARGET_LABELS[target]}`} className={styles.resizeHandle} onPointerDown={(e) => begin(e, target, element, "resize")} onPointerMove={moved} onPointerUp={(e) => finish(e)} onPointerCancel={(e) => finish(e, true)} onLostPointerCapture={(e) => finish(e, true)} />}
       </div>;
     })}
-  </div>;
+  </div>
+  {/* Layar sentuh/HP: kotak objek di slide kecil, jadi objek juga bisa dipilih dari daftar ini. */}
+  {elements.length > 0 && <div className={styles.objectChips} role="group" aria-label="Pilih objek slide">{elements.map((element) => {
+    const target = element.editKey as EditTarget;
+    return <button key={target} type="button" aria-pressed={selected === target} onClick={() => onSelect(target)}>{TARGET_LABELS[target]}</button>;
+  })}</div>}
+  </>;
 }

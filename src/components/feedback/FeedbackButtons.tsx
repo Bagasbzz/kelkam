@@ -22,13 +22,13 @@ export default function FeedbackButtons({ feature, targetId }: { feature: "lapor
 
   const button = (value: 1 | -1, label: string, Icon: typeof ThumbsUp) => (
     <button type="button" aria-label={label} aria-pressed={rating === value} onClick={() => void send(value)}
-      className={`rounded-lg p-2 -m-0.5 transition ${rating === value ? "bg-slate-900 text-white" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"}`}>
+      className={`flex h-10 w-10 items-center justify-center rounded-lg transition ${rating === value ? "bg-slate-900 text-white" : "text-slate-400 hover:bg-slate-100 hover:text-slate-700"}`}>
       <Icon className="h-4 w-4" />
     </button>
   );
 
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-slate-400">
+    <div className="-ml-2.5 mt-1 flex flex-wrap items-center gap-0.5 text-xs text-slate-400">
       {button(1, "Jawaban ini membantu", ThumbsUp)}
       {button(-1, "Jawaban ini kurang membantu", ThumbsDown)}
       {rating === 1 && <span>Terima kasih.</span>}

@@ -719,3 +719,10 @@ Dicek di 360, 768, 1024 (mode atas-bawah dan Panel Samping), 1440, plus modal As
   terpotong).
 - Catatan: kanvas memakai `touch-action: none` (geser/cubit untuk pan/zoom), jadi di HP halaman digulir dari luar kanvas;
   eslint 3 error lama di `uml-builder/page.tsx` (bukan dari perubahan ini).
+
+### 23.10 Tindak lanjut catatan audit (permintaan pemilik 2026-11-12)
+
+- Tombol 👍/👎 (`FeedbackButtons`, dipakai Laporan & Presentasi): 32px → 40px.
+- Edit slide di HP/layar sentuh: objek kini juga bisa dipilih dari deretan tombol di bawah kanvas (Label, Judul, Teks 1, ...);
+  area ketuk objek di kanvas diperluas di layar sentuh (Label 7px → 23px); ketukan untuk memilih tidak lagi ikut menggeser
+  objek (geser baru dimulai setelah jari berpindah 8px).
