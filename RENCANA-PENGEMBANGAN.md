@@ -559,7 +559,7 @@ Urutan (centang saat selesai):
   4. ✅ Presentasi `/presentasi` (daftar, chat + rencana, editor slide, tayang)
   5. ✅ Tugas mahasiswa: `/tugas`, `/tugas/[token]`, `/tugas/[token]/[tugasId]` (pengumpulan)
   6. Studio `/studio`
-  7. Diagram `/uml-builder`
+  7. ✅ Diagram `/uml-builder`
   8. Editor Dokumen `/template-generator` → `/editor`
   9. Olah Data `/data-synthesizer`
   10. Alat Bantu AI `/ai-tools`
@@ -700,3 +700,22 @@ Daftar, Chat AI + rencana, Edit slide, Tayangkan. Dicek di 360, 390, 768, 1024, 
 - Layar sentuh (HP/tablet, `pointer: coarse`): titik ubah ukuran objek 12px → 22px, tombol bilah atas 44px.
 - Mode tayang: tombol 44px, teks bilah atas 12px.
 - Catatan: kotak pilih objek di kanvas tetap kecil di HP (skala slide 320px); edit penuh lebih nyaman di tablet/laptop.
+
+### 23.9 Hasil nomor 7, Diagram `/uml-builder` (2026-11-12)
+
+Dicek di 360, 768, 1024 (mode atas-bawah dan Panel Samping), 1440, plus modal Asisten AI di 360. Teks lama tidak diubah.
+- HP (<768px): catatan baru di bawah judul "Di HP, diagram bisa dilihat, diedit ringan, dan diunduh. Untuk mengedit penuh,
+  gunakan laptop atau tablet. Lihat kanvas" (tautan langsung ke kanvas). Tombol "Panel Samping" disembunyikan di HP.
+- Toolbar HP: tombol Simpan/Ekspor/Rapikan/Kosongkan/Hubungkan jadi grid 2 kolom (dulu deretan acak 3-4 baris), garis
+  pemisah disembunyikan; tombol 40px di HP/tablet/layar sentuh (desktop tetap); zoom +/− kanvas 40px.
+- Isian (select, label elemen, kebutuhan diagram di modal AI) 14px → 16px di HP (CSS modul dan inline style mengalahkan
+  aturan global); select/input 44px.
+- Kanvas di HP: diagram dibuat mulai x≈500 sehingga dulu tidak terlihat di layar 360px; sekarang saat diagram pertama kali
+  berisi, tampilan otomatis digeser ke tengah diagram (sekali, `DiagramCanvas`, hanya bila lebar kanvas <700px).
+- Tombol AI melayang 64px + label menutupi isi di HP: sekarang 56px tanpa label di HP (label jadi `aria-label`), jarak bawah
+  halaman ditambah agar konten terakhir tidak tertutup. Tombol itu juga dulu tampil di atas modal Asisten AI dan menutupi
+  tombol "Generate"; sekarang disembunyikan saat modal terbuka. Tombol tutup modal/petunjuk diperbesar.
+- Mode Panel Samping (1024px+): tinggi memperhitungkan navbar (dulu 100vh sehingga halaman tergulir 72px dan bawah kanvas
+  terpotong).
+- Catatan: kanvas memakai `touch-action: none` (geser/cubit untuk pan/zoom), jadi di HP halaman digulir dari luar kanvas;
+  eslint 3 error lama di `uml-builder/page.tsx` (bukan dari perubahan ini).

@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
 import { DiagramNode, DiagramEdge } from '@/lib/types/diagram';
 import { diagramFontCap, laneTitleFont } from '@/lib/uml/text-fit';
 import {
@@ -95,6 +95,24 @@ const DiagramCanvas: React.FC<DiagramCanvasProps> = ({
   } | null>(null);
 
   const [rubberBand, setRubberBand] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  // Layar sempit (HP): diagram digambar mulai x≈500 sehingga tidak terlihat. Saat diagram pertama kali berisi,
+  // geser tampilan ke tengah diagram sekali saja (tidak mengganggu geseran pengguna setelahnya).
+  const centeredRef = useRef(false);
+  const hasNodes = nodes.length > 0;
+  useEffect(() => {
+    if (!hasNodes) { centeredRef.current = false; return; }
+    const wrapper = wrapperRef.current;
+    if (centeredRef.current || !wrapper || wrapper.clientWidth >= 700) return;
+    centeredRef.current = true;
+    const left = Math.min(...nodes.map((node) => node.x));
+    const right = Math.max(...nodes.map((node) => node.x + node.width));
+    const top = Math.min(...nodes.map((node) => node.y));
+    wrapper.scrollLeft = Math.max(0, ((left + right) / 2) * scale - wrapper.clientWidth / 2);
+    wrapper.scrollTop = Math.max(0, top * scale - 24);
+    // Hanya bereaksi pada perubahan kosong ↔ berisi; posisi node dibaca saat itu.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasNodes]);
+
   const visibleLanes = lanes.length ? lanes : Array.from(new Set(nodes.map((node) => node.lane).filter(Boolean))) as string[];
   const laneWidth = resolveLaneWidth(nodes, visibleLanes, savedLaneWidth);
   const laneHeight = Math.max(canvasHeight - 80, 900, ...nodes.map((node) => node.y + node.height + 80));

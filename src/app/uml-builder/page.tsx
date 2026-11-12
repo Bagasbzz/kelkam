@@ -1497,6 +1497,10 @@ export default function UMLBuilder() {
               {layoutMode === 'side-by-side' && <p style={{ color: '#64748b', fontSize: '0.75rem', margin: 0, marginTop: '4px' }}>Buat flowchart, use case, dan activity diagram, lalu pakai di laporan.</p>}
             </div>
           </header>
+          <p className={styles.mobileNote}>
+            Di HP, diagram bisa dilihat, diedit ringan, dan diunduh. Untuk mengedit penuh, gunakan laptop atau tablet.{' '}
+            <a href="#kanvas-diagram">Lihat kanvas</a>
+          </p>
 
 
 
@@ -1504,7 +1508,7 @@ export default function UMLBuilder() {
             <div style={{ background: 'linear-gradient(to right, #eef2ff, #e0e7ff)', border: '1px solid #c7d2fe', borderRadius: '12px', padding: '12px 16px', fontSize: '0.85rem', color: '#3730a3', marginBottom: '1rem', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <strong style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.9rem' }}><HelpCircle size={16} /> Cara Pakai:</strong>
-                <button aria-label="Tutup petunjuk" onClick={() => { setShowOnboarding(false); localStorage.setItem('uml-onboarding-seen', '1'); }} style={{ background: 'white', border: '1px solid #c7d2fe', borderRadius: '50%', width: '24px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#6366f1' }}><X size={14} /></button>
+                <button aria-label="Tutup petunjuk" onClick={() => { setShowOnboarding(false); localStorage.setItem('uml-onboarding-seen', '1'); }} style={{ background: 'white', border: '1px solid #c7d2fe', borderRadius: '50%', width: '36px', height: '36px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#6366f1' }}><X size={14} /></button>
               </div>
               <ul style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.5 }}>
                 <li>Pilih Flowchart, Use Case, Activity, atau Sequence.</li>
@@ -1531,21 +1535,21 @@ export default function UMLBuilder() {
             <div className={styles.buttonGroup}>
               <button className={styles.umlBtn} onClick={handleUndo} disabled={history.length === 0}><IconUndo /> Undo</button>
               <button className={styles.umlBtn} onClick={handleRedo} disabled={redoStack.length === 0}><IconRedo /> Redo</button>
-              <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
+              <div className={styles.sep} style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button className={styles.umlBtn} onClick={() => adjustZoom(-10)}>-</button>
               <span style={{ fontSize: '0.8125rem', fontWeight: '700', minWidth: '35px', textAlign: 'center' }}>{zoomLevel}%</span>
               <button className={styles.umlBtn} onClick={() => adjustZoom(10)}>+</button>
               <button className={styles.umlBtn} onClick={() => setZoomLevel(100)} style={{ fontSize: '0.7rem', padding: '0.2rem 0.5rem' }}>Reset</button>
             </div>
 
-            <div className={styles.buttonGroup} style={{ marginTop: '0.5rem' }}>
+            <div className={`${styles.buttonGroup} ${styles.actionGroup}`} style={{ marginTop: '0.5rem' }}>
               <button className={`${styles.umlBtn} ${styles.primary}`} onClick={handleSaveProject}><IconSave /> Simpan Proyek</button>
               <button className={styles.umlBtn} onClick={handleDownload}><IconDownload /> Ekspor PNG</button>
               <button className={styles.umlBtn} onClick={handleAutoLayout}><IconLayout /> Rapikan Diagram</button>
-              <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
+              <div className={styles.sep} style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button className={`${styles.umlBtn} ${styles.danger}`} onClick={handleClearProject}>Kosongkan</button>
 
-              <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
+              <div className={styles.sep} style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button
                 className={styles.umlBtn}
                 onClick={() => { setConnectMode(m => !m); setConnectFromId(null); }}
@@ -1553,9 +1557,9 @@ export default function UMLBuilder() {
               >
                 {connectMode ? <><Square size={14} /> Selesai Hubungkan</> : <><Zap size={14} /> Hubungkan</>}
               </button>
-              <div style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
+              <div className={styles.sep} style={{ width: '1px', height: '18px', background: '#e2e8f0', margin: '0 4px' }} />
               <button
-                className={styles.umlBtn}
+                className={`${styles.umlBtn} ${styles.hideOnMobile}`}
                 onClick={() => setLayoutMode(layoutMode === 'top-bottom' ? 'side-by-side' : 'top-bottom')}
                 style={{ background: layoutMode === 'side-by-side' ? '#f1f5f9' : 'white' }}
               >
@@ -1698,7 +1702,7 @@ export default function UMLBuilder() {
         )}
 
         <div 
-          className={styles.canvasContainer} 
+          id="kanvas-diagram" className={styles.canvasContainer} 
           onClick={(e) => {
             if (e.target === e.currentTarget || (e.target as Element).id === 'diagram-svg') {
               setSelectedNodeId(null);
@@ -1743,7 +1747,7 @@ export default function UMLBuilder() {
       </main>
 
       {/* AI Floating Button */}
-        <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 300, display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className={styles.aiFab} style={isAiModalOpen ? { display: 'none' } : undefined}>
         {diagramMeta.reportDiagramId && (
           <button
             onClick={handleApproveToReport}
@@ -1768,18 +1772,18 @@ export default function UMLBuilder() {
             <CheckCircle2 size={18} /> {isApprovingToReport ? 'Menyimpan…' : 'Setujui ke Laporan'}
           </button>
         )}
-        <div style={{ background: 'white', padding: '8px 16px', borderRadius: '20px', boxShadow: '0 4px 15px rgba(0,0,0,0.1)', fontSize: '0.85rem', fontWeight: 700, color: '#4f46e5', border: '1px solid #e0e7ff', animation: 'bounce 2s infinite' }}>
+        <div className={styles.aiHint} style={{ animation: 'bounce 2s infinite' }}>
           Susun otomatis dengan AI
         </div>
         <button
+          aria-label="Susun otomatis dengan AI"
+          className={styles.aiButton}
           onClick={() => {
             setAiClarification('');
             setAiStatusText('');
             setIsAiModalOpen(true);
           }}
           style={{
-            width: '64px',
-            height: '64px',
             borderRadius: '50%',
             background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
             color: 'white',
@@ -1881,7 +1885,7 @@ export default function UMLBuilder() {
                 aria-label="Tutup asisten AI"
                 onClick={() => setIsAiModalOpen(false)}
                 disabled={isGeneratingAI || isAnalyzingImage}
-                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '4px', display: 'flex' }}
+                style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: '10px', margin: '-8px -10px -8px 0', display: 'flex' }}
               >
                 <X size={20} />
               </button>

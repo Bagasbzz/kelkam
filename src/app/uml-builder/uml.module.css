@@ -356,5 +356,141 @@
   }
 }
 
-
-
+/* Audit responsif 2026-11-12. */
+.mobileNote {
+  display: none;
+}
+.aiFab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.aiHint {
+  background: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #4f46e5;
+  border: 1px solid #e0e7ff;
+}
+.aiButton {
+  width: 64px;
+  height: 64px;
+  flex-shrink: 0;
+}
+.canvasContainer {
+  scroll-margin-top: 84px;
+}
+@media (max-width: 1024px), (pointer: coarse) {
+  .umlBtn {
+    min-height: 40px;
+  }
+  .floatingToolbar button {
+    width: 40px;
+    height: 40px;
+  }
+}
+@media (max-width: 768px) {
+  .mainContainer {
+    padding: 0.5rem 0.5rem 96px;
+  }
+  .mobileNote {
+    margin: 0.5rem 0 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.5rem;
+    background: var(--slate-50);
+    border: 1px solid var(--slate-200);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    color: var(--slate-600);
+  }
+  .mobileNote a {
+    display: inline-block;
+    padding: 0.5rem 0;
+    font-weight: 700;
+    color: var(--primary);
+    text-decoration: underline;
+  }
+  .sep,
+  .hideOnMobile {
+    display: none !important;
+  }
+  .buttonGroup {
+    gap: 0.4rem;
+  }
+  .buttonGroup .umlBtn {
+    justify-content: center;
+    font-size: 0.8125rem;
+  }
+  .buttonGroup .umlBtn:not(.primary):not(.danger) {
+    min-width: 44px;
+  }
+  .actionGroup {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .actionGroup .umlBtn {
+    white-space: nowrap;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+  .umlPage select,
+  .umlPage input[type="text"] {
+    min-height: 44px;
+  }
+  .aiFab {
+    bottom: 16px;
+    right: 16px;
+  }
+  .aiButton {
+    width: 56px;
+    height: 56px;
+  }
+}
+@media (max-width: 767px) {
+  .mobileNote {
+    display: block;
+  }
+}
+@media (max-width: 639px) {
+  .inputGroup {
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+  }
+  .formRow > .inputGroup {
+    flex-basis: 100%;
+  }
+  .umlPage select,
+  .umlPage input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+  .umlPage textarea {
+    font-size: 16px !important;
+  }
+  .umlPage [role=dialog] button {
+    min-height: 40px;
+  }
+  .aiHint {
+    display: none;
+  }
+}
+@media (min-width: 769px) {
+  /* Layout global sudah memberi jarak 72px untuk navbar. */
+  .mainContainer.sideBySide {
+    height: calc(100dvh - 72px);
+  }
+  .sideBySide .controlsCard {
+    height: 100%;
+  }
+  .sideBySide .canvasContainer {
+    height: 100%;
+  }
+}
+.umlPage {
+  min-height: calc(100dvh - 72px);
+}
