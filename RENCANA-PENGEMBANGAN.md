@@ -786,6 +786,60 @@ tulisan tangan sebagai aksen), komposisi tidak simetris, dan **animasi elemen** 
 3. Dibuat di server lewat antrean gambar yang sudah ada (gpt-image-2, ±2 menit per gambar, paralel); slide tampil dulu
    dengan latar vektor Fase 1, latar AI menyusul otomatis.
 
+### Analisis screenshot Canva dari pemilik (2026-11-12, kiriman 1 dari beberapa)
+
+1. **"Analisis Laporan Keuangan", navy + oranye (DYSA Studio).** Judul dua warna (baris putih + baris oranye, sans
+   sangat tebal), foto gedung penuh di kanan dipotong segitiga diagonal oranye, grid titik 4×4 kecil, foto bersudut
+   membulat, blok oranye bentuk "daun" (satu sudut membulat besar), kartu putih dengan lingkaran panah di sudut, panel
+   oranye besar berisi sub-poin, foto dalam bingkai berlekuk dengan garis luar oranye bergeser. Kesan: korporat modern.
+2. **"Seminar Proposal Minimalis Biru Putih" (Tim Kuning Jeruk).** Pita biru muda horizontal, serif kapital berjarak
+   lebar, bingkai garis navy tipis dengan **garis penghubung berujung bulatan**, kapsul navy untuk nama/NIM/prodi, tab
+   navy setengah keluar di tepi kiri-kanan, footer kecil "SEMINAR PROPOSAL | 04", nomor "01." serif, kotak judul navy,
+   foto meja + kotak aksen. Ada animasi (tombol jeda di pratinjau).
+3. **"Seminar Usulan Penelitian", biru tua putih (Noansa Studio).** Latar abu terang dengan foto gedung pudar,
+   **garis kontur bergelombang** biru di kanan, garis horizontal tipis atas-bawah, kapsul merek di kanan atas, kapsul
+   gradien biru di kiri bawah, judul navy tebal + subjudul kapital kecil, foto bersudut membulat, kartu dengan **tab judul
+   kapsul yang menumpang** di atas kartu, kartu gradien biru berisi ikon dalam kotak putih, grafik garis asli.
+4. **"Aesthetic Scrapbook Biru Putih" (Tropical Peach).** Tekstur **denim**, pola **gingham** cat air, noda tinta
+   cat air, **kancing**, **bintang halftone**, bingkai **jahitan putus-putus**, potongan denim bertepi zig-zag, label judul
+   bentuk **perangko bergerigi**, stiker panah melengkung, font tebal membulat dengan garis tepi putih.
+5. **"Tugas Presentasi Tema Laut Cat Air" (fairuzhayinah).** Latar **cat air** biru, ilustrasi ikan, ubur-ubur, bintang
+   laut, kerang, coretan krayon, judul **tulisan tangan** putih, kartu isi putih bertepi cat air.
+
+Kiriman 2:
+6. **"Kertas Tua Vintage Biru Putih" (Femoza Studio).** Latar kolase **kertas biru sobek**, kartu **kertas bergaris kotak**
+   dengan cincin spiral dan klip kertas berbentuk balon bicara, foto potongan (bola dunia, jam saku, patung), **kilau
+   bintang 4 sudut** emas, serif tebal berkarakter; slide isi: kartu putih bertekstur dengan **tepi perangko**, ornamen
+   ulir, ikon grafik, isi serif.
+7. **"Tugas Kelompok Geometris Biru" (Fontherapy Studio).** Latar abu terang, **persegi membulat besar diputar 45°**
+   di sudut (navy, biru baja, krem), garis luar tipis yang mengikuti bentuk, lingkaran krem, grid titik, ">>>", arsiran
+   miring; judul tengah dua warna + garis pemisah dengan tiga titik; kartu bergaris dengan **ikon dalam lingkaran di
+   tepi atas**, grafik donat dan garis. Kesan rapi dan aman untuk kuliah.
+8. **"Strategi Digital Marketing UMKM", navy + kuning (Dusk Studio).** Foto dipisah **lengkung gelombang** kuning,
+   judul tiga baris dengan baris tengah kuning, kapsul alamat situs, setengah lingkaran dan titik, deret titik kecil,
+   kartu bergaris dengan **angka besar kuning 01/02/03**, pita kuning di bawah, tab kuning di tepi, ikon garis, **foto
+   dalam cincin kuning**. (Penomoran tetap boleh bila jadi elemen desain, bukan kotak kecil seragam.)
+9. **"Kliping Merah Muda Putih" (Tim Kuning Jeruk).** **Kertas merah muda kusut dan sobek**, tekstur glitter, potongan
+   koran, kertas kotak, kupu-kupu, kilau, **judul huruf tempel** (tiap huruf di lingkaran/kotak), bingkai foto **bentuk
+   bunga** bertepi sobek, label nama dari **potongan kertas**, angka bulat dihubungkan garis + kartu label, benda potongan
+   (buku, jam pasir, kalkulator), selotip.
+10. **"Teknik Informatika Robotika Ungu Biru" (DYSA Studio).** Latar **ilustrasi 3D** ungu neon (tangan robot keluar
+   dari laptop, kristal, planet, siluet kota bercahaya), judul tebal miring melengkung, foto lingkaran, beranimasi.
+11. Sekilas dari daftar Canva: "Sidang Skripsi" krem minimalis serif, piksel lucu (stroberi, awan), proposal hitam-krem
+   dengan garis-garis, kartu foto di atas latar gedung.
+
+Pola yang dipakai ulang di semua contoh (bahan renderer baru):
+- Judul selalu jadi pusat: sangat besar, dua warna atau tulisan tangan; **tidak ada label kecil di atas judul**.
+- Satu "bahasa bentuk" konsisten per deck (daun/sudut membulat, garis berujung bulatan, kontur, perangko, cat air),
+  diulang di semua slide dengan variasi posisi; slide isi memakai kerangka yang sama dengan sampul.
+- Foto/ilustrasi besar ditempatkan di bingkai khas (dipotong diagonal, berlekuk, sudut membulat, tepi cat air).
+- Latar bertekstur atau bergambar (foto pudar, kain, cat air, kontur), bukan warna polos + bentuk geometri acak.
+- Kartu isi punya ciri (tab kapsul menumpang, lingkaran panah, jahitan, perangko), bukan kotak seragam bernomor.
+- Info penyusun dalam kapsul/pita yang menyatu dengan desain, bukan baris berkolom dengan garis tegak.
+- Benda potongan (stiker) yang relevan dengan topik tersebar di tepi slide; ini paling cocok dibuat AI per presentasi.
+- Dua kelompok besar: **rapi/formal** (geometris, korporat, minimal serif; cocok sidang/seminar) dan **estetik/ceria**
+  (scrapbook, kliping, cat air, vintage, 3D; cocok tugas kelas). Pengguna dipersilakan memilih kelompok di awal.
+
 ### Pertanyaan untuk pemilik (keputusan K21–K23)
 - K21 Font: tanam font ke PPTX (rekomendasi) atau cukup font sistem di PPTX dan font unik hanya di pratinjau/Google Slides?
 - K22 Batas gambar AI per presentasi untuk Fase 3: sekarang maks. 3; usulan maks. 8 (2 latar + 3–5 elemen + 1–2 gambar utama).
