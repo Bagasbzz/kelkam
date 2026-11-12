@@ -726,3 +726,69 @@ Dicek di 360, 768, 1024 (mode atas-bawah dan Panel Samping), 1440, plus modal As
 - Edit slide di HP/layar sentuh: objek kini juga bisa dipilih dari deretan tombol di bawah kanvas (Label, Judul, Teks 1, ...);
   area ketuk objek di kanvas diperluas di layar sentuh (Label 7px → 23px); ketukan untuk memilih tidak lagi ikut menggeser
   objek (geser baru dimulai setelah jari berpindah 8px).
+
+## 24. Presentasi: desain ala template Canva, font unik, animasi, latar AI (permintaan 2026-11-12, RANCANGAN)
+
+Keluhan pemilik (screenshot deck "SakuRapi" di produksi + contoh Canva): tampilan masih khas PPT buatan GPT/Claude.
+Contoh yang ditandai pemilik:
+- Label kecil di atas judul ("LAPORAN FINAL", "ALUR SISTEM"), nama merek kecil di pojok kiri atas.
+- Baris info "Disusun oleh | NIM | Waktu" dengan garis tegak pemisah.
+- Panah chevron berderet untuk alur, dan **bug**: bila poin tidak berformat "Label: isi", panah berisi "Tahap 2/Tahap 3"
+  dan teks jatuh di bawah panah (`design.ts` layout `process`, fallback `Tahap ${i + 1}`).
+- Penomoran "01 / 15" di pojok, bentuk geometris polos; font hanya font sistem (Arial, Impact, Georgia, dll.).
+- Animasi yang diminta belum terasa: yang ada hanya transisi slide fade/push dan judul muncul (`SLIDE_MOTIONS`),
+  dan AI tidak menanyakan animasi ke pengguna.
+
+Contoh yang disukai pemilik (Canva): EAG3Gea7O7M, EAHSKPH3cio, EAGIqWYwzXg, EAGwfKloeDk, EAGJNtARgls, EAFvJsVqL_s,
+EAHGf4Z-788, EAHKp7vMtFo, EAHBKh1RTlM (+ screenshot: "Presentasi Kelompok" tekstur denim/kotak-kotak dengan kancing dan
+jahitan, "Tugas Presentasi" doodle awan + pesawat kertas + garis putus-putus, bingkai bunga tulip + pita, kertas kotak
+dengan stiker, "Seminar Proposal" bersih dengan bingkai garis). Catatan: halaman Canva menolak akses otomatis (403), jadi
+acuan visual hanya dari screenshot; pemilik bisa mengirim screenshot halaman isi (bukan hanya sampul) bila ada.
+Ciri yang membuat contoh itu terasa "didesain manusia": **latar bertekstur/bergambar** (kain, kertas, cat air, foto),
+**dekorasi ilustratif** (stiker, kancing, selotip, bunga, doodle, coretan tangan), **tipografi berkarakter** (display tebal,
+tulisan tangan sebagai aksen), komposisi tidak simetris, dan **animasi elemen** saat tayang.
+
+### Rancangan (menunggu persetujuan pemilik)
+
+**Fase 1, tampilan baru tanpa biaya AI tambahan**
+1. Buang pola khas AI dari renderer: label kecil di atas judul hanya bila memang bermakna (bawaan mati), merek kecil di
+   pojok, baris info bergaris tegak, chevron berderet, penghitung "01 / 15", kartu bernomor seragam. Perbaiki bug "Tahap n".
+2. Gaya visual baru ala Canva (±8 keluarga), masing-masing punya latar, dekorasi, pasangan font, dan komposisi sendiri:
+   Kertas & scrapbook (tekstur kertas, selotip, sobekan, stiker), Kain & jahitan (denim/kotak-kotak, garis jahit, kancing),
+   Doodle kelas (awan, pesawat kertas, garis putus-putus, coretan), Bunga & pita lembut, Editorial majalah (judul raksasa,
+   foto penuh), Neo-brutal (blok warna, garis hitam tebal, bayangan keras), Retro (gelombang, matahari), Gelap neon.
+   Dekorasi digambar sebagai vektor (tetap tajam, ikut ke PPTX sebagai bentuk/gambar), posisinya diacak dari seed deck.
+3. Komposisi isi baru per gaya: alur sebagai jalur/tangga/kartu foto (bukan chevron), sampul dengan nama penyusun yang
+   menyatu dengan desain, kutipan, angka besar, perbandingan, galeri.
+4. Font unik dari Google Fonts (lisensi OFL, disimpan di server sendiri): mis. Fraunces, DM Serif Display, Bricolage
+   Grotesque, Syne, Unbounded, Archivo Black, Bebas Neue, Lilita One, Shrikhand, Fredoka, Baloo 2, Space Grotesk, Playfair
+   Display, serta tulisan tangan untuk aksen (Caveat, Patrick Hand, Gloria Hallelujah). Dipakai di pratinjau web dan
+   **ditanam ke file PPTX** agar tampil sama di PowerPoint tanpa memasang font (didukung PowerPoint 2019/365; versi lama
+   memakai font pengganti; perlu uji di PowerPoint asli).
+5. Warna utama tetap bisa diganti pengguna di tab Tampilan; dekorasi dan latar mengikuti palet.
+
+**Fase 2, animasi ala Canva**
+1. Preset animasi per deck: Tanpa, Halus (muncul memudar bertahap), Dinamis (naik/geser bertahap, transisi dorong),
+   Ceria (pop/memantul pada stiker dan judul), Ketik (judul muncul per kata). Animasi per elemen dengan jeda bertahap
+   (judul → gambar → poin satu per satu → dekorasi), bukan hanya transisi slide.
+2. Sama di pratinjau web (mode Tayangkan) dan di PPTX (efek masuk PowerPoint: fade, fly in, zoom, wipe, float; transisi
+   fade/push/morph untuk elemen yang sama di slide berurutan).
+3. AI **menanyakan** ke pengguna sebelum menyusun: "Mau ditambah animasi? Tanpa / Halus / Dinamis / Ceria"; bisa diubah per
+   deck atau per slide di tab Tampilan.
+
+**Fase 3, latar dan elemen dibuat AI khusus per presentasi**
+1. Setelah pengguna memilih template, AI bertanya lebih detail: suasana (formal/ceria/elegan/futuristik), gaya gambar
+   (foto, ilustrasi datar, cat air, 3D, kolase kertas), objek yang ingin muncul, dan animasi.
+2. Dari jawaban itu AI menyusun arahan seni lalu membuat: 2 latar penuh (sampul dan isi; latar isi dibuat lembut dengan
+   ruang kosong agar teks terbaca), 3–5 elemen terpisah berlatar transparan (stiker/ilustrasi), dan gambar utama yang sudah
+   ada. Latar dipasang sebagai gambar latar slide (teks tetap bisa diedit di PPTX). Bila warna utama diganti jauh, ditawarkan
+   membuat ulang latar.
+3. Dibuat di server lewat antrean gambar yang sudah ada (gpt-image-2, ±2 menit per gambar, paralel); slide tampil dulu
+   dengan latar vektor Fase 1, latar AI menyusul otomatis.
+
+### Pertanyaan untuk pemilik (keputusan K21–K23)
+- K21 Font: tanam font ke PPTX (rekomendasi) atau cukup font sistem di PPTX dan font unik hanya di pratinjau/Google Slides?
+- K22 Batas gambar AI per presentasi untuk Fase 3: sekarang maks. 3; usulan maks. 8 (2 latar + 3–5 elemen + 1–2 gambar utama).
+  Biaya gambar naik sekitar 2–3 kali per deck.
+- K23 Animasi bawaan bila pengguna tidak menjawab: Halus (rekomendasi) atau Tanpa.
+- Urutan usulan: Fase 1 → Fase 2 → Fase 3, satu commit + push per fase.
