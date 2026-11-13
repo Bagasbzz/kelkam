@@ -16,7 +16,7 @@ export function noDash(value: string) {
  */
 export function sceneFor(deck: PresentationDeck, index: number, slide: PresentationSlide = deck.slides[index]): SlideScene {
   return deck.design
-    ? layoutDesignedSlide(slide, deck.design, index, deck.slides.length)
+    ? layoutDesignedSlide(slide, deck.design, index)
     : layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette);
 }
 
@@ -94,7 +94,6 @@ const round3 = (value: number) => Math.round(value * 1000) / 1000;
 const HEXAGON: Points = [[0.25, 0], [0.75, 0], [1, 0.5], [0.75, 1], [0.25, 1], [0, 0.5]];
 const DIAMOND: Points = [[0.5, 0], [1, 0.5], [0.5, 1], [0, 0.5]];
 const SLANT: Points = [[0.22, 0], [1, 0], [1, 1], [0, 1]];
-const CHEVRON: Points = [[0, 0], [0.84, 0], [1, 0.5], [0.84, 1], [0, 1], [0.16, 0.5]];
 
 function arch(): Points {
   const points: [number, number][] = [];
@@ -144,7 +143,7 @@ export function splitLabel(value: string): { label: string; text: string } {
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign, index = 0, total = 1): SlideScene {
+export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign, index = 0): SlideScene {
   const genes = styleGenes(design.seed, design.frame, random);
   // The page itself leans toward the deck color, so no two decks share the same plain background.
   const t = designTokens({ ...design, background: mix(design.background.toUpperCase(), design.primary.toUpperCase(), genes.tint) });
@@ -178,19 +177,14 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
   const headingBold = t.heading !== "Georgia" && t.heading !== "Impact";
   const title = (b: Bounds, size: number, options: Partial<Pick<TextElement, "color" | "align">> = {}) =>
     text(slide.title, b, size, { editKey: "title", fontFace: t.heading, bold: headingBold, lineHeight: t.heading === "Georgia" ? 1.18 : 1.06, ...options });
-  const eyebrow = (b: Bounds, onFill?: string, align: TextElement["align"] = "left") => {
+  /**
+   * Label kecil berhuruf kapital di atas judul adalah ciri PPT buatan AI, jadi tidak dipakai di slide isi.
+   * Di sampul, label (mis. "Presentasi Tugas Akhir") menjadi baris pembuka judul dengan huruf judul, seperti
+   * "PRESENTASI" di atas "SEMINAR PROPOSAL" pada template desainer.
+   */
+  const eyebrow = (b: Bounds, align: TextElement["align"] = "left") => {
     if (!slide.eyebrow) return;
-    const label = slide.eyebrow.toUpperCase();
-    if (genes.eyebrow === "tag") {
-      const width = Math.min(b.w, 0.45 + label.length * 0.1);
-      const px = align === "right" ? b.x + b.w - width : b.x;
-      shape("rect", px, b.y + 0.02, width, 0.36, onFill ? t.background : t.accent);
-      text(label, { x: px + 0.14, y: b.y + 0.07, w: width - 0.2, h: 0.3 }, 11, { editKey: "eyebrow", bold: true, color: onFill ? t.text : t.onAccent });
-    } else if (genes.eyebrow === "rule") {
-      const ruleX = align === "right" ? b.x + b.w - 0.5 : b.x;
-      line(ruleX, b.y + 0.2, 0.5, 0, onFill ?? t.accentText, 2.4);
-      text(label, { x: align === "right" ? b.x : b.x + 0.65, y: b.y, w: b.w - 0.65, h: 0.4 }, 12, { editKey: "eyebrow", bold: true, color: onFill ?? t.accentText, align });
-    } else text(label, { ...b, h: 0.4 }, 12, { editKey: "eyebrow", bold: true, color: onFill ?? t.accentText, align });
+    text(slide.eyebrow, { ...b, h: 0.5 }, 22, { editKey: "eyebrow", fontFace: t.heading, bold: headingBold, color: t.accentText, align, lineHeight: 1 });
   };
   const body = (i: number, b: Bounds, size: number, options: Partial<Pick<TextElement, "color" | "align" | "bold">> = {}) =>
     text(slide.body[i], b, size, { editKey: `body-${i}` as SlideEditTarget, ...options });
@@ -255,10 +249,11 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
   };
   if (layout !== "section") chrome();
 
-  // --- header & footer ------------------------------------------------------------
+  // --- header ------------------------------------------------------------
   const institution = design.institution ?? "";
   const logo = design.logo;
   const header = (onFill?: string) => {
+    if (!logo) return;
     const y = t.frame === "wave" ? 0.13 : 0.3;
     let x = fx(0.75, 4.5);
     if (logo) {
@@ -267,7 +262,6 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
     }
     if (institution) text(institution, { x, y: y + 0.03, w: mirror ? 4.05 : 4.5, h: 0.3 }, 10, { bold: true, color: onFill ?? (t.frame === "wave" ? t.onPrimary : t.muted), align: mirror ? "right" : "left" });
   };
-  const footer = (color = t.muted) => text(`${pad(index + 1)} / ${pad(total)}`, { x: mirror ? 0.75 : W - 2.1, y: 7.0, w: 1.35, h: 0.26 }, 10, { color, align: mirror ? "left" : "right" });
 
   // --- compositions ----------------------------------------------------------------
   const contentX = 0.85, contentW = W - 1.7;
@@ -291,23 +285,17 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       if (institution) text(institution, { x: fx(logo && (art || closing) ? 1.6 : 0.85, 5.5), y: 0.72, w: 5.5, h: 0.32 }, 12, { bold: true, color: t.muted, align: mirror ? "right" : "left" });
       const textX = fx(0.85, 6.6), textW = 6.6;
       const align = mirror ? "right" : "left";
-      eyebrow({ x: textX, y: 1.55, w: textW, h: 0.42 }, undefined, align);
-      title({ x: textX, y: 2.15, w: textW, h: closing ? 2.2 : 2.55 }, closing ? 60 : 54, { align });
+      eyebrow({ x: textX, y: 1.5, w: textW, h: 0.5 }, align);
+      title({ x: textX, y: slide.eyebrow ? 2.05 : 1.75, w: textW, h: closing ? 2.2 : slide.eyebrow ? 2.6 : 2.9 }, closing ? 60 : 54, { align });
       const [lead, ...info] = slide.body;
       if (lead) body(0, { x: textX, y: closing ? 4.5 : 4.85, w: textW, h: 0.75 }, 18, { color: t.muted, align });
       const cells = info.slice(0, 3);
       if (cells.length) {
-        const cellW = Math.min(2.25, textW / cells.length);
-        cells.forEach((value, i) => {
-          const { label, text: content } = splitLabel(value);
-          const x = mirror ? textX + textW - cellW * (i + 1) : textX + i * cellW;
-          line(x, 5.85, 0, 0.72, t.accent, 2.2);
-          if (label) text(label, { x: x + 0.14, y: 5.83, w: cellW - 0.2, h: 0.28 }, 10, { color: t.muted });
-          body(i + 1, { x: x + 0.14, y: label ? 6.1 : 5.9, w: cellW - 0.2, h: label ? 0.5 : 0.65 }, 13, { bold: true });
-          // The label is drawn separately; editing still changes the whole "Label: isi" line.
-          const last = elements.at(-1);
-          if (label && last?.type === "text" && last.editKey === `body-${i + 1}`) Object.assign(last, fitText(content, last, 13, last.fontFace, last.lineHeight), { text: content });
-        });
+        // Blok warna menempel di tepi slide dengan ujung membulat, berisi "Disusun oleh: ...", "NIM: ...".
+        const rowH = 0.34, blockH = cells.length * rowH + 0.42, blockW = 6.35, blockY = Math.min(5.72, H - blockH - 0.3);
+        const bx = mirror ? W - blockW + 0.4 : -0.4;
+        poly(bx, blockY, blockW, blockH, t.primary, rounded(blockW, blockH, blockH / 2));
+        cells.forEach((_, i) => body(i + 1, { x: mirror ? W - blockW + 0.75 : 0.85, y: blockY + 0.21 + i * rowH, w: blockW - 1.25, h: rowH }, 14, { bold: i === 0, color: t.onPrimary, align }));
       }
       break;
     }
@@ -326,13 +314,11 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       title({ x, y: 2.95, w: 6.3, h: 2.2 }, 46, { color: t.onPrimary, align: mirror ? "right" : "left" });
       if (slide.body[0]) body(0, { x, y: 5.25, w: 6.3, h: 1.1 }, 17, { color: t.onPrimary, align: mirror ? "right" : "left" });
       header(t.onPrimary);
-      footer(t.onPrimary);
       break;
     }
     case "agenda": {
       header();
-      eyebrow({ x: fx(contentX, 4.0), y: 1.25, w: 4.0, h: 0.42 });
-      title({ x: fx(contentX, 4.1), y: 1.85, w: 4.1, h: 2.6 }, 42, { align: mirror ? "right" : "left" });
+      title({ x: fx(contentX, 4.1), y: 1.35, w: 4.1, h: 3.1 }, 42, { align: mirror ? "right" : "left" });
       const listX = mirror ? contentX : 5.55;
       const count = Math.max(slide.body.length, 1);
       const step = rows(count, 1.35, 6.35);
@@ -354,7 +340,6 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
           line(listX, y + step - 0.04, 7.0, 0, i % 2 ? t.accent : t.primary, i === count - 1 ? 0 : 1.2, i === count - 1 ? 0 : 0.7);
         }
       });
-      footer();
       break;
     }
     case "bullets": {
@@ -362,8 +347,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       const withPhoto = !!art;
       const textW = withPhoto ? 7.05 : contentW;
       const textX = withPhoto ? fx(contentX, textW) : contentX;
-      eyebrow({ x: textX, y: 1.05, w: textW, h: 0.42 });
-      title({ x: textX, y: 1.55, w: textW, h: 1.3 }, 36);
+      title({ x: textX, y: 1.1, w: textW, h: 1.6 }, 38);
       const count = Math.max(slide.body.length, 1);
       const twoCol = !withPhoto && count === 4;
       const step = rows(twoCol ? 2 : count, 3.05, 6.55);
@@ -383,13 +367,11 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         body(i, { x: x + indent, y, w: colW - indent, h: step - 0.12 }, 18);
       });
       if (withPhoto) photo({ x: fx(8.55, 4.0), y: 1.65, w: 4.0, h: 4.4 });
-      footer();
       break;
     }
     case "cards": {
       header();
-      eyebrow({ x: contentX, y: 1.05, w: contentW, h: 0.42 });
-      title({ x: contentX, y: 1.55, w: art ? 8.6 : contentW, h: 1.25 }, 36);
+      title({ x: contentX, y: 1.1, w: art ? 8.6 : contentW, h: 1.6 }, 38);
       if (art) photo({ x: fx(10.15, 2.35), y: 0.95, w: 2.35, h: 2.0 }, { block: false });
       const count = Math.max(slide.body.length, 1);
       const gap = 0.32;
@@ -426,7 +408,6 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         const element = body(i, { x: x + inset, y: y + (label ? 1.05 : 0.35), w: cardW - inset - 0.25, h: label ? h - 1.25 : h - 0.6 }, 15, { color: onCard });
         if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
       });
-      footer();
       break;
     }
     case "photo": {
@@ -434,13 +415,11 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       const box = photoFrame === "circle" ? { x: fx(1.0, 4.9), y: 1.35, w: 4.9, h: 4.9 } : { x: fx(0.95, 5.3), y: 1.2, w: 5.3, h: 5.2 };
       photo(box);
       const x = fx(6.95, 5.55);
-      eyebrow({ x, y: 1.45, w: 5.55, h: 0.42 }, undefined, mirror ? "right" : "left");
-      title({ x, y: 2.0, w: 5.55, h: 1.75 }, 36, { align: mirror ? "right" : "left" });
+      title({ x, y: 1.6, w: 5.55, h: 2.15 }, 38, { align: mirror ? "right" : "left" });
       line(mirror ? x + 5.55 - 1.2 : x, 3.88, 1.2, 0, t.accent, 4);
       const count = Math.max(slide.body.length, 1);
       const step = rows(count, 4.1, 6.65);
       slide.body.forEach((_, i) => body(i, { x, y: 4.1 + i * step, w: 5.55, h: step - 0.08 }, 16, { color: i ? t.muted : t.text, align: mirror ? "right" : "left" }));
-      footer();
       break;
     }
     case "quote": {
@@ -456,13 +435,11 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
       if (slide.body[0]) body(0, { x: qx, y: after + 0.2, w: quoteW, h: 0.6 }, 16, { bold: true, color: t.muted });
       slide.body.slice(1).forEach((_, i) => body(i + 1, { x: qx, y: after + 0.85 + i * 0.36, w: quoteW, h: 0.34 }, 13, { color: t.muted }));
       if (withPhoto) photo({ x: fx(9.75, 2.85), y: 1.9, w: 2.85, h: 2.85 }, { frame: "circle" });
-      footer();
       break;
     }
     case "stats": {
       header();
-      eyebrow({ x: contentX, y: 1.05, w: contentW, h: 0.42 });
-      title({ x: contentX, y: 1.55, w: contentW, h: 1.25 }, 36);
+      title({ x: contentX, y: 1.1, w: contentW, h: 1.6 }, 38);
       const count = Math.max(slide.body.length, 1);
       const colW = contentW / count;
       slide.body.forEach((value, i) => {
@@ -474,30 +451,33 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         const element = body(i, { x: x + 0.22, y: 5.0, w: colW - 0.44, h: 1.4 }, 15, { color: t.text });
         if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
       });
-      footer();
       break;
     }
     case "process": {
       header();
-      eyebrow({ x: contentX, y: 1.05, w: contentW, h: 0.42 });
-      title({ x: contentX, y: 1.55, w: contentW, h: 1.25 }, 36);
+      title({ x: contentX, y: 1.1, w: contentW, h: 1.6 }, 38);
       const count = Math.max(slide.body.length, 1);
       const stepW = contentW / count;
+      const nodeY = 3.4, node = 0.92;
+      if (count > 1) line(contentX + stepW / 2, nodeY, stepW * (count - 1), 0, t.accent, 3);
       slide.body.forEach((value, i) => {
-        const x = contentX + i * stepW;
-        poly(x, 3.2, stepW - 0.08, 0.95, i % 2 ? t.accent : t.primary, i === 0 ? [[0, 0], [0.86, 0], [1, 0.5], [0.86, 1], [0, 1]] : CHEVRON);
+        const cx = contentX + stepW * (i + 0.5);
+        const fill = i % 2 ? t.accent : t.primary;
+        shape("ellipse", cx - node / 2, nodeY - node / 2, node, node, fill, { lineColor: t.background, lineWidth: 4 });
+        text(String(i + 1), { x: cx - node / 2, y: nodeY - 0.24, w: node, h: 0.6 }, 26, { fontFace: t.heading, bold: headingBold, color: i % 2 ? t.onAccent : t.onPrimary, align: "center", lineHeight: 1 });
+        const cardW = stepW - 0.28, cardX = cx - cardW / 2, cardY = nodeY + 0.78, cardH = 6.85 - cardY;
+        // Kartu harus terbaca sebagai bidang tersendiri, juga bila warna surface mendekati latar.
+        shape("polygon", cardX, cardY, cardW, cardH, t.surface, { points: rounded(cardW, cardH, 0.22), lineColor: mix(fill, t.background, 0.45), lineWidth: 1.5 });
         const { label, text: content } = splitLabel(value);
-        text(label || `Tahap ${i + 1}`, { x: x + (i ? 0.38 : 0.22), y: 3.42, w: stepW - 0.85, h: 0.55 }, 15, { bold: true, color: i % 2 ? t.onAccent : t.onPrimary });
-        const element = body(i, { x: x + 0.12, y: 4.45, w: stepW - 0.3, h: 2.2 }, 15);
+        if (label) text(label, { x: cardX + 0.2, y: cardY + 0.22, w: cardW - 0.4, h: 0.75 }, 17, { bold: true, color: t.onSurface, fontFace: t.heading, align: "center" });
+        const element = body(i, { x: cardX + 0.2, y: cardY + (label ? 1.0 : 0.3), w: cardW - 0.4, h: cardH - (label ? 1.2 : 0.5) }, 15, { color: t.onSurface, align: "center" });
         if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
       });
-      footer();
       break;
     }
     case "compare": {
       header();
-      eyebrow({ x: contentX, y: 1.05, w: contentW, h: 0.42 });
-      title({ x: contentX, y: 1.55, w: contentW, h: 1.25 }, 36);
+      title({ x: contentX, y: 1.1, w: contentW, h: 1.6 }, 38);
       const count = Math.min(Math.max(slide.body.length, 1), 4);
       const colW = (contentW - 0.4) / 2;
       const rowsCount = count > 2 ? 2 : 1;
@@ -513,7 +493,6 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         const element = body(i, { x: x + 0.38, y: y + (label ? 0.72 : 0.25), w: colW - 0.6, h: boxH - (label ? 0.9 : 0.45) }, 15, { color: t.onSurface });
         if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
       });
-      footer();
       break;
     }
     case "figure": {
@@ -532,14 +511,12 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         shape("rect", sideX, y + 0.08, 0.1, 1.05, i % 2 ? t.accent : t.primary);
         body(i + 1, { x: sideX + 0.3, y, w: 3.15, h: 1.3 }, 15);
       });
-      footer();
       break;
     }
     default: {
       header();
       title({ x: contentX, y: 1.3, w: contentW, h: 1.3 }, 36);
       slide.body.forEach((_, i) => body(i, { x: contentX, y: 2.9 + i * 0.9, w: contentW, h: 0.8 }, 18));
-      footer();
     }
   }
 

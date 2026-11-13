@@ -32,7 +32,7 @@ function sampleSvg(style: (typeof STYLE_EXAMPLES)[number], index: number) {
     id: SAMPLE_ID, title: style.label, eyebrow: "CONTOH TAMPILAN", body: [style.description],
     notes: "", source: "", layout: "cover", locked: false,
   };
-  return renderSlideSvg(layoutDesignedSlide(slide, { ...style.design, seed: 4000 + index * 7 }, 0, 1));
+  return renderSlideSvg(layoutDesignedSlide(slide, { ...style.design, seed: 4000 + index * 7 }, 0));
 }
 
 /** Visual template choices. Picking one sends a normal chat message, so the AI keeps the full context. */

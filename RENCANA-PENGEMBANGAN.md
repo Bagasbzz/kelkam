@@ -74,6 +74,9 @@ Terakhir diperbarui: 2026-11-09
 | K18 | Putaran audit | Maksimal **2** siklus audit → perbaiki → audit ulang. | Disetujui 2026-11-09 |
 | K19 | Tampilan selama audit | Pengguna hanya melihat **progres**; isi baru muncul setelah lulus audit (atau batas putaran habis, K17). | Disetujui 2026-11-09 |
 | K20 | Urutan audit | **Laporan dulu**, Presentasi di tahap berikutnya. | Disetujui 2026-11-09 |
+| K21 | Font presentasi | Font unik (Google Fonts, OFL) **ditanam ke PPTX**. | Disetujui 2026-11-12 ("oke mulai eksekusi pertahap", sesuai rekomendasi) |
+| K22 | Gambar AI per presentasi | Maks. **8** (2 latar + 3–5 elemen + 1–2 gambar utama), untuk Fase 3. | Disetujui 2026-11-12 (sesuai usulan) |
+| K23 | Animasi bawaan | **Halus** bila pengguna tidak menjawab. | Disetujui 2026-11-12 (sesuai rekomendasi) |
 
 ## 4. Rancangan ringkas per fitur
 
@@ -806,6 +809,10 @@ tulisan tangan sebagai aksen), komposisi tidak simetris, dan **animasi elemen** 
 5. **"Tugas Presentasi Tema Laut Cat Air" (fairuzhayinah).** Latar **cat air** biru, ilustrasi ikan, ubur-ubur, bintang
    laut, kerang, coretan krayon, judul **tulisan tangan** putih, kartu isi putih bertepi cat air.
 
+Kiriman 3 (2026-11-12): "Group Project" krem dengan monster lucu warna-warni dan judul bergaris tepi tebal; daftar
+template sidang/seminar (judul biru tebal + titik oranye, serif krem, hijau tua dengan pita krem, "Tugas Sejarah" peta tua
+dengan benda vintage); "Tugas Kelompok" biru kertas kusut sobek, pita, angsa potongan, perangko, kertas koran.
+
 Kiriman 2:
 6. **"Kertas Tua Vintage Biru Putih" (Femoza Studio).** Latar kolase **kertas biru sobek**, kartu **kertas bergaris kotak**
    dengan cincin spiral dan klip kertas berbentuk balon bicara, foto potongan (bola dunia, jam saku, patung), **kilau
@@ -846,3 +853,18 @@ Pola yang dipakai ulang di semua contoh (bahan renderer baru):
   Biaya gambar naik sekitar 2–3 kali per deck.
 - K23 Animasi bawaan bila pengguna tidak menjawab: Halus (rekomendasi) atau Tanpa.
 - Urutan usulan: Fase 1 → Fase 2 → Fase 3, satu commit + push per fase.
+- **2026-11-12: pemilik menyetujui ("oke mulai eksekusi pertahap").** Fase 1 dipecah: 1a buang pola khas AI + bug
+  "Tahap n", 1b font unik + tanam ke PPTX, 1c gaya visual baru ala Canva. Satu commit + push per tahap.
+
+### 24.1 Hasil Fase 1a (2026-11-13)
+
+`src/lib/presentation/design.ts` (deck dengan `design`; deck lama tanpa `design` tidak berubah). Dicek dengan render
+Microsoft PowerPoint asli (PNG per slide) untuk gaya Biru Korporat dan Merah Gelap.
+- Label kecil di atas judul dihapus dari semua slide isi. Di sampul, label menjadi baris pembuka judul (huruf judul, 22 pt),
+  bukan kapital kecil renggang bergaris/berkotak. Prompt chat: eyebrow dikosongkan kecuali cover dan section.
+- Nama institusi kecil di pojok slide isi hanya tampil bila ada logo asli; penghitung "04 / 15" dihapus.
+- Sampul: baris "Disusun oleh | NIM | Waktu" bergaris tegak diganti blok warna utama yang menempel di tepi dengan ujung
+  membulat, berisi baris "Disusun oleh: ...", "NIM: ..." (seperti template Seminar Proposal).
+- Alur (`process`): chevron diganti lingkaran bernomor yang dihubungkan garis + kartu bergaris tepi di bawahnya. Bug
+  "Tahap 2/Tahap 3" hilang: tanpa format "Label: isi" kartu berisi teks poin saja.
+- Judul slide isi sedikit lebih besar (36 → 38 pt) dan naik ke ruang bekas label.
