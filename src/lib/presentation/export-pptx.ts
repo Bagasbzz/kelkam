@@ -1,8 +1,13 @@
 import PptxGenJS from "pptxgenjs";
 import JSZip from "jszip";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { deckSchema, FONT_PAIRS, THEMES } from "./model";
-import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement } from "./layout";
+import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement, type SlideElement } from "./layout";
 import { sceneFor } from "./design";
+import { isCatalogFont } from "./fonts";
+import { FONT_METRICS } from "./font-metrics";
+import { parseTtf, toEot } from "./ttf";
 
 export interface PresentationAsset { data: Buffer; mime: "image/png" | "image/jpeg" }
 export interface PresentationExportOptions { assets?: Record<string, PresentationAsset> }
@@ -73,7 +78,9 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
           x, y, w, h, objectName, fontFace: element.fontFace, fontSize: element.fontSize,
           color: element.color, bold: element.bold, align: element.align,
           valign: "top", margin: 0, breakLine: false, paraSpaceAfter: 0,
-          lineSpacingMultiple: element.lineHeight, lang: "id-ID", fit: "none",
+          // Font katalog: spasi baris tepat (poin) agar sama dengan pratinjau, terlepas dari metrik tinggi fontnya.
+          ...(isCatalogFont(element.fontFace) ? { lineSpacing: Math.round(element.lineHeight * element.fontSize * 10) / 10 } : { lineSpacingMultiple: element.lineHeight }),
+          lang: "id-ID", fit: "none",
         });
       } else if (element.type === "shape") {
         page.addShape(pptx.ShapeType[element.shape === "polygon" ? "rect" : element.shape], {
@@ -134,9 +141,59 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
     }
     zip.file(path, xml);
   }
+  await embedFonts(zip, scenes.flatMap((scene) => scene.elements));
   const result = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
   if (result.length > 48 * 1024 * 1024) throw new Error("Ukuran presentasi melampaui batas ekspor.");
   return result;
+}
+
+/**
+ * Tanam font katalog yang dipakai slide ke dalam PPTX (format .fntdata = EOT tanpa kompresi), supaya
+ * PowerPoint menampilkan huruf yang sama dengan pratinjau tanpa pengguna memasang font. File font yang
+ * tidak ditemukan dilewati: PowerPoint lalu memakai font pengganti, ekspor tidak gagal.
+ */
+export const PRESENTATION_FONT_DIR = path.join(process.cwd(), "public", "fonts", "presentasi");
+
+async function embedFonts(zip: JSZip, elements: readonly SlideElement[]) {
+  const wanted = new Map<string, { regular: boolean; bold: boolean }>();
+  for (const element of elements) {
+    if (element.type !== "text" || !isCatalogFont(element.fontFace)) continue;
+    const entry = wanted.get(element.fontFace) ?? { regular: false, bold: false };
+    entry[element.bold ? "bold" : "regular"] = true;
+    wanted.set(element.fontFace, entry);
+  }
+  if (!wanted.size) return;
+  const list: string[] = [];
+  const rels: string[] = [];
+  let n = 0;
+  for (const [family, use] of wanted) {
+    const parts: string[] = [];
+    let panose = "";
+    for (const style of ["regular", "bold"] as const) {
+      if (!use[style]) continue;
+      // Gaya tebal memakai file 700 bila ada; bila keluarga hanya punya satu file, file itu dipakai.
+      const entry = FONT_METRICS[style === "bold" ? `${family}|b` : family] ?? FONT_METRICS[style === "bold" ? family : `${family}|b`];
+      if (!entry) continue;
+      let data: Buffer;
+      try { data = await readFile(path.join(PRESENTATION_FONT_DIR, entry.file)); } catch { continue; }
+      const info = parseTtf(data);
+      panose ||= Buffer.from(info.panose).toString("hex").toUpperCase();
+      n++;
+      zip.file(`ppt/fonts/font${n}.fntdata`, toEot(data, info));
+      rels.push(`<Relationship Id="rIdFont${n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/font" Target="fonts/font${n}.fntdata"/>`);
+      parts.push(`<p:${style} r:id="rIdFont${n}"/>`);
+    }
+    if (parts.length) list.push(`<p:embeddedFont><p:font typeface="${family}" panose="${panose}" pitchFamily="2" charset="0"/>${parts.join("")}</p:embeddedFont>`);
+  }
+  if (!list.length) return;
+  const types = await zip.file("[Content_Types].xml")!.async("string");
+  if (!types.includes('Extension="fntdata"')) zip.file("[Content_Types].xml", types.replace(/(<Types[^>]*>)/, `$1<Default Extension="fntdata" ContentType="application/x-fontdata"/>`));
+  const relsPath = "ppt/_rels/presentation.xml.rels";
+  zip.file(relsPath, (await zip.file(relsPath)!.async("string")).replace("</Relationships>", `${rels.join("")}</Relationships>`));
+  let presentation = await zip.file("ppt/presentation.xml")!.async("string");
+  presentation = presentation.replace(/<p:presentation\b/, '<p:presentation embedTrueTypeFonts="1"');
+  presentation = presentation.replace(/(<p:notesSz\b[^>]*\/>)/, `$1<p:embeddedFontLst>${list.join("")}</p:embeddedFontLst>`);
+  zip.file("ppt/presentation.xml", presentation);
 }
 
 function polygonGeometry(element: ShapeElement): string {

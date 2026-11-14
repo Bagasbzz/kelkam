@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FONT_PAIR_IDS, type PresentationFont } from "./fonts";
 
 export const THEME_IDS = ["playful", "editorial", "product"] as const;
 export const LAYOUT_IDS = ["title", "split", "cards", "timeline", "statement"] as const;
@@ -7,29 +8,19 @@ export const DESIGN_LAYOUT_IDS = ["cover", "section", "agenda", "bullets", "phot
 export const ALL_LAYOUT_IDS = [...LAYOUT_IDS, ...DESIGN_LAYOUT_IDS] as const;
 /** Decorative "chrome" families that frame every slide of a designed deck. */
 export const FRAME_STYLES = ["diagonal", "blob", "wave", "geometric", "grid", "halftone", "minimal", "gradient"] as const;
-/** Font pairs limited to faces installed with Microsoft Office, so the PPTX opens as designed. */
-export const FONT_PAIRS = {
-  tegas: { heading: "Arial Black", body: "Arial" },
-  kondensasi: { heading: "Impact", body: "Arial" },
-  elegan: { heading: "Georgia", body: "Arial" },
-  geometris: { heading: "Century Gothic", body: "Century Gothic" },
-  ramah: { heading: "Trebuchet MS", body: "Trebuchet MS" },
-  bersih: { heading: "Tahoma", body: "Tahoma" },
-} as const;
-export const FONT_PAIR_IDS = Object.keys(FONT_PAIRS) as [keyof typeof FONT_PAIRS, ...(keyof typeof FONT_PAIRS)[]];
+/** Font pairs: system faces for older decks, catalog faces (embedded in the PPTX) for new ones. See ./fonts. */
+export { FONT_PAIRS, FONT_PAIR_IDS, type FontPairId, type PresentationFont } from "./fonts";
 export const ART_STYLES = ["geometric", "zine", "kinetic", "blueprint", "minimal"] as const;
 export const VISUAL_MOTIFS = ["network", "campus", "botanical", "megaphone", "orbit", "none"] as const;
 export const VISUAL_BACKGROUNDS = ["solid", "halftone", "grid", "spotlight"] as const;
 export const SLIDE_MOTIONS = ["none", "fade", "push", "reveal"] as const;
 export const PALETTE_IDS = ["original", "ocean", "sunset", "lavender", "forest", "mono", "cobalt", "rose"] as const;
 export const EDIT_TARGETS = ["title", "eyebrow", "body-0", "body-1", "body-2", "body-3", "art"] as const;
-export type PresentationFont = "Arial" | "Arial Black" | "Impact" | "Georgia" | "Century Gothic" | "Trebuchet MS" | "Tahoma";
 export type PresentationTheme = (typeof THEME_IDS)[number];
 export type PresentationPalette = (typeof PALETTE_IDS)[number];
 export type SlideEditTarget = (typeof EDIT_TARGETS)[number];
 export type SlideLayout = (typeof ALL_LAYOUT_IDS)[number];
 export type FrameStyle = (typeof FRAME_STYLES)[number];
-export type FontPairId = keyof typeof FONT_PAIRS;
 
 export interface ThemeDefinition {
   id: PresentationTheme;

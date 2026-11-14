@@ -1,5 +1,6 @@
 import { EDIT_TARGETS, inspectSlide, slideAdjustmentSchema, THEMES, type ArtDirection, type PresentationFont, type PresentationIssue, type PresentationPalette, type PresentationSlide, type PresentationTheme, type SlideEditTarget } from "./model";
 import { PALETTES } from "./presets";
+import { FONT_METRIC_RANGES, FONT_METRICS } from "./font-metrics";
 
 export const SLIDE_WIDTH = 13.333;
 export const SLIDE_HEIGHT = 7.5;
@@ -46,8 +47,44 @@ export function adjustSlideElement(slide: PresentationSlide, target: SlideEditTa
 
 const FONT_WIDTH: Partial<Record<PresentationFont, number>> = { "Arial Black": 1.13, Impact: 0.91, Georgia: 1.04, "Century Gothic": 1.1, "Trebuchet MS": 1.02, Tahoma: 0.99 };
 
-// Conservative system-font width estimates keep wrapping deterministic and offline.
-export function textWidth(value: string, fontSize: number, fontFace: PresentationFont): number {
+/** Lebar huruf asli dari file font katalog (per mil em), diurai sekali saat pertama dipakai. */
+const parsedMetrics = new Map<string, { table: Map<number, number>; fallback: number } | null>();
+function catalogMetrics(fontFace: PresentationFont, bold: boolean) {
+  const key = `${fontFace}${bold ? "|b" : ""}`;
+  if (!parsedMetrics.has(key)) {
+    const entry = FONT_METRICS[key] ?? FONT_METRICS[fontFace];
+    if (!entry) parsedMetrics.set(key, null);
+    else {
+      const widths = entry.widths.split(",").map(Number);
+      const table = new Map<number, number>();
+      let i = 0;
+      for (const [from, to] of FONT_METRIC_RANGES) for (let cp = from; cp <= to; cp++) table.set(cp, widths[i++]);
+      // Font regular dipakai tebal (faux bold) sedikit lebih lebar.
+      const scale = bold && !FONT_METRICS[key] ? 1.04 : 1;
+      if (scale !== 1) for (const [cp, value] of table) table.set(cp, value * scale);
+      parsedMetrics.set(key, { table, fallback: entry.fallback * scale });
+    }
+  }
+  return parsedMetrics.get(key)!;
+}
+
+/**
+ * Faktor tinggi satu baris PowerPoint relatif terhadap ukuran font. Font katalog diekspor dengan spasi baris
+ * "tepat" (poin), jadi tingginya sama dengan pratinjau; font sistem memakai kelipatan spasi bawaan Office.
+ */
+export function fontLeading(fontFace: PresentationFont): number {
+  if (fontFace === "Impact") return 1.35;
+  return catalogMetrics(fontFace, false) ? 1 : 1.17;
+}
+
+// Font katalog memakai lebar asli (+3% cadangan untuk perbedaan render); font sistem memakai perkiraan konservatif.
+export function textWidth(value: string, fontSize: number, fontFace: PresentationFont, bold = false): number {
+  const metrics = catalogMetrics(fontFace, bold);
+  if (metrics) {
+    let units = 0;
+    for (const char of value) units += metrics.table.get(char.codePointAt(0)!) || metrics.fallback;
+    return units / 1000 * fontSize / 72 * 1.03;
+  }
   let units = 0;
   for (const char of value) {
     if (/\s/u.test(char)) units += 0.34;
@@ -60,14 +97,14 @@ export function textWidth(value: string, fontSize: number, fontFace: Presentatio
   return units * fontSize / 72 * (FONT_WIDTH[fontFace] ?? 1);
 }
 
-export function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont): string[] {
+export function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont, bold = false): string[] {
   const lines: string[] = [];
   let line = "";
   for (const word of value.split(/\s+/u).filter(Boolean)) {
-    if (line && textWidth(`${line} ${word}`, fontSize, fontFace) <= width) { line += ` ${word}`; continue; }
+    if (line && textWidth(`${line} ${word}`, fontSize, fontFace, bold) <= width) { line += ` ${word}`; continue; }
     if (line) { lines.push(line); line = ""; }
     for (const char of word) {
-      if (line && textWidth(line + char, fontSize, fontFace) > width) { lines.push(line); line = ""; }
+      if (line && textWidth(line + char, fontSize, fontFace, bold) > width) { lines.push(line); line = ""; }
       line += char;
     }
   }
@@ -75,13 +112,13 @@ export function wrapText(value: string, width: number, fontSize: number, fontFac
   return lines;
 }
 
-export function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9) {
-  const officeLeading = fontFace === "Impact" ? 1.35 : 1.17;
+export function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9, bold = false) {
+  const officeLeading = fontLeading(fontFace);
   let fontSize = size;
-  let lines = wrapText(value, bounds.w, fontSize, fontFace);
+  let lines = wrapText(value, bounds.w, fontSize, fontFace, bold);
   while (fontSize > minimum && lines.length * fontSize / 72 * lineHeight * officeLeading > bounds.h - 0.04) {
     fontSize = Math.max(minimum, fontSize - (fontSize > 9 ? 1 : 0.25));
-    lines = wrapText(value, bounds.w, fontSize, fontFace);
+    lines = wrapText(value, bounds.w, fontSize, fontFace, bold);
   }
   return { fontSize, lines };
 }
@@ -297,7 +334,7 @@ function escapeXml(value: string): string {
 }
 
 /** Fixed line breaks and image cropping match the editable PPTX. */
-const FONT_STACK: Record<PresentationFont, string> = {
+const FONT_STACK: Partial<Record<PresentationFont, string>> = {
   Arial: "Arial, Helvetica, sans-serif",
   "Arial Black": "'Arial Black', 'Arial Bold', Gadget, sans-serif",
   Impact: "Impact, 'Arial Narrow Bold', sans-serif",
@@ -337,7 +374,7 @@ export function renderSlideSvg(scene: SlideScene): string {
     const anchor = element.align === "center" ? "middle" : element.align === "right" ? "end" : "start";
     const tx = (x + (element.align === "center" ? w / 2 : element.align === "right" ? w : 0)) * scale;
     const spans = element.lines.map((value, i) => `<tspan x="${tx}" y="${y * scale + (i * element.lineHeight + 1) * element.fontSize * scale / 72}">${escapeXml(value)}</tspan>`).join("");
-    return `<text${editAttribute} font-family="${escapeXml(FONT_STACK[element.fontFace] ?? element.fontFace)}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" fill="#${element.color}" text-anchor="${anchor}" xml:space="preserve">${spans}</text>`;
+    return `<text${editAttribute} font-family="${escapeXml(FONT_STACK[element.fontFace] ?? `'${element.fontFace}', Arial, sans-serif`)}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" fill="#${element.color}" text-anchor="${anchor}" xml:space="preserve">${spans}</text>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width * scale}" height="${scene.height * scale}" viewBox="0 0 ${scene.width * scale} ${scene.height * scale}" role="img" aria-label="Pratinjau slide"><rect width="100%" height="100%" fill="#${scene.background}"/>${elements}</svg>`;
 }

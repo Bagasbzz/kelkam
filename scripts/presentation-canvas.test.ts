@@ -10,6 +10,7 @@ import * as layout from "../src/lib/presentation/layout";
 import * as model from "../src/lib/presentation/model";
 import * as presets from "../src/lib/presentation/presets";
 import * as design from "../src/lib/presentation/design";
+import * as fonts from "../src/lib/presentation/fonts";
 
 type Props = Record<string, unknown>;
 type Element = { type: unknown; props: Props; key?: unknown };
@@ -119,6 +120,8 @@ async function loadComponent(file: string, react: unknown, overrides: Props = {}
     "@/lib/presentation/model": model,
     "@/lib/presentation/presets": presets,
     "@/lib/presentation/design": design,
+    "@/lib/presentation/fonts": fonts,
+    "./fonts.css": {},
     "./presentation.module.css": { default: new Proxy({}, { get: (_, name) => String(name) }) },
     "@/components/ui/GuidedTour": { default: () => null },
     "@/lib/client/tours": { PRESENTASI_TOUR: [], LAPORAN_TOUR: [] },

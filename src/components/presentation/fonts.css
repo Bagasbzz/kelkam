@@ -1,0 +1,34 @@
+/* Dibuat oleh scripts/build-presentation-fonts.ts. Font presentasi (SIL OFL) untuk pratinjau slide. */
+@font-face{font-family:"DM Serif Display";src:url("/fonts/presentasi/dm-serif-display-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"DM Sans";src:url("/fonts/presentasi/dm-sans-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"DM Sans";src:url("/fonts/presentasi/dm-sans-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Playfair Display";src:url("/fonts/presentasi/playfair-display-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Source Sans 3";src:url("/fonts/presentasi/source-sans-3-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Source Sans 3";src:url("/fonts/presentasi/source-sans-3-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Cinzel";src:url("/fonts/presentasi/cinzel-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Mulish";src:url("/fonts/presentasi/mulish-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Mulish";src:url("/fonts/presentasi/mulish-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Plus Jakarta Sans";src:url("/fonts/presentasi/plus-jakarta-sans-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Plus Jakarta Sans";src:url("/fonts/presentasi/plus-jakarta-sans-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Fredoka";src:url("/fonts/presentasi/fredoka-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Nunito";src:url("/fonts/presentasi/nunito-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Nunito";src:url("/fonts/presentasi/nunito-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Archivo Black";src:url("/fonts/presentasi/archivo-black-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Archivo";src:url("/fonts/presentasi/archivo-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Archivo";src:url("/fonts/presentasi/archivo-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Bebas Neue";src:url("/fonts/presentasi/bebas-neue-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow";src:url("/fonts/presentasi/barlow-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Barlow";src:url("/fonts/presentasi/barlow-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Fraunces";src:url("/fonts/presentasi/fraunces-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Outfit";src:url("/fonts/presentasi/outfit-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Outfit";src:url("/fonts/presentasi/outfit-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Lilita One";src:url("/fonts/presentasi/lilita-one-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Caveat";src:url("/fonts/presentasi/caveat-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Unbounded";src:url("/fonts/presentasi/unbounded-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Space Grotesk";src:url("/fonts/presentasi/space-grotesk-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Space Grotesk";src:url("/fonts/presentasi/space-grotesk-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Syne";src:url("/fonts/presentasi/syne-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Manrope";src:url("/fonts/presentasi/manrope-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Manrope";src:url("/fonts/presentasi/manrope-700.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Shrikhand";src:url("/fonts/presentasi/shrikhand-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Gloock";src:url("/fonts/presentasi/gloock-400.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}

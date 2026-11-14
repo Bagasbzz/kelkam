@@ -43,7 +43,7 @@ const readableOn = (fill: string, preferred: string) => contrast(preferred, fill
 export interface DesignTokens {
   primary: string; accent: string; background: string; surface: string; text: string; muted: string;
   onPrimary: string; onAccent: string; onSurface: string; accentText: string; dark: boolean;
-  heading: PresentationFont; body: PresentationFont; frame: FrameStyle;
+  heading: PresentationFont; body: PresentationFont; headingBold: boolean; frame: FrameStyle;
 }
 
 export function designTokens(design: DeckDesign): DesignTokens {
@@ -61,7 +61,7 @@ export function designTokens(design: DeckDesign): DesignTokens {
   return {
     primary, accent, background, surface, text, muted, dark, accentText,
     onPrimary: readableOn(primary, "FFFFFF"), onAccent: readableOn(accent, "151515"), onSurface: readableOn(surface, text),
-    heading: pair.heading, body: pair.body, frame: design.frame,
+    heading: pair.heading, body: pair.body, headingBold: pair.headingBold, frame: design.frame,
   };
 }
 
@@ -169,12 +169,12 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
     const value = noDash(raw);
     const fontFace = options.fontFace ?? t.body;
     const lineHeight = options.lineHeight ?? 1.25;
-    const element: TextElement = { type: "text", text: value, ...fitText(value, b, size, fontFace, lineHeight), ...b, lineHeight, fontFace, color: t.text, bold: false, align: "left", ...options };
+    const element: TextElement = { type: "text", text: value, ...fitText(value, b, size, fontFace, lineHeight, 9, options.bold ?? false), ...b, lineHeight, fontFace, color: t.text, bold: false, align: "left", ...options };
     elements.push(element);
     textSizes.set(element, size);
     return element;
   };
-  const headingBold = t.heading !== "Georgia" && t.heading !== "Impact";
+  const headingBold = t.headingBold;
   const title = (b: Bounds, size: number, options: Partial<Pick<TextElement, "color" | "align">> = {}) =>
     text(slide.title, b, size, { editKey: "title", fontFace: t.heading, bold: headingBold, lineHeight: t.heading === "Georgia" ? 1.18 : 1.06, ...options });
   /**
@@ -406,7 +406,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         }
         if (label) text(label, { x: x + inset, y: y + 0.3, w: cardW - inset - 0.25, h: 0.7 }, 17, { bold: true, color: onCard, fontFace: t.heading });
         const element = body(i, { x: x + inset, y: y + (label ? 1.05 : 0.35), w: cardW - inset - 0.25, h: label ? h - 1.25 : h - 0.6 }, 15, { color: onCard });
-        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
+        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight, 9, element.bold), { text: content });
       });
       break;
     }
@@ -449,7 +449,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         shape("ellipse", x + 0.22, 3.25, 0.22, 0.22, i % 2 ? t.primary : t.accent);
         text(label || pad(i + 1), { x: x + 0.22, y: 3.6, w: colW - 0.44, h: 1.35 }, 54, { fontFace: t.heading, bold: headingBold, color: i % 2 && contrast(t.primary, t.background) >= 3 ? t.primary : t.accentText });
         const element = body(i, { x: x + 0.22, y: 5.0, w: colW - 0.44, h: 1.4 }, 15, { color: t.text });
-        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
+        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight, 9, element.bold), { text: content });
       });
       break;
     }
@@ -471,7 +471,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         const { label, text: content } = splitLabel(value);
         if (label) text(label, { x: cardX + 0.2, y: cardY + 0.22, w: cardW - 0.4, h: 0.75 }, 17, { bold: true, color: t.onSurface, fontFace: t.heading, align: "center" });
         const element = body(i, { x: cardX + 0.2, y: cardY + (label ? 1.0 : 0.3), w: cardW - 0.4, h: cardH - (label ? 1.2 : 0.5) }, 15, { color: t.onSurface, align: "center" });
-        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
+        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight, 9, element.bold), { text: content });
       });
       break;
     }
@@ -491,7 +491,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
         const { label, text: content } = splitLabel(value);
         if (label) text(label, { x: x + 0.38, y: y + 0.2, w: colW - 0.6, h: 0.5 }, 17, { bold: true, color: t.onSurface });
         const element = body(i, { x: x + 0.38, y: y + (label ? 0.72 : 0.25), w: colW - 0.6, h: boxH - (label ? 0.9 : 0.45) }, 15, { color: t.onSurface });
-        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight), { text: content });
+        if (label && element) Object.assign(element, fitText(content, element, 15, element.fontFace, element.lineHeight, 9, element.bold), { text: content });
       });
       break;
     }
@@ -525,7 +525,7 @@ export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign
     if (adjustment) {
       const { x, y, w, h } = adjustment;
       Object.assign(element, { x, y, w, h });
-      if (element.type === "text") Object.assign(element, fitText(element.text, element, textSizes.get(element) ?? element.fontSize, element.fontFace, element.lineHeight, 0.5));
+      if (element.type === "text") Object.assign(element, fitText(element.text, element, textSizes.get(element) ?? element.fontSize, element.fontFace, element.lineHeight, 0.5, element.bold));
     }
     if (element.type === "text" && element.editKey && element.fontSize < 14 && (textSizes.get(element) ?? 0) >= 18 && !issues.some((issue) => issue.code === "small-text")) {
       issues.push({ slideId: slide.id, code: "small-text", severity: "warning", message: "Teks diperkecil agar muat. Ringkas isi atau perbesar kotaknya agar nyaman dibaca." });
@@ -541,14 +541,14 @@ export function designAssetIds(deck: Pick<PresentationDeck, "design">): string[]
 
 /** Example identities shown as "Contoh tampilan"; the AI adapts them, it does not copy a template. */
 export const STYLE_EXAMPLES: readonly { id: string; label: string; description: string; design: Omit<DeckDesign, "seed" | "institution" | "logo"> }[] = [
-  { id: "biru-korporat", label: "Biru Korporat", description: "Putih, biru tegas, garis kuning diagonal, foto dalam heksagon.", design: { primary: "1E40D8", accent: "FFC928", background: "F7F9FC", surface: "E8EEFB", text: "0F1B3D", frame: "diagonal", fonts: "tegas" } },
-  { id: "kolase-kuning", label: "Kolase Kuning", description: "Kertas abu muda, titik halftone kuning, label pil hitam, kolase.", design: { primary: "1B1B1B", accent: "FFC21A", background: "F3F2EE", surface: "FFFFFF", text: "151515", frame: "halftone", fonts: "tegas" } },
-  { id: "hitam-lime", label: "Hitam Lime", description: "Latar hitam, judul raksasa hijau lime, kesan berani dan modern.", design: { primary: "B6F23A", accent: "B6F23A", background: "0E0F0C", surface: "1C1E19", text: "F4F6EF", frame: "minimal", fonts: "kondensasi" } },
-  { id: "navy-oranye", label: "Navy Oranye", description: "Putih, navy dan oranye, foto lingkaran, bentuk membulat.", design: { primary: "1C1A6E", accent: "FF9F1C", background: "FFFFFF", surface: "F1F1F8", text: "16153F", frame: "blob", fonts: "geometris" } },
-  { id: "ungu-geometris", label: "Ungu Geometris", description: "Ungu tegas dan abu gelap, segitiga di sudut, bersih.", design: { primary: "5B2EDB", accent: "2F2F37", background: "F6F5FA", surface: "ECE8FB", text: "1D1B26", frame: "geometric", fonts: "bersih" } },
-  { id: "merah-muda-gelombang", label: "Merah Muda Lembut", description: "Krem dan merah muda, gelombang di bawah, serif anggun.", design: { primary: "D9818C", accent: "8C3B4A", background: "FFF8F5", surface: "FBE7E4", text: "4A2430", frame: "wave", fonts: "elegan" } },
-  { id: "biru-grid", label: "Biru Grid Teknik", description: "Grid halus, navy dan biru, bintang kecil, rapi dan teknis.", design: { primary: "16416F", accent: "3E86C6", background: "F5F8FB", surface: "E3EBF3", text: "102A45", frame: "grid", fonts: "ramah" } },
-  { id: "hijau-krem", label: "Hijau Krem", description: "Krem hangat dan hijau sage, garis tipis, minimalis akademik.", design: { primary: "4E8C76", accent: "C9A66B", background: "FBF7EE", surface: "EEF3EC", text: "24352E", frame: "minimal", fonts: "geometris" } },
-  { id: "merah-gelap", label: "Merah Gelap", description: "Hitam dengan blok gradien merah, kontras dan dramatis.", design: { primary: "C1121F", accent: "FF4D5A", background: "0B0B0D", surface: "1A1A1F", text: "F5F5F5", frame: "gradient", fonts: "bersih" } },
-  { id: "cokelat-elegan", label: "Cokelat Elegan", description: "Krem dan cokelat, berlian kecil, nuansa tenang dan formal.", design: { primary: "6B4E37", accent: "C8A27A", background: "F3ECE2", surface: "E7DCCD", text: "3B2A1E", frame: "geometric", fonts: "elegan" } },
+  { id: "biru-korporat", label: "Biru Korporat", description: "Putih, biru tegas, garis kuning diagonal, foto dalam heksagon.", design: { primary: "1E40D8", accent: "FFC928", background: "F7F9FC", surface: "E8EEFB", text: "0F1B3D", frame: "diagonal", fonts: "modern" } },
+  { id: "kolase-kuning", label: "Kolase Kuning", description: "Kertas abu muda, titik halftone kuning, label pil hitam, kolase.", design: { primary: "1B1B1B", accent: "FFC21A", background: "F3F2EE", surface: "FFFFFF", text: "151515", frame: "halftone", fonts: "ceria" } },
+  { id: "hitam-lime", label: "Hitam Lime", description: "Latar hitam, judul raksasa hijau lime, kesan berani dan modern.", design: { primary: "B6F23A", accent: "B6F23A", background: "0E0F0C", surface: "1C1E19", text: "F4F6EF", frame: "minimal", fonts: "poster" } },
+  { id: "navy-oranye", label: "Navy Oranye", description: "Putih, navy dan oranye, foto lingkaran, bentuk membulat.", design: { primary: "1C1A6E", accent: "FF9F1C", background: "FFFFFF", surface: "F1F1F8", text: "16153F", frame: "blob", fonts: "bulat" } },
+  { id: "ungu-geometris", label: "Ungu Geometris", description: "Ungu tegas dan abu gelap, segitiga di sudut, bersih.", design: { primary: "5B2EDB", accent: "2F2F37", background: "F6F5FA", surface: "ECE8FB", text: "1D1B26", frame: "geometric", fonts: "nyentrik" } },
+  { id: "merah-muda-gelombang", label: "Merah Muda Lembut", description: "Krem dan merah muda, gelombang di bawah, serif anggun.", design: { primary: "D9818C", accent: "8C3B4A", background: "FFF8F5", surface: "FBE7E4", text: "4A2430", frame: "wave", fonts: "majalah" } },
+  { id: "biru-grid", label: "Biru Grid Teknik", description: "Grid halus, navy dan biru, bintang kecil, rapi dan teknis.", design: { primary: "16416F", accent: "3E86C6", background: "F5F8FB", surface: "E3EBF3", text: "102A45", frame: "grid", fonts: "futuristik" } },
+  { id: "hijau-krem", label: "Hijau Krem", description: "Krem hangat dan hijau sage, garis tipis, minimalis akademik.", design: { primary: "4E8C76", accent: "C9A66B", background: "FBF7EE", surface: "EEF3EC", text: "24352E", frame: "minimal", fonts: "klasik" } },
+  { id: "merah-gelap", label: "Merah Gelap", description: "Hitam dengan blok gradien merah, kontras dan dramatis.", design: { primary: "C1121F", accent: "FF4D5A", background: "0B0B0D", surface: "1A1A1F", text: "F5F5F5", frame: "gradient", fonts: "blok" } },
+  { id: "cokelat-elegan", label: "Cokelat Elegan", description: "Krem dan cokelat, berlian kecil, nuansa tenang dan formal.", design: { primary: "6B4E37", accent: "C8A27A", background: "F3ECE2", surface: "E7DCCD", text: "3B2A1E", frame: "geometric", fonts: "vintage" } },
 ];

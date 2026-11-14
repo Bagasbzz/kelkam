@@ -868,3 +868,21 @@ Microsoft PowerPoint asli (PNG per slide) untuk gaya Biru Korporat dan Merah Gel
 - Alur (`process`): chevron diganti lingkaran bernomor yang dihubungkan garis + kartu bergaris tepi di bawahnya. Bug
   "Tahap 2/Tahap 3" hilang: tanpa format "Label: isi" kartu berisi teks poin saja.
 - Judul slide isi sedikit lebih besar (36 → 38 pt) dan naik ke ruang bekas label.
+
+### 24.2 Hasil Fase 1b: font unik tertanam di PPTX (2026-11-14)
+
+- 23 keluarga Google Fonts (SIL OFL, fsType 0 = boleh ditanam) sebagai TTF statis di `public/fonts/presentasi/` (3,4 MB),
+  katalog + 14 pasangan baru di `src/lib/presentation/fonts.ts` (majalah, klasik, formal, modern, bulat, blok, poster,
+  vintage, ceria, tulisan, futuristik, nyentrik, retro, kertas; pasangan font sistem lama tetap untuk deck lama).
+- `scripts/build-presentation-fonts.ts` membaca TTF lokal dan menulis `font-metrics.ts` (lebar huruf asli, dipakai
+  `layout.ts` untuk memecah baris secara tepat) dan `src/components/presentation/fonts.css` (@font-face pratinjau).
+  Cara menambah font tertulis di kepala skrip (unduh TTF lewat curl dari Google Fonts CSS API).
+- `src/lib/presentation/ttf.ts`: pembaca TTF + pembungkus EOT versi 0x00020002 tanpa kompresi (header dicocokkan dengan
+  `.fntdata` buatan PowerPoint sendiri). `export-pptx.ts` menanam font yang dipakai (`ppt/fonts/fontN.fntdata`,
+  `p:embeddedFontLst` dengan panose, `embedTrueTypeFonts="1"`); font katalog diekspor dengan spasi baris tepat (poin).
+- **Terbukti di Microsoft PowerPoint** pada komputer yang tidak memasang font tersebut: ekspor PDF PowerPoint memakai
+  Fraunces/Outfit, Lilita One/Nunito, Bebas Neue/Barlow dari file tertanam. Catatan uji: `Slide.Export` (PNG) lewat COM
+  tidak memakai font tertanam, jadi uji visual memakai SaveAs PDF lalu dirender.
+- Tab Tampilan: pilihan "Huruf"; prompt AI memilih pasangan font sesuai suasana topik; 10 contoh gaya memakai font baru.
+  Pratinjau browser memuat font lewat `fonts.css` (dicek: Fraunces 700, Outfit 400/700 termuat).
+- Tes: `scripts/presentation-fonts.test.ts` (file font, metrik, header EOT, isi PPTX). 347 tes lulus.
