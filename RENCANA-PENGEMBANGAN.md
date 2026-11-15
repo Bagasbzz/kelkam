@@ -917,3 +917,128 @@ renderer lama). Tiap kit meniru satu template yang dikirim pemilik; warna/font t
   Tes `scripts/presentation-kits.test.ts`; 351 tes lulus.
 - Belum (Fase 3): ilustrasi tematik (ikan, monster, 3D, benda potongan) dibuat AI per presentasi; garis tepi huruf tebal
   dihindari karena PowerPoint menggambarnya di atas huruf.
+
+### 24.4 Fase 2 animasi: rancangan teknis (2026-11-15, BELUM DIIMPLEMENTASI)
+
+Status: kode belum diubah sama sekali. Pemilik meminta dicatat dulu agar bisa dilanjutkan AI lain. Bagian ini adalah
+hasil membaca kode dan rencana kerja yang siap dieksekusi. Keputusan yang berlaku: K23 (bawaan **Halus** bila pengguna
+tidak menjawab). Pemilik sudah setuju satu commit + `git push origin main` per tahap.
+
+**Kondisi kode sekarang (titik yang akan diubah)**
+- `src/lib/presentation/model.ts:22` `SLIDE_MOTIONS = ["none","fade","push","reveal"]`; `slideVisualSchema` (baris ~70)
+  mewajibkan `motif`, `background`, `motion`. `deckSchema` belum punya field animasi. Contoh deck bawaan (baris ~228)
+  memakai fade/push/reveal.
+- `src/lib/presentation/export-pptx.ts:149-157` hanya menulis `<p:transition>` (fade atau push) dan, untuk `reveal`,
+  satu efek fade pada judul lewat `entranceXml()` (baris ~280). Struktur `<p:timing>` di fungsi itu sudah terbukti
+  dibaca PowerPoint (pembungkus click group + bldLst wajib ada). Setiap elemen scene diekspor dengan
+  `objectName = studio-<indexElemen>` (baris 79), jadi `spid` dicari dari `<p:cNvPr id="N" name="studio-i">`.
+  Teks = `p:sp` (bayangan teks jadi efek shadow, bukan elemen terpisah), bentuk = `p:sp`, gambar = `p:pic`,
+  garis = bentuk line (cek apakah `p:cxnSp` atau `p:sp`).
+- `src/components/presentation/SlidePlayer.tsx:18,41` memasang `data-motion` pada pembungkus slide; CSS di
+  `presentation.module.css` baris ~808-845 (keyframes slideFade, slidePush, textReveal), ~1081-1092 (khusus player),
+  ~1126-1135 (`prefers-reduced-motion` mematikan semua). Selektor lama `svg>[data-edit-key=title]` (anak langsung).
+- `src/components/presentation/VisualControls.tsx:14,35,73` pilihan animasi per slide (Tanpa/Memudar/Bergeser/Judul muncul).
+- `src/components/presentation/PresentationWorkspace.tsx:297` slide baru menyalin motion; `:308 setAllMotion()`;
+  `:329` tab Tampilan berisi select "Animasi semua slide" + tombol "Lihat saat pindah slide" (membuka SlidePlayer).
+- `src/lib/server/presentasi/chat.ts:203` paragraf DESAIN KHUSUS: "Animasi (motion) mengikuti keinginan pengguna ...
+  bila belum dibahas, pakai fade atau reveal"; `:204` FORMAT SLIDE menyebut `motion: none|fade|push|reveal`;
+  deskripsi tool `askUser` (baris ~38) hanya menyebut tujuan/audiens/durasi/kepadatan.
+- `src/lib/server/presentasi/state.ts:70-80` `planInputSchema` (goal, audience, minutes, density, templateId, design,
+  slides, images, omitted); `:14` `generateSchema.motion`; `:181-187` operasi generate menerapkan motion ke semua slide.
+- `src/lib/server/presentasi/repository.ts:248 planDesign()` dan `:444` tempat desain rencana dipasang ke deck saat
+  chat selesai (`finishDraftDeck` -> `commitPresentationRun`). Di titik `:444` itu animasi rencana juga dipasang.
+- `src/lib/server/presentasi/assistant.ts:58,63` prompt mode lama (commit_deck) juga menyebut fade/push/reveal.
+- Renderer: deck ber-kit `src/lib/presentation/kits.ts` (`KitCtx`, `layoutKitSlide` baris ~744, komposisi bersama
+  agenda/bullets/cards/stats/process/quote/photo/figure, `cardRow`/`cardLabelText`), deck desain lama `design.ts`,
+  deck paling lama `layout.ts`. Elemen yang bisa diedit punya `editKey` (title, eyebrow, body-0..3, art).
+  SVG pratinjau dari `renderSlideSvg()` di `layout.ts:399`.
+
+**Model data (aman untuk data lama)**
+1. `model.ts`: tambah `ANIMATION_PRESETS = ["none","halus","dinamis","ceria","ketik"]`. `SLIDE_MOTIONS` diperluas menjadi
+   `["none","fade","push","reveal","halus","dinamis","ceria","ketik"]` (nilai lama tetap diterima).
+2. `deckSchema`: tambah `animation: z.enum(ANIMATION_PRESETS).optional()` = preset per deck.
+3. `slideVisualSchema`: `motion` dijadikan **opsional**. Tanpa `motion` = ikut preset deck. Nilai lama dipetakan saat
+   dibaca: fade -> halus, reveal -> halus, push -> dinamis.
+4. Fungsi `slideAnimation(deck, slide)` = `normalize(slide.visual?.motion) ?? deck.animation ?? "none"`. Deck lama tanpa
+   field baru tetap tanpa animasi, kecuali slide yang dulu memang diberi fade/push/reveal (kini tampil lebih kaya).
+
+**Urutan muncul elemen (sama untuk web dan PPTX)**
+1. File baru `src/lib/presentation/motion.ts` berisi `buildPlan(scene, preset)` ->
+   `{ transition: "none"|"fade"|"push", steps: [{ group, effect, delayMs, durationMs, elements: number[] }] }`.
+   Urutan grup: judul (termasuk eyebrow) -> gambar (art) -> body-0, body-1, body-2, body-3 (satu per satu) -> dekorasi.
+   Jeda antargrup ±300 ms; Ketik: grup berikut mulai setelah judul selesai (jumlah kata × ±120 ms).
+2. Elemen diberi penanda opsional `build?: "title"|"art"|"deco"|"body-N"` (di `EditableElement`, `layout.ts:10`).
+   Bila tidak ada penanda, dipakai `editKey` (title/eyebrow -> title, art -> art, body-i -> body-i). Gambar selebar
+   slide (latar) dan elemen tanpa penanda tetap diam (terlihat sejak awal), jadi latar dan bingkai tidak ikut hilang.
+3. Di `kits.ts` tambah `KitCtx.tag(build, fn)`: semua elemen baru yang dibuat di dalam `fn` diberi `build` (pakai Set
+   elemen sebelum/sesudah, karena `behind()` menyisipkan di tengah). Dipasang di: `kit.heading` -> title; tiap baris
+   agenda, poin bullets (penanda + teks), kartu `cardRow`/`cardLabelText`, kartu stats, simpul + kartu process -> body-i;
+   foto -> art; quote (tanda kutip + kutipan) -> title. Dekorasi: elemen kecil dari `kit.page()` (w ≤ 3, h ≤ 3,
+   luas ≤ 3 inci², bukan tekstur besar) diberi `build: "deco"`. Sampul/penutup/section: hanya elemen ber-editKey yang
+   bergerak, pelat dan kapsul diam.
+4. Deck `design.ts` dan `layout.ts` cukup memakai pemetaan `editKey` (tanpa penanda tambahan).
+
+**Efek per preset**
+| Preset | Transisi slide | Judul | Gambar | Poin | Dekorasi |
+|---|---|---|---|---|---|
+| Halus | fade | fade | fade | fade bertahap | fade |
+| Dinamis | push | float in (naik) | wipe dari kiri | float in bertahap | zoom |
+| Ceria | fade | pop (zoom memantul) | zoom | float in bertahap | pop |
+| Ketik | fade | muncul per kata | fade | wipe dari kiri | fade |
+
+**Pratinjau web (mode Tayangkan)**
+1. `renderSlideSvg(scene, plan?)`: bila `plan` diberikan, setiap elemen dalam satu langkah dibungkus
+   `<g data-build="<efek>" style="animation-delay:..ms;animation-duration:..ms">` (bayangan teks ikut dalam g yang sama).
+   Untuk Ketik, judul dipecah `<tspan>` per kata dengan delay sendiri; animasikan `fill-opacity`/`stroke-opacity`
+   (opacity pada tspan tidak andal). Tanpa `plan` keluaran SVG tidak berubah (editor dan thumbnail aman).
+2. CSS: keyframes fade, rise (translateY), pop (scale 0.4 -> 1.08 -> 1 dengan `transform-box: fill-box;
+   transform-origin: center`), wipe (clip-path inset), word; `animation-fill-mode: both`. Transisi slide memakai
+   slideFade/slidePush yang sudah ada pada pembungkus. `prefers-reduced-motion: reduce` -> semua animasi mati dan elemen
+   langsung tampil. Selektor lama `svg>[data-edit-key=title]` diganti.
+3. `SlidePlayer.tsx`: hitung `slideAnimation(deck, slide)` lalu `buildPlan`, kirim ke `renderSlideSvg`; `key={slide.id}`
+   sudah membuat animasi diputar ulang saat pindah slide. Catatan kaki player tetap.
+
+**PPTX**
+1. Ganti `entranceXml(target)` dengan `timingXml(steps)`: satu click group otomatis (pola lama: `delay="indefinite"` +
+   `evt="onBegin"`), di dalamnya satu `p:par` berisi banyak efek `nodeType="withEffect"` dengan `p:cond delay` sesuai
+   langkah (semua otomatis, klik presenter tetap pindah slide). id `p:cTn` berurutan unik. `bldLst`: `<p:bldP spid
+   grpId="0" animBg="1"/>` hanya untuk target `p:sp` (bukan `p:pic`).
+2. Efek: Fade presetID 10 (`animEffect filter="fade"`); Float In presetID 42 (fade + `anim ppt_y` dari `#ppt_y+0.1`);
+   Fly In presetID 2 (subtype 8 = dari kiri); Zoom presetID 53 subtype 16 (`ppt_w`/`ppt_h` dari 0 + fade); Pop = Zoom
+   dengan `p:tavLst` 0 -> `#ppt_w*1.1` -> `#ppt_w`; Wipe presetID 22 subtype 8 (`filter="wipe(left)"`); Ketik = Fade
+   dengan `<p:iterate type="wd"><p:tmAbs val="120"/></p:iterate>` sebelum `p:childTnLst` (bldP tanpa animBg).
+3. **Cara paling aman mendapatkan XML yang benar**: buat contoh di PowerPoint asli lewat COM (`Shapes.AddTextbox`,
+   `TimeLine.MainSequence.AddEffect(shape, msoAnimEffectFade/Fly/Zoom/Wipe/Float, ...)`, atur `Timing.TriggerType`
+   = withPrevious dan `TriggerDelayTime`, `EffectInformation`/`TextUnitEffect` per kata), simpan PPTX, buka zip, salin
+   pola XML-nya ke `timingXml`. Jangan menebak nama atribut.
+4. Transisi: halus/ceria/ketik `<p:fade/>`, dinamis `<p:push dir="l"/>`, none tanpa `<p:transition>`.
+
+**AI dan tab Tampilan**
+1. `planInputSchema`: tambah `animation: z.enum(ANIMATION_PRESETS).optional()`. Di `repository.ts:444` (chat selesai,
+   tidak ada slide terkunci) pasang `deck.animation = plan.animation ?? state.deck.animation ?? "halus"` (K23) dan hapus
+   `visual.motion` dari slide AI yang tidak terkunci agar semua ikut preset deck.
+2. Prompt `chat.ts`: ALUR/DESAIN KHUSUS: sebelum setPlan, bila pengguna belum menyebut animasi, tanyakan sekali lewat
+   askUser "Mau ditambah animasi?" dengan pilihan Tanpa / Halus / Dinamis / Ceria (Ketik boleh disebut sebagai tambahan);
+   isi `setPlan.animation` (none|halus|dinamis|ceria|ketik); bila tidak dijawab, halus. FORMAT SLIDE: jangan mengisi
+   `visual.motion`. Perbarui juga deskripsi tool askUser agar animasi termasuk hal yang boleh ditanyakan. Gabungkan
+   dengan pertanyaan lain bila memungkinkan supaya giliran tanya tidak bertambah banyak.
+3. `assistant.ts` (mode lama) dan `state.ts` generate: biarkan menerima nilai lama; teks prompt boleh menyebut preset baru.
+4. Tab Tampilan (`PresentationWorkspace.tsx:329`): select "Animasi" berisi Tanpa / Halus / Dinamis / Ceria / Ketik,
+   mengubah `deck.animation` dan menghapus `visual.motion` semua slide (opsi "Berbeda per slide" bila ada slide yang
+   menimpa). `VisualControls.tsx`: pilihan per slide "Ikuti deck" + 5 preset. Slide baru (`:297`) tidak menyalin motion.
+
+**Uji dan verifikasi**
+- Tes baru (mis. `scripts/presentation-motion.test.ts`): normalisasi nilai lama, `buildPlan` (urutan grup, jeda, latar
+  tetap diam), XML timing PPTX per preset (jumlah efek = jumlah elemen berpenanda, spid cocok dengan `studio-i`, presetID,
+  iterate untuk Ketik, transisi push untuk Dinamis), deck lama tanpa animasi menghasilkan XML yang sama seperti sebelum.
+- `npx tsc --noEmit -p .`, eslint file yang diubah, `npm test` (sebelum Fase 2: 351 tes lulus).
+- PowerPoint asli: ekspor deck contoh per preset, buka lewat COM, periksa `Slides(i).TimeLine.MainSequence.Count`,
+  `EffectType`, `Timing.TriggerDelayTime` tiap efek (bukti PowerPoint membaca timing), dan pastikan tidak ada dialog
+  perbaikan file. `SlideShowSettings.Run()` untuk dicek manual pemilik. Gambar statis (SaveAs PDF 32 + pymupdf) hanya
+  untuk memastikan tampilan akhir tidak berubah. Skrip bantu lama: folder catatan sesi
+  `side-session-notes/local_bf3c10e7-.../` (`review-deck.mts`, `review.sh`, `sheet.py`, `render-ppt.ps1`).
+- Pratinjau browser: buka mode Tayangkan, cek elemen muncul bertahap per preset dan mati saat reduced motion.
+
+**Urutan kerja yang disarankan**: model + motion.ts + tes -> penanda grup di kits.ts -> PPTX timing (mulai dari XML
+contoh buatan PowerPoint) -> web player + CSS -> prompt AI + plan + repository -> tab Tampilan/VisualControls -> verifikasi
+PowerPoint dan browser -> tulis hasil singkat di sini (ganti judul jadi "Hasil Fase 2") -> satu commit + push.
