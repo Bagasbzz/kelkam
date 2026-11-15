@@ -76,7 +76,7 @@ Terakhir diperbarui: 2026-11-09
 | K20 | Urutan audit | **Laporan dulu**, Presentasi di tahap berikutnya. | Disetujui 2026-11-09 |
 | K21 | Font presentasi | Font unik (Google Fonts, OFL) **ditanam ke PPTX**. | Disetujui 2026-11-12 ("oke mulai eksekusi pertahap", sesuai rekomendasi) |
 | K22 | Gambar AI per presentasi | Maks. **8** (2 latar + 3–5 elemen + 1–2 gambar utama), untuk Fase 3. | Disetujui 2026-11-12 (sesuai usulan) |
-| K23 | Animasi bawaan | **Halus** bila pengguna tidak menjawab. | Disetujui 2026-11-12 (sesuai rekomendasi) |
+| K23 | Animasi bawaan | **Koreksi pemilik 2026-11-15:** animasi **wajib ditanyakan** ke pengguna (mau animasi slide atau tidak, dan bila mau yang bagaimana). Bila pengguna menolak **atau tidak menjawab → tanpa animasi (none)**. (Sebelumnya: default Halus — dibatalkan.) | Dikoreksi 2026-11-15 |
 
 ## 4. Rancangan ringkas per fitur
 
@@ -918,11 +918,12 @@ renderer lama). Tiap kit meniru satu template yang dikirim pemilik; warna/font t
 - Belum (Fase 3): ilustrasi tematik (ikan, monster, 3D, benda potongan) dibuat AI per presentasi; garis tepi huruf tebal
   dihindari karena PowerPoint menggambarnya di atas huruf.
 
-### 24.4 Fase 2 animasi: rancangan teknis (2026-11-15, BELUM DIIMPLEMENTASI)
+### 24.4 Fase 2 animasi: rancangan teknis (2026-11-15; sudah dikerjakan, hasil di 24.5)
 
 Status: kode belum diubah sama sekali. Pemilik meminta dicatat dulu agar bisa dilanjutkan AI lain. Bagian ini adalah
-hasil membaca kode dan rencana kerja yang siap dieksekusi. Keputusan yang berlaku: K23 (bawaan **Halus** bila pengguna
-tidak menjawab). Pemilik sudah setuju satu commit + `git push origin main` per tahap.
+hasil membaca kode dan rencana kerja yang siap dieksekusi. Keputusan yang berlaku: **K23 dikoreksi pemilik 2026-11-15** —
+animasi **wajib ditanyakan** ke pengguna; bila pengguna menolak atau tidak menjawab → **tanpa animasi (none)** (bukan
+default Halus). Pemilik sudah setuju satu commit + `git push origin main` per tahap.
 
 **Kondisi kode sekarang (titik yang akan diubah)**
 - `src/lib/presentation/model.ts:22` `SLIDE_MOTIONS = ["none","fade","push","reveal"]`; `slideVisualSchema` (baris ~70)
@@ -1042,3 +1043,53 @@ tidak menjawab). Pemilik sudah setuju satu commit + `git push origin main` per t
 **Urutan kerja yang disarankan**: model + motion.ts + tes -> penanda grup di kits.ts -> PPTX timing (mulai dari XML
 contoh buatan PowerPoint) -> web player + CSS -> prompt AI + plan + repository -> tab Tampilan/VisualControls -> verifikasi
 PowerPoint dan browser -> tulis hasil singkat di sini (ganti judul jadi "Hasil Fase 2") -> satu commit + push.
+
+
+### 24.5 Hasil Fase 2 animasi (2026-11-15, SELESAI)
+
+Dikerjakan dua tahap: AI lain lewat bridge (tanpa bisa menjalankan tes), lalu diperiksa dan dilengkapi di Claude Code.
+Pemeriksaan menemukan klaim yang belum benar (prompt AI belum menanyakan animasi, 7 tes gagal, PPTX hanya fade);
+semuanya sudah diperbaiki di bawah ini.
+
+Keputusan: **K23 dikoreksi pemilik** — animasi wajib ditanyakan; pengguna menolak atau tidak menjawab → tanpa animasi.
+
+Perubahan kode:
+- `model.ts`: `ANIMATION_PRESETS` (none|halus|dinamis|ceria|ketik), `deck.animation?`, `slide.visual.motion` opsional
+  (tanpa motion = ikut deck), `slideAnimation(deck, slide)`; nilai lama fade/reveal -> halus, push -> dinamis.
+- `motion.ts` (baru): `buildPlan(scene, preset)` = urutan judul -> gambar -> poin satu per satu -> dekorasi dengan jeda
+  bertahap (300 ms antargrup, 250 ms antarpoin; Ketik menunggu judul selesai). Latar (gambar peran background/selebar
+  slide) dan elemen tanpa grup tetap diam. Efek per preset:
+  | Preset | Transisi | Judul | Gambar | Poin | Dekorasi |
+  |---|---|---|---|---|---|
+  | Halus | fade | fade | fade | fade | fade |
+  | Dinamis | push | float in (naik) | wipe dari kiri | float in | zoom |
+  | Ceria | fade | pop (zoom memantul 112%) | zoom | float in | pop |
+  | Ketik | fade | per kata (jeda 120 ms) | fade | wipe dari kiri | fade |
+- `kits.ts`: `KitCtx.tag(grup, fn)`; kartu/baris agenda/poin + penanda/angka stats/simpul alur ikut grup poinnya, foto
+  ikut grup gambar, tanda kutip ikut judul, dekorasi kecil dari latar (≤ 3 inci) jadi grup dekorasi. Deck lama
+  (`design.ts`, `layout.ts`) memakai pemetaan `editKey`.
+- Pratinjau web (`layout.ts` `renderSlideSvg(scene, plan?)`, `SlidePlayer.tsx`, CSS): `<g data-build>` + jeda inline,
+  keyframes fade/rise/zoom/pop/wipe; Ketik memecah judul jadi `<tspan data-word>` per kata (animasi `fill-opacity`).
+  Tanpa `plan` SVG tidak berubah (editor dan thumbnail). `prefers-reduced-motion` mematikan semua animasi.
+- PPTX (`export-pptx.ts` `timingXml`): satu efek masuk per shape (teks, bentuk, gambar), semua otomatis "With Previous"
+  dengan delay bertahap; Fade (presetID 10), Float In (42, `ppt_y` dari `#ppt_y+.1`), Zoom (53/16, `ppt_w/ppt_h` dari 0),
+  Pop (53/16 dengan keyframe `#ppt_w*1.12`), Wipe (22/8, `wipe(left)`), Ketik = Fade + `<p:iterate type="wd">`.
+  `bldP` hanya untuk `p:sp`. Deck tanpa animasi tidak mendapat `<p:transition>`/`<p:timing>`.
+- AI (`chat.ts`): ALUR dan DESAIN KHUSUS mewajibkan bertanya lewat askUser ("Mau ditambah animasi slide?" Tanpa / Halus /
+  Dinamis / Ceria / Ketik), mengisi `setPlan.animation`, tidak menjawab → none, tidak mengisi `visual.motion`.
+  `repository.ts`: saat chat selesai memasang `deck.animation` dari rencana (atau deck lama), dan membuang `visual.motion`
+  yang dibuat AI sendiri (pilihan per slide milik pengguna dipertahankan). `assistant.ts` (mode lama) ikut diperbarui.
+- UI: tab Tampilan "Animasi" per deck (menampilkan "Berbeda per slide" bila slide menimpa), `VisualControls` per slide
+  "Ikuti deck" + 5 preset; slide baru tidak menyalin motion.
+
+Verifikasi:
+- `npx tsc --noEmit`, eslint file yang diubah, `npm test`: **355 tes lulus** (tes lama player/workspace/PPTX disesuaikan,
+  tes baru `scripts/presentation-motion.test.ts`: data lama, urutan grup 8 kit, SVG per kata, XML timing per preset).
+- **Microsoft PowerPoint asli** (COM) membuka PPTX contoh tanpa perbaikan dan membaca semua efek: jenis 10 Fade,
+  39 Float In (Ascend), 48 Zoom (FadedZoom), 22 Wipe; pemicu With Previous; delay 0 / 0,30 / 0,55 / 0,80 / 1,05 s;
+  Ketik terbaca "By word" (TextUnitEffect 2); transisi Fade Smoothly / Push. Belum diputar manual di Slide Show.
+- Browser (Chrome headless, animasi dihentikan pada waktu tertentu lewat Web Animations API): semua grup tampil penuh
+  di akhir (opacity 1, transform normal), Ketik pada 200 ms: kata 1 = 0,84, kata 2 = 0,40, kata 3-4 = 0.
+  Alat uji di folder catatan sesi (`motion-check.mts`, `motion-ppt.ps1`, `motion-page.mts`, `probe.js`).
+
+Belum: animasi keluar/penekanan, Morph antar-slide, dan pratinjau animasi di kanvas editor (hanya di mode Tayangkan).

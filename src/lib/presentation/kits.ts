@@ -11,7 +11,7 @@
 import { contrast, luminance, mix, readableOn } from "./color";
 import { noDash, splitLabel } from "./content";
 import { builtinFileId, type BuiltinAsset } from "./assets";
-import { fitText, SLIDE_HEIGHT as H, SLIDE_WIDTH as W, textWidth, type Bounds, type ShapeElement, type SlideElement, type SlideScene, type TextElement } from "./layout";
+import { fitText, SLIDE_HEIGHT as H, SLIDE_WIDTH as W, textWidth, type Bounds, type BuildTag, type ShapeElement, type SlideElement, type SlideScene, type TextElement } from "./layout";
 import { FONT_PAIRS, inspectSlide, type DeckDesign, type KitId, type PresentationFont, type PresentationSlide, type SlideEditTarget } from "./model";
 import * as S from "./kit-shapes";
 
@@ -127,6 +127,13 @@ export class KitCtx {
     const { label, text } = splitLabel(this.slide.body[i] ?? "");
     if (element && label) Object.assign(element, fitText(text, element, size, element.fontFace, element.lineHeight, 9, element.bold), { text });
     return element;
+  }
+  /** Kelompok animasi masuk: semua elemen baru yang dibuat di dalam `draw` muncul bersama (lihat motion.ts). */
+  tag<T>(build: BuildTag, draw: () => T): T {
+    const before = new Set(this.els);
+    const result = draw();
+    for (const element of this.els) if (!before.has(element)) element.build ??= build;
+    return result;
   }
   /** Sisipkan elemen di belakang elemen yang sudah ada (mis. pelat judul di belakang teks). */
   behind(target: SlideElement, ...elements: SlideElement[]) {
@@ -737,7 +744,7 @@ function cardRow(c: KitCtx, kit: KitSpec, items: number[], area: Bounds, top: nu
   const need = Math.max(...items.map((i) => contentHeight(c, i, w - 0.6, sizes))) + pad;
   const h = Math.min(room, Math.max(need, Math.min(room, 1.9)));
   const y = top + Math.max(0, (room - h) * 0.35);
-  items.forEach((i, k) => cardLabelText(c, kit, { x: area.x + k * (w + gap), y, w, h }, i, sizes, options.align, options.kind));
+  items.forEach((i, k) => c.tag(bodyTag(i), () => cardLabelText(c, kit, { x: area.x + k * (w + gap), y, w, h }, i, sizes, options.align, options.kind)));
   return y + h;
 }
 
@@ -749,6 +756,12 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
   const role: Role = layout === "cover" ? "cover" : layout === "closing" ? "closing" : layout === "section" ? "section" : "content";
   const issues = inspectSlide(slide);
   const area = kit.page(c, role);
+  // Dekorasi kecil dari latar (stiker, kancing, bintang, titik) ikut animasi di akhir; latar besar tetap diam.
+  for (const element of c.els) {
+    if (element.type === "image" && element.role === "background") continue;
+    if (element.w <= 3 && element.h <= 3 && element.w * element.h <= 3) element.build = "deco";
+  }
+  const heading = () => c.tag("title", () => kit.heading(c, area));
 
   if (art(slide) === "background" && role === "content") {
     // Gambar latar pengguna/AI: tampil samar di belakang isi.
@@ -761,37 +774,41 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
     case "closing": kit.cover(c, true); break;
     case "section": kit.section(c); break;
     case "agenda": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const count = Math.max(slide.body.length, 1);
       const gap = 0.22, rowH = Math.min(1.05, (area.y + area.h - top - gap * (count - 1)) / count);
       slide.body.forEach((_, i) => {
         const b = { x: area.x + 0.6, y: top + i * (rowH + gap), w: area.w - 1.2, h: rowH };
-        const style = kit.card(c, b, i, "plain");
-        c.text(String(i + 1).padStart(2, "0"), { x: style.inner.x, y: b.y + (rowH - 0.5) / 2, w: 0.9, h: 0.55 }, 26, { fontFace: t.heading, bold: t.headingBold, color: style.label, lineHeight: 1 });
-        c.body(i, { x: style.inner.x + 1.0, y: b.y + (rowH - 0.5) / 2, w: style.inner.w - 1.0, h: Math.max(0.5, rowH - 0.2) }, 20, { color: style.text });
+        c.tag(bodyTag(i), () => {
+          const style = kit.card(c, b, i, "plain");
+          c.text(String(i + 1).padStart(2, "0"), { x: style.inner.x, y: b.y + (rowH - 0.5) / 2, w: 0.9, h: 0.55 }, 26, { fontFace: t.heading, bold: t.headingBold, color: style.label, lineHeight: 1 });
+          c.body(i, { x: style.inner.x + 1.0, y: b.y + (rowH - 0.5) / 2, w: style.inner.w - 1.0, h: Math.max(0.5, rowH - 0.2) }, 20, { color: style.text });
+        });
       });
       break;
     }
     case "bullets": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const withPhoto = !!slide.art && slide.art.role !== "background";
       const textW = withPhoto ? area.w * 0.56 : area.w;
       const count = Math.max(slide.body.length, 1);
       const step = (area.y + area.h - top) / count;
       slide.body.forEach((_, i) => {
         const y = top + i * step;
-        kit.marker(c, area.x, y + 0.06, i);
-        c.body(i, { x: area.x + 0.55, y, w: textW - 0.55, h: step - 0.1 }, 21, { color: t.text });
+        c.tag(bodyTag(i), () => {
+          kit.marker(c, area.x, y + 0.06, i);
+          c.body(i, { x: area.x + 0.55, y, w: textW - 0.55, h: step - 0.1 }, 21, { color: t.text });
+        });
       });
       if (withPhoto) {
         const b = { x: area.x + area.w * 0.6, y: top - 0.1, w: area.w * 0.4, h: Math.min(area.y + area.h - top + 0.1, area.w * 0.4 * 1.05) };
-        c.photo(b, kit.frame(c, b));
+        c.tag("art", () => c.photo(b, kit.frame(c, b)));
       }
       break;
     }
     case "cards":
     case "compare": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const count = Math.min(Math.max(slide.body.length, 1), 4);
       const items = Array.from({ length: count }, (_, i) => i);
       if (layout === "compare" && count > 2) {
@@ -804,7 +821,7 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
       break;
     }
     case "stats": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const count = Math.max(slide.body.length, 1);
       const gap = 0.35, cw = (area.w - gap * (count - 1)) / count, ch = area.y + area.h - top;
       const need = Math.max(...slide.body.map((_, i) => contentHeight(c, i, cw - 0.6, { label: 0.1, text: 18 }))) + 2.0;
@@ -812,15 +829,17 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
       const y0 = top + Math.max(0, (ch - h) * 0.35);
       slide.body.forEach((value, i) => {
         const b = { x: area.x + i * (cw + gap), y: y0, w: cw, h };
-        const style = kit.card(c, b, i, "plain");
-        const { label } = splitLabel(value);
-        c.text(label || String(i + 1).padStart(2, "0"), { x: style.inner.x, y: style.inner.y + 0.05, w: style.inner.w, h: 1.25 }, 56, { fontFace: t.heading, bold: t.headingBold, color: style.label, lineHeight: 1, align: "center" });
-        c.bodyContent(i, { x: style.inner.x, y: style.inner.y + 1.35, w: style.inner.w, h: style.inner.h - 1.35 }, 18, { color: style.text, align: "center" });
+        c.tag(bodyTag(i), () => {
+          const style = kit.card(c, b, i, "plain");
+          const { label } = splitLabel(value);
+          c.text(label || String(i + 1).padStart(2, "0"), { x: style.inner.x, y: style.inner.y + 0.05, w: style.inner.w, h: 1.25 }, 56, { fontFace: t.heading, bold: t.headingBold, color: style.label, lineHeight: 1, align: "center" });
+          c.bodyContent(i, { x: style.inner.x, y: style.inner.y + 1.35, w: style.inner.w, h: style.inner.h - 1.35 }, 18, { color: style.text, align: "center" });
+        });
       });
       break;
     }
     case "process": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const count = Math.max(slide.body.length, 1);
       const stepW = area.w / count, node = 0.8, nodeY = top + node / 2 + 0.05;
       if (count > 1) c.line(area.x + stepW / 2, nodeY, stepW * (count - 1), 0, t.accentText, 3, { dash: "dash" });
@@ -829,15 +848,17 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
       slide.body.forEach((_, i) => {
         const cx = area.x + stepW * (i + 0.5);
         const fill = i % 2 ? t.accent : nodeFill;
-        c.shape("ellipse", cx - node / 2, nodeY - node / 2, node, node, fill, { lineColor: t.bg, lineWidth: 3 });
-        c.text(String(i + 1), { x: cx - node / 2, y: nodeY - 0.21, w: node, h: 0.5 }, 22, { fontFace: t.heading, bold: t.headingBold, color: readableOn(fill, t.text), align: "center", lineHeight: 1 });
+        c.tag(bodyTag(i), () => {
+          c.shape("ellipse", cx - node / 2, nodeY - node / 2, node, node, fill, { lineColor: t.bg, lineWidth: 3 });
+          c.text(String(i + 1), { x: cx - node / 2, y: nodeY - 0.21, w: node, h: 0.5 }, 22, { fontFace: t.heading, bold: t.headingBold, color: readableOn(fill, t.text), align: "center", lineHeight: 1 });
+        });
       });
       cardRow(c, kit, slide.body.map((_, i) => i), { ...area, x: area.x + 0.12, w: area.w - 0.24 }, nodeY + node / 2 + 0.3, count > 3 ? { label: 18, text: 15 } : { label: 21, text: 17 }, { align: "center", kind: "plain", pad: 0.8 });
       break;
     }
     case "quote": {
       const b = { x: area.x + 0.8, y: area.y + 0.6, w: area.w - 1.6, h: area.h - 1.8 };
-      c.text("“", { x: b.x - 0.2, y: b.y - 0.7, w: 1.4, h: 1.6 }, 130, { fontFace: t.heading, bold: true, color: t.accentText, lineHeight: 1 });
+      c.tag("title", () => c.text("“", { x: b.x - 0.2, y: b.y - 0.7, w: 1.4, h: 1.6 }, 130, { fontFace: t.heading, bold: true, color: t.accentText, lineHeight: 1 }));
       const quote = c.title({ x: b.x + 0.4, y: b.y + 0.4, w: b.w - 0.4, h: b.h - 0.6 }, 40, { color: t.text, align: "center" });
       const after = quote ? quote.y + c.linesHeight(quote) + 0.35 : b.y + b.h;
       c.body(0, { x: b.x, y: after, w: b.w, h: 0.5 }, 16, { color: t.muted, bold: true, align: "center" });
@@ -845,7 +866,7 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
     }
     case "photo": {
       const pb = { x: area.x, y: area.y + 0.1, w: area.w * 0.46, h: area.h - 0.2 };
-      c.photo(pb, kit.frame(c, pb));
+      c.tag("art", () => c.photo(pb, kit.frame(c, pb)));
       const tx = area.x + area.w * 0.52, tw = area.w * 0.48;
       const title = c.title({ x: tx, y: area.y + 0.3, w: tw, h: 2.0 }, 40, { color: t.text });
       const y = title ? title.y + c.linesHeight(title) + 0.3 : area.y + 2.4;
@@ -855,18 +876,20 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
       break;
     }
     case "figure": {
-      const top = kit.heading(c, area);
+      const top = heading();
       const card = { x: area.x, y: top, w: area.w * 0.64, h: area.y + area.h - top - 0.5 };
-      c.shape("roundRect", card.x, card.y, card.w, card.h, "FFFFFF", { lineColor: mix(t.text, "FFFFFF", 0.75), lineWidth: 0.75 });
       const inner = { x: card.x + 0.15, y: card.y + 0.15, w: card.w - 0.3, h: card.h - 0.3 };
-      if (slide.art) c.els.push({ type: "image", ...slide.art, editKey: "art", ...inner, crop: "contain" });
-      else c.text("Gambar dari laporan akan tampil di sini.", { x: inner.x, y: inner.y + inner.h / 2 - 0.2, w: inner.w, h: 0.4 }, 14, { color: "6B6B6B", align: "center" });
+      c.tag("art", () => {
+        c.shape("roundRect", card.x, card.y, card.w, card.h, "FFFFFF", { lineColor: mix(t.text, "FFFFFF", 0.75), lineWidth: 0.75 });
+        if (slide.art) c.els.push({ type: "image", ...slide.art, editKey: "art", ...inner, crop: "contain" });
+        else c.text("Gambar dari laporan akan tampil di sini.", { x: inner.x, y: inner.y + inner.h / 2 - 0.2, w: inner.w, h: 0.4 }, 14, { color: "6B6B6B", align: "center" });
+      });
       c.body(0, { x: card.x, y: card.y + card.h + 0.08, w: card.w, h: 0.42 }, 12, { color: t.muted, align: "center" });
-      slide.body.slice(1).forEach((_, i) => cardLabelText(c, kit, { x: area.x + area.w * 0.68, y: top + i * 1.75, w: area.w * 0.32, h: 1.55 }, i + 1, { label: 17, text: 15 }));
+      slide.body.slice(1).forEach((_, i) => c.tag(bodyTag(i + 1), () => cardLabelText(c, kit, { x: area.x + area.w * 0.68, y: top + i * 1.75, w: area.w * 0.32, h: 1.55 }, i + 1, { label: 17, text: 15 })));
       break;
     }
     default: {
-      const top = kit.heading(c, area);
+      const top = heading();
       slide.body.forEach((_, i) => c.body(i, { x: area.x, y: top + i * 0.9, w: area.w, h: 0.8 }, 18, { color: t.text }));
     }
   }
@@ -887,6 +910,7 @@ export function layoutKitSlide(slide: PresentationSlide, design: DeckDesign, ind
 }
 
 function art(slide: PresentationSlide) { return slide.art?.role; }
+const bodyTag = (i: number) => `body-${Math.min(i, 3)}` as BuildTag;
 
 /** Template yang ditawarkan ke pengguna dan AI: kit + warna + font bawaan (warna bisa diganti). */
 export const KIT_TEMPLATES: readonly { id: string; kit: KitId; label: string; description: string; group: "rapi" | "estetik"; design: Omit<DeckDesign, "seed" | "institution" | "logo"> }[] = [

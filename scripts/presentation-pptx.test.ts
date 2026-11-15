@@ -58,7 +58,7 @@ test("every demo exports native editable texts, shapes, exact geometry and sourc
   }
 });
 
-test("native transitions and real reveal entrances target editable heading IDs without Morph", async () => {
+test("native transitions and staggered entrances target editable shape IDs without Morph (legacy motion values)", async () => {
   const deck = createStarterDeck("product");
   deck.slides = (["none", "fade", "push", "reveal"] as const).map((motion, index) => ({
     ...deck.slides[index], visual: { ...deck.slides[index].visual!, motion },
@@ -66,19 +66,21 @@ test("native transitions and real reveal entrances target editable heading IDs w
   const zip = await JSZip.loadAsync(await exportDeckPptx(deck));
   const xmls = await Promise.all(deck.slides.map((_, i) => zip.file(`ppt/slides/slide${i + 1}.xml`)!.async("string")));
   assert.doesNotMatch(xmls[0], /<p:transition|<p:timing/);
+  // fade/reveal lama = Halus (transisi fade), push lama = Dinamis (transisi dorong + naik).
   assert.match(xmls[1], /<p:transition spd="med" advClick="1"><p:fade\/>/);
   assert.match(xmls[2], /<p:push dir="l"\/>/);
-  assert.doesNotMatch(xmls[2], /<p:timing/);
-  assert.match(xmls[3], /presetClass="entr"/);
-  assert.match(xmls[3], /<p:animEffect transition="in" filter="fade">/);
-  assert.match(xmls[3], /dur="550"/);
-  assert.match(xmls[3], /<p:cond evt="onBegin" delay="0"><p:tn val="2"\/><\/p:cond>/);
-  assert.match(xmls[3], /<p:prevCondLst>/);
-  assert.match(xmls[3], /<p:bldLst><p:bldP spid="\d+" grpId="0" animBg="1"\/><\/p:bldLst>/);
-  const target = /<p:spTgt spid="(\d+)"/.exec(xmls[3])![1];
-  assert.ok(xmls[3].includes(`<p:cNvPr id="${target}" name="studio-`));
-  assert.ok(xmls[3].indexOf("</p:clrMapOvr>") < xmls[3].indexOf("<p:transition"));
-  assert.ok(xmls[3].indexOf("</p:transition>") < xmls[3].indexOf("<p:timing>"));
+  assert.match(xmls[2], /presetID="42"/);
+  assert.match(xmls[3], /<p:fade\/>/);
+  for (const xml of xmls.slice(1)) {
+    assert.match(xml, /presetClass="entr"/);
+    assert.match(xml, /<p:cond evt="onBegin" delay="0"><p:tn val="2"\/><\/p:cond>/);
+    assert.match(xml, /<p:prevCondLst>/);
+    assert.match(xml, /<p:bldLst>(<p:bldP spid="\d+" grpId="0" animBg="1"\/>)+<\/p:bldLst>/);
+    for (const [, target] of xml.matchAll(/<p:spTgt spid="(\d+)"/g)) assert.match(xml, new RegExp(`<p:cNvPr id="${target}" name="studio-\\d+"`));
+    assert.ok(xml.indexOf("</p:clrMapOvr>") < xml.indexOf("<p:transition"));
+    assert.ok(xml.indexOf("</p:transition>") < xml.indexOf("<p:timing>"));
+  }
+  assert.match(xmls[1], /<p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="\d+" dur="550"\/>/);
   assert.doesNotMatch(xmls.join(""), /morph|TargetMode="External"/i);
 });
 

@@ -2,12 +2,15 @@ import { EDIT_TARGETS, inspectSlide, slideAdjustmentSchema, THEMES, type ArtDire
 import { PALETTES } from "./presets";
 import { FONT_METRIC_RANGES, FONT_METRICS } from "./font-metrics";
 import { imageHref } from "./assets";
+import { elementMotion, WORD_FADE_MS, WORD_GAP_MS, type MotionPlan } from "./motion";
 
 export const SLIDE_WIDTH = 13.333;
 export const SLIDE_HEIGHT = 7.5;
 
 export interface Bounds { x: number; y: number; w: number; h: number }
-interface EditableElement { readonly editKey?: SlideEditTarget }
+/** Kelompok animasi masuk (Fase 2). Lihat motion.ts. */
+export type BuildTag = "title" | "art" | "deco" | "body-0" | "body-1" | "body-2" | "body-3";
+interface EditableElement { readonly editKey?: SlideEditTarget; build?: BuildTag }
 export interface TextElement extends Bounds, EditableElement {
   type: "text"; text: string; lines: string[]; fontFace: PresentationFont; fontSize: number;
   color: string; bold: boolean; align: "left" | "center" | "right"; lineHeight: number;
@@ -382,23 +385,30 @@ function duotoneMatrix(dark: string, light: string): string {
 
 const DASH = { dash: [4, 3], dot: [0.01, 2] } as const;
 
-function textSpans(element: TextElement, tx: number, scale: number): string {
+/** `typeFrom` (ms): animasi Ketik, tiap kata jadi tspan sendiri dengan jeda bertahap. */
+function textSpans(element: TextElement, tx: number, scale: number, typeFrom?: number): string {
   let word = 0;
   return element.lines.map((value, i) => {
     const y = element.y * scale + (i * element.lineHeight + 1) * element.fontSize * scale / 72;
-    if (!element.accent) return `<tspan x="${tx}" y="${y}">${escapeXml(value)}</tspan>`;
+    if (!element.accent && typeFrom === undefined) return `<tspan x="${tx}" y="${y}">${escapeXml(value)}</tspan>`;
     // Judul dua warna: warna berganti per kata, mengikuti urutan kata di seluruh baris.
     const parts = value.split(" ").map((part, k, all) => {
-      const color = word++ >= element.accent!.from ? element.accent!.color : element.color;
-      return `<tspan fill="#${color}">${escapeXml(part)}${k < all.length - 1 ? " " : ""}</tspan>`;
+      const n = word++;
+      const color = element.accent && n >= element.accent.from ? element.accent.color : element.color;
+      const typed = typeFrom === undefined ? "" : ` data-word="" style="animation-delay:${typeFrom + n * WORD_GAP_MS}ms;animation-duration:${WORD_FADE_MS}ms"`;
+      return `<tspan${element.accent ? ` fill="#${color}"` : ""}${typed}>${escapeXml(part)}${k < all.length - 1 ? " " : ""}</tspan>`;
     });
     return `<tspan x="${tx}" y="${y}">${parts.join("")}</tspan>`;
   }).join("");
 }
 
-export function renderSlideSvg(scene: SlideScene): string {
+export function renderSlideSvg(scene: SlideScene, plan?: MotionPlan): string {
   const scale = 96;
+  const motionMap = plan ? elementMotion(plan, scene) : null;
   const elements = scene.elements.map((element, elementIndex) => {
+    const m = motionMap?.get(elementIndex);
+    const typeFrom = m?.effect === "word" ? m.delayMs : undefined;
+    const inner = ((): string => {
     const { x, y, w, h } = element;
     const editAttribute = element.editKey && (EDIT_TARGETS as readonly string[]).includes(element.editKey) ? ` data-edit-key="${element.editKey}"` : "";
     if (element.type === "shape") {
@@ -441,14 +451,16 @@ export function renderSlideSvg(scene: SlideScene): string {
     }
     const anchor = element.align === "center" ? "middle" : element.align === "right" ? "end" : "start";
     const tx = (x + (element.align === "center" ? w / 2 : element.align === "right" ? w : 0)) * scale;
-    const spans = textSpans(element, tx, scale);
+    const spans = textSpans(element, tx, scale, typeFrom);
     const family = escapeXml(FONT_STACK[element.fontFace] ?? `'${element.fontFace}', Arial, sans-serif`);
     const base = `font-family="${family}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" text-anchor="${anchor}"${element.spacing ? ` letter-spacing="${round(element.spacing * scale / 72)}"` : ""} xml:space="preserve"`;
     const shadow = element.shadow
-      ? `<text ${base} fill="#${element.shadow.color}" transform="translate(${element.shadow.dx * scale} ${element.shadow.dy * scale})"${element.outline ? ` stroke="#${element.shadow.color}" stroke-width="${element.outline.width * scale / 72}" stroke-linejoin="round"` : ""} aria-hidden="true">${textSpans({ ...element, accent: undefined }, tx, scale)}</text>`
+      ? `<text ${base} fill="#${element.shadow.color}" transform="translate(${element.shadow.dx * scale} ${element.shadow.dy * scale})"${element.outline ? ` stroke="#${element.shadow.color}" stroke-width="${element.outline.width * scale / 72}" stroke-linejoin="round"` : ""} aria-hidden="true">${textSpans({ ...element, accent: undefined }, tx, scale, typeFrom)}</text>`
       : "";
     const outline = element.outline ? ` stroke="#${element.outline.color}" stroke-width="${element.outline.width * scale / 72}" stroke-linejoin="round" paint-order="stroke"` : "";
     return `${shadow}<text${editAttribute} ${base.replace(' xml:space="preserve"', "")} fill="#${element.color}"${outline} xml:space="preserve">${spans}</text>`;
+    })();
+    return m ? `<g data-build="${m.effect}" style="animation-delay:${m.delayMs}ms;animation-duration:${m.durationMs}ms">${inner}</g>` : inner;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width * scale}" height="${scene.height * scale}" viewBox="0 0 ${scene.width * scale} ${scene.height * scale}" role="img" aria-label="Pratinjau slide"><rect width="100%" height="100%" fill="#${scene.background}"/>${elements}</svg>`;
 }

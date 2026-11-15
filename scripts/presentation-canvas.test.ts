@@ -11,6 +11,11 @@ import * as model from "../src/lib/presentation/model";
 import * as presets from "../src/lib/presentation/presets";
 import * as design from "../src/lib/presentation/design";
 import * as fonts from "../src/lib/presentation/fonts";
+import * as motion from "../src/lib/presentation/motion";
+
+/** Transisi slide yang dipasang player untuk nilai motion lama di fixture (fade/reveal = Halus, push = Dinamis). */
+const playerTransition = (deck: model.PresentationDeck, index: number) =>
+  motion.buildPlan(design.sceneFor(deck, index, deck.slides[index]), model.slideAnimation(deck, deck.slides[index])).transition;
 
 type Props = Record<string, unknown>;
 type Element = { type: unknown; props: Props; key?: unknown };
@@ -117,6 +122,7 @@ async function loadComponent(file: string, react: unknown, overrides: Props = {}
     "react/jsx-runtime": realJsx ? jsxRuntime : { jsx, jsxs: jsx, Fragment: "fragment" },
     "lucide-react": icons,
     "@/lib/presentation/layout": layout,
+    "@/lib/presentation/motion": motion,
     "@/lib/presentation/model": model,
     "@/lib/presentation/presets": presets,
     "@/lib/presentation/design": design,
@@ -371,10 +377,11 @@ test("player renders actual React SSR with slide-specific motion and accessible 
     const html = renderToStaticMarkup(React.createElement(playerModule.default as unknown as React.ComponentType<{ deck: model.PresentationDeck; initialIndex: number; onClose: () => void }>, { deck, initialIndex: index, onClose() {} }));
     assert.match(html, /role="dialog"/);
     assert.match(html, /aria-modal="true"/);
-    assert.ok(html.includes(`data-motion="${deck.slides[index].visual!.motion}"`));
+    assert.ok(html.includes(`data-motion="${playerTransition(deck, index)}"`));
     assert.ok(html.includes(`Slide ${index + 1}:`));
     assert.match(html, /<svg/);
-    assert.ok(html.includes(layout.renderSlideSvg(layout.layoutSlide(deck.slides[index], deck.theme, index, deck.slides.length, deck.artDirection, deck.palette))), "Player must use the shared palette-aware layout");
+    const scene = layout.layoutSlide(deck.slides[index], deck.theme, index, deck.slides.length, deck.artDirection, deck.palette);
+    assert.ok(html.includes(layout.renderSlideSvg(scene, motion.buildPlan(scene, model.slideAnimation(deck, deck.slides[index])))), "Player must use the shared palette-aware layout");
     assert.match(html, /Tutup tayangan/);
   }
 });
@@ -385,7 +392,7 @@ test("player next/previous and keyboard navigation stay within the deck and upda
   const verify = (index: number) => {
     const tree = fixture.render();
     const stage = find(tree, (element) => element.props.role === "img", "player stage");
-    assert.equal(stage.props["data-motion"], fixture.deck.slides[index].visual!.motion);
+    assert.equal(stage.props["data-motion"], playerTransition(fixture.deck, index));
     assert.equal(stage.props["aria-label"], `Slide ${index + 1}: ${fixture.deck.slides[index].title}`);
     assert.equal(button(tree, "Sebelumnya").props.disabled, index === 0);
     assert.equal(button(tree, "Berikutnya").props.disabled, index === fixture.deck.slides.length - 1);
@@ -553,7 +560,7 @@ test("workspace defaults to simple text editing, wires canvas/player, and keeps 
   const motion = find(tree, (element) => element.type === "select" && elements(element).some((child) => child.type === "option" && child.props.value === "none"), "optional motion selection");
   invoke(motion, "onChange", { target: { value: "none" } });
   const noMotionDeck = find(render(), (element) => element.type === Canvas, "no-motion deck").props.deck as model.PresentationDeck;
-  assert.ok(noMotionDeck.slides.every((slide) => slide.visual?.motion === "none"));
+  assert.ok(noMotionDeck.slides.every((slide) => model.slideAnimation(noMotionDeck, slide) === "none"));
   assert.deepEqual(noMotionDeck.slides.map((slide) => slide.visual?.background), editedDeck.slides.map((slide) => slide.visual?.background));
   assert.deepEqual(requests, ["/api/presentasi", "/api/presentasi/offline-project"], "Editing and presentation are local, with no generation requests");
 });

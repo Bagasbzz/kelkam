@@ -2,8 +2,9 @@ import PptxGenJS from "pptxgenjs";
 import JSZip from "jszip";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { deckSchema, FONT_PAIRS, THEMES } from "./model";
+import { deckSchema, FONT_PAIRS, slideAnimation, THEMES } from "./model";
 import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement, type SlideElement, type TextElement } from "./layout";
+import { buildPlan, elementEffect, WORD_FADE_MS, WORD_GAP_MS, type BuildEffect } from "./motion";
 import { sceneFor } from "./design";
 import { isCatalogFont } from "./fonts";
 import { FONT_METRICS } from "./font-metrics";
@@ -146,14 +147,24 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
         .replace(/<a:blip ([^>]*?)>(?!<a:duotone>)/, `<a:blip $1><a:duotone><a:srgbClr val="${element.tint.dark}"/><a:srgbClr val="${element.tint.light}"/></a:duotone>`);
       return picture;
     });
-    const motion = deck.slides[index].visual?.motion ?? "none";
-    if (motion !== "none") {
-      const transition = `<p:transition spd="med" advClick="1">${motion === "push" ? '<p:push dir="l"/>' : "<p:fade/>"}</p:transition>`;
-      // Reveal is a real automatic heading entrance, not Morph or whole-slide raster animation.
-      const heading = scenes[index].elements.findIndex((element) => element.type === "text" && element.editKey === "title");
-      const target = new RegExp(`<p:cNvPr id="(\\d+)" name="studio-${heading}"`).exec(xml)?.[1];
-      const timing = motion === "reveal" && target ? entranceXml(target) : "";
-      xml = xml.replace("</p:sld>", `${transition}${timing}</p:sld>`);
+    // Animasi (Fase 2): transisi slide per preset + efek masuk per elemen dengan jeda bertahap
+    // (judul -> gambar -> poin -> dekorasi), semua otomatis sehingga klik presenter tetap pindah slide.
+    const plan = buildPlan(scenes[index], slideAnimation(deck, deck.slides[index]));
+    if (plan.transition !== "none" || plan.steps.length) {
+      const transition = plan.transition === "none" ? ""
+        : `<p:transition spd="med" advClick="1">${plan.transition === "push" ? '<p:push dir="l"/>' : "<p:fade/>"}</p:transition>`;
+      const ids = new Map<number, { spid: string; text: boolean }>();
+      for (const match of xml.matchAll(/<p:(nvSpPr|nvPicPr)><p:cNvPr id="(\d+)" name="studio-(\d+)"/g)) ids.set(Number(match[3]), { spid: match[2], text: match[1] === "nvSpPr" });
+      const targets: EntranceTarget[] = [];
+      for (const step of plan.steps) {
+        for (const elementIndex of step.elements) {
+          const shape = ids.get(elementIndex);
+          if (!shape) continue;
+          const effect = elementEffect(scenes[index].elements[elementIndex], step.effect);
+          targets.push({ ...shape, effect, delayMs: step.delayMs, durationMs: effect === "word" ? WORD_FADE_MS : step.durationMs });
+        }
+      }
+      xml = xml.replace("</p:sld>", `${transition}${timingXml(targets)}</p:sld>`);
     }
     zip.file(path, xml);
   }
@@ -277,8 +288,52 @@ function imageCropXml(element: ImageElement, width: number, height: number): str
   return `<a:srcRect l="${horizontal}" r="${horizontal}" t="${vertical}" b="${vertical}"/>`;
 }
 
-function entranceXml(target: string): string {
-  // The click group, effect group and build list mirror a PowerPoint-authored fade.
-  // A timing tree without these wrappers survives XML checks but Office ignores it.
-  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:par><p:cTn id="5" presetID="10" presetClass="entr" presetSubtype="0" fill="hold" grpId="0" nodeType="withEffect"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst><p:set><p:cBhvr><p:cTn id="6" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl><p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to><p:strVal val="visible"/></p:to></p:set><p:animEffect transition="in" filter="fade"><p:cBhvr><p:cTn id="7" dur="550"/><p:tgtEl><p:spTgt spid="${target}"/></p:tgtEl></p:cBhvr></p:animEffect></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst><p:bldLst><p:bldP spid="${target}" grpId="0" animBg="1"/></p:bldLst></p:timing>`;
+interface EntranceTarget { spid: string; text: boolean; effect: BuildEffect; delayMs: number; durationMs: number }
+
+/** Efek masuk PowerPoint per jenis: presetID/subtype + perilaku, mengikuti XML yang ditulis PowerPoint sendiri. */
+const ENTRANCE: Record<BuildEffect, { preset: number; subtype: number }> = {
+  fade: { preset: 10, subtype: 0 },
+  word: { preset: 10, subtype: 0 },
+  rise: { preset: 42, subtype: 0 }, // Float In (naik)
+  zoom: { preset: 53, subtype: 16 }, // Zoom (membesar + memudar)
+  pop: { preset: 53, subtype: 16 }, // Zoom dengan pantulan kecil (melewati ukuran asli lalu kembali)
+  wipe: { preset: 22, subtype: 8 }, // Wipe dari kiri
+};
+
+function timingXml(targets: readonly EntranceTarget[]): string {
+  if (!targets.length) return "";
+  // Satu click group otomatis (delay indefinite + onBegin) berisi efek withEffect dengan delay bertahap.
+  // Pembungkus click group, effect group, dan bldLst wajib ada: tanpa itu Office mengabaikan timing.
+  let id = 5;
+  const target = (spid: string) => `<p:tgtEl><p:spTgt spid="${spid}"/></p:tgtEl>`;
+  const tav = (tm: number, value: string) => `<p:tav tm="${tm}"><p:val>${value}</p:val></p:tav>`;
+  const str = (value: string) => `<p:strVal val="${value}"/>`;
+  const anim = (spid: string, dur: number, attr: string, frames: string) =>
+    `<p:anim calcmode="lin" valueType="num"><p:cBhvr><p:cTn id="${id++}" dur="${dur}" fill="hold"/>${target(spid)}<p:attrNameLst><p:attrName>${attr}</p:attrName></p:attrNameLst></p:cBhvr><p:tavLst>${frames}</p:tavLst></p:anim>`;
+  const fade = (spid: string, dur: number, filter = "fade") => `<p:animEffect transition="in" filter="${filter}"><p:cBhvr><p:cTn id="${id++}" dur="${dur}"/>${target(spid)}</p:cBhvr></p:animEffect>`;
+  const effects = targets.map(({ spid, effect, delayMs, durationMs }) => {
+    const dur = Math.round(durationMs);
+    const { preset, subtype } = ENTRANCE[effect];
+    const effectId = id++;
+    const visible = `<p:set><p:cBhvr><p:cTn id="${id++}" dur="1" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst></p:cTn>${target(spid)}<p:attrNameLst><p:attrName>style.visibility</p:attrName></p:attrNameLst></p:cBhvr><p:to>${str("visible")}</p:to></p:set>`;
+    let behaviors = "";
+    if (effect === "fade" || effect === "word") behaviors = fade(spid, dur);
+    else if (effect === "wipe") behaviors = fade(spid, dur, "wipe(left)");
+    else if (effect === "rise") {
+      behaviors = fade(spid, dur)
+        + anim(spid, dur, "ppt_x", tav(0, str("#ppt_x")) + tav(100000, str("#ppt_x")))
+        + anim(spid, dur, "ppt_y", tav(0, str("#ppt_y+.1")) + tav(100000, str("#ppt_y")));
+    } else {
+      // zoom: 0 -> ukuran asli; pop: 0 -> 112% -> ukuran asli (memantul).
+      const frames = (attr: string) => tav(0, '<p:fltVal val="0"/>') + (effect === "pop" ? tav(70000, str(`#${attr}*1.12`)) : "") + tav(100000, str(`#${attr}`));
+      behaviors = anim(spid, dur, "ppt_w", frames("ppt_w")) + anim(spid, dur, "ppt_h", frames("ppt_h")) + fade(spid, Math.min(dur, 400));
+    }
+    // Ketik: teks muncul per kata (PowerPoint "Animate text: By word").
+    const iterate = effect === "word" ? `<p:iterate type="wd"><p:tmAbs val="${WORD_GAP_MS}"/></p:iterate>` : "";
+    return `<p:par><p:cTn id="${effectId}" presetID="${preset}" presetClass="entr" presetSubtype="${subtype}" fill="hold" grpId="0" nodeType="withEffect"><p:stCondLst><p:cond delay="${Math.round(delayMs)}"/></p:stCondLst>${iterate}<p:childTnLst>${visible}${behaviors}</p:childTnLst></p:cTn></p:par>`;
+  }).join("");
+  // bldP hanya untuk bentuk/teks (p:sp); PowerPoint tidak menulisnya untuk gambar.
+  const bld = targets.filter((item) => item.text).map(({ spid }) => `<p:bldP spid="${spid}" grpId="0" animBg="1"/>`).join("");
+  return `<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" restart="never" nodeType="tmRoot"><p:childTnLst><p:seq concurrent="1" nextAc="seek"><p:cTn id="2" dur="indefinite" nodeType="mainSeq"><p:childTnLst><p:par><p:cTn id="3" fill="hold"><p:stCondLst><p:cond delay="indefinite"/><p:cond evt="onBegin" delay="0"><p:tn val="2"/></p:cond></p:stCondLst><p:childTnLst><p:par><p:cTn id="4" fill="hold"><p:stCondLst><p:cond delay="0"/></p:stCondLst><p:childTnLst>${effects}</p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn></p:par></p:childTnLst></p:cTn><p:prevCondLst><p:cond evt="onPrev" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:prevCondLst><p:nextCondLst><p:cond evt="onNext" delay="0"><p:tgtEl><p:sldTgt/></p:tgtEl></p:cond></p:nextCondLst></p:seq></p:childTnLst></p:cTn></p:par></p:tnLst>${bld ? `<p:bldLst>${bld}</p:bldLst>` : ""}</p:timing>`;
 }
+

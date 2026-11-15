@@ -817,6 +817,27 @@
 .motionPreview[data-motion=none] {
   animation: none;
 }
+/* Animasi masuk per elemen (Fase 2). Jeda & durasi dari style inline pada <g data-build>. */
+.motionPreview [data-build] {
+  animation-fill-mode: both;
+  animation-timing-function: ease-out;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.motionPreview [data-build=fade] { animation-name: svgFade; }
+.motionPreview [data-build=rise] { animation-name: svgRise; }
+.motionPreview [data-build=pop] { animation-name: svgPop; }
+.motionPreview [data-build=wipe] { animation-name: svgWipe; }
+.motionPreview [data-build=zoom] { animation-name: svgZoom; }
+/* Ketik: grup judul tidak bergerak, tiap kata (tspan) memudar bergantian. */
+.motionPreview [data-build=word] { animation: none; }
+.motionPreview [data-word] { animation-name: svgWord; animation-fill-mode: both; animation-timing-function: ease-out; }
+@keyframes svgFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes svgZoom { from { opacity: 0; transform: scale(.3); } to { opacity: 1; transform: scale(1); } }
+@keyframes svgWord { from { fill-opacity: 0; stroke-opacity: 0; } to { fill-opacity: 1; stroke-opacity: 1; } }
+@keyframes svgRise { from { opacity: 0; transform: translateY(22px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes svgPop { 0% { opacity: 0; transform: scale(.4); } 70% { opacity: 1; transform: scale(1.08); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes svgWipe { from { opacity: 0; clip-path: inset(0 100% 0 0); } to { opacity: 1; clip-path: inset(0 0 0 0); } }
 @keyframes slideFade {
   from {
     opacity: 0;
@@ -1130,8 +1151,11 @@
   .theme:hover {
     transform: none;
   }
-  .motionPreview,.motionPreview svg>text,.motionPreview svg>[data-edit-key=title] {
+  .motionPreview,.motionPreview svg>text,.motionPreview svg>[data-edit-key=title],.motionPreview [data-build],.motionPreview [data-word] {
     animation: none!important;
+    opacity: 1!important;
+    clip-path: none!important;
+    transform: none!important;
   }
 }
 

@@ -442,6 +442,19 @@ export async function commitPresentationRun(ownerId: string, projectId: string, 
     // The look is applied by the server from the plan, never taken from model-written deck fields.
     const locked = state.deck.slides.some((slide) => slide.locked);
     deck = { ...deck, design: operation.operation === "chat" && !locked ? planDesign(state) ?? state.deck.design : state.deck.design };
+    // Animasi deck (K23 dikoreksi 2026-11-15): hanya bila pengguna memintanya lewat plan; tanpa jawaban tetap tanpa animasi.
+    if (operation.operation === "chat" && !locked) {
+      const animation = state.plan?.animation ?? state.deck.animation;
+      deck = { ...deck };
+      if (animation && animation !== "none") deck.animation = animation;
+      else delete deck.animation;
+      // Model tidak boleh memasang animasi per slide sendiri; pilihan per slide milik pengguna (slide lama) dipertahankan.
+      deck.slides = deck.slides.map((slide) => {
+        if (slide.locked || !slide.visual?.motion) return slide;
+        if (state.deck.slides.find((item) => item.id === slide.id)?.visual?.motion === slide.visual.motion) return slide;
+        return { ...slide, visual: { motif: slide.visual.motif, background: slide.visual.background } };
+      });
+    }
     // The campus logo from the attached document is used even when the AI did not pick it.
     const logo = detectedLogo(state);
     if (deck.design && !deck.design.logo && logo) deck = { ...deck, design: { ...deck.design, logo } };

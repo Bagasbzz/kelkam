@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Maximize2, X } from "lucide-react";
 import { renderSlideSvg } from "@/lib/presentation/layout";
+import { buildPlan } from "@/lib/presentation/motion";
 import { sceneFor } from "@/lib/presentation/design";
-import type { PresentationDeck } from "@/lib/presentation/model";
+import { slideAnimation, type PresentationDeck } from "@/lib/presentation/model";
 import styles from "./presentation.module.css";
 
 export default function SlidePlayer({ deck, initialIndex, onClose }: { deck: PresentationDeck; initialIndex: number; onClose: () => void }) {
@@ -15,7 +16,8 @@ export default function SlidePlayer({ deck, initialIndex, onClose }: { deck: Pre
   useEffect(() => { close.current = onClose; }, [onClose]);
   const visibleIndex = Math.min(index, deck.slides.length - 1);
   const slide = deck.slides[visibleIndex];
-  const motion = slide.visual?.motion || "none";
+  const scene = sceneFor(deck, visibleIndex, slide);
+  const plan = buildPlan(scene, slideAnimation(deck, slide));
   useEffect(() => {
     previousFocus.current = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
@@ -38,7 +40,7 @@ export default function SlidePlayer({ deck, initialIndex, onClose }: { deck: Pre
   return <div className={styles.player} ref={container} role="dialog" aria-modal="true" aria-label="Tayangan presentasi" tabIndex={-1}>
     <div className={styles.playerTop}><span>{deck.title}</span><button onClick={() => { const result = container.current?.requestFullscreen?.(); result?.catch(() => {}); }}><Maximize2 size={17} /> Layar penuh</button><button onClick={onClose} aria-label="Tutup tayangan"><X size={22} /></button></div>
     <div className={styles.playerStage}>
-      <div key={slide.id} className={`${styles.playerSlide} ${styles.motionPreview}`} data-motion={motion} role="img" aria-label={`Slide ${visibleIndex + 1}: ${slide.title}`} dangerouslySetInnerHTML={{ __html: renderSlideSvg(sceneFor(deck, visibleIndex, slide)) }} />
+      <div key={slide.id} className={`${styles.playerSlide} ${styles.motionPreview}`} data-motion={plan.transition} role="img" aria-label={`Slide ${visibleIndex + 1}: ${slide.title}`} dangerouslySetInnerHTML={{ __html: renderSlideSvg(scene, plan) }} />
     </div>
     <div className={styles.playerBottom}><button disabled={!visibleIndex} onClick={() => setIndex((value) => Math.max(0, Math.min(value, deck.slides.length - 1) - 1))}><ArrowLeft size={20} /> Sebelumnya</button><span aria-live="polite">{visibleIndex + 1} / {deck.slides.length}</span><button disabled={visibleIndex === deck.slides.length - 1} onClick={() => setIndex((value) => Math.min(deck.slides.length - 1, value + 1))}>Berikutnya <ArrowRight size={20} /></button></div>
     <p className={styles.playerNote}>Tayangan web. Transisi PPTX dapat berbeda; periksa melalui Slide Show di PowerPoint.</p>

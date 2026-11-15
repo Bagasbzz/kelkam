@@ -19,7 +19,10 @@ export { FONT_PAIRS, FONT_PAIR_IDS, type FontPairId, type PresentationFont } fro
 export const ART_STYLES = ["geometric", "zine", "kinetic", "blueprint", "minimal"] as const;
 export const VISUAL_MOTIFS = ["network", "campus", "botanical", "megaphone", "orbit", "none"] as const;
 export const VISUAL_BACKGROUNDS = ["solid", "halftone", "grid", "spotlight"] as const;
-export const SLIDE_MOTIONS = ["none", "fade", "push", "reveal"] as const;
+export const SLIDE_MOTIONS = ["none", "fade", "push", "reveal", "halus", "dinamis", "ceria", "ketik"] as const;
+/** Preset animasi per deck. K23 dikoreksi 2026-11-15: animasi wajib ditanya; tanpa jawaban/ditolak → "none". */
+export const ANIMATION_PRESETS = ["none", "halus", "dinamis", "ceria", "ketik"] as const;
+export type AnimationPreset = (typeof ANIMATION_PRESETS)[number];
 export const PALETTE_IDS = ["original", "ocean", "sunset", "lavender", "forest", "mono", "cobalt", "rose"] as const;
 export const EDIT_TARGETS = ["title", "eyebrow", "body-0", "body-1", "body-2", "body-3", "art"] as const;
 export type PresentationTheme = (typeof THEME_IDS)[number];
@@ -68,7 +71,7 @@ export const artDirectionSchema = z.object({
   style: z.enum(ART_STYLES), concept: text(400),
 }).strict();
 export const slideVisualSchema = z.object({
-  motif: z.enum(VISUAL_MOTIFS), background: z.enum(VISUAL_BACKGROUNDS), motion: z.enum(SLIDE_MOTIONS),
+  motif: z.enum(VISUAL_MOTIFS), background: z.enum(VISUAL_BACKGROUNDS), motion: z.enum(SLIDE_MOTIONS).optional(),
 }).strict();
 export const slideArtSchema = z.object({
   fileId: text(100).min(1).refine((value) => !/[:/\\?#]/u.test(value) && value !== "." && value !== "..", "Gunakan ID file, bukan URL atau path."),
@@ -127,6 +130,7 @@ export const deckSchema = z.object({
   artDirection: artDirectionSchema.optional(),
   palette: z.enum(PALETTE_IDS).optional(),
   design: deckDesignSchema.optional(),
+  animation: z.enum(ANIMATION_PRESETS).optional(),
 }).strict().superRefine((deck, ctx) => {
   const seen = new Set<string>();
   deck.slides.forEach((slide, index) => {
@@ -146,6 +150,24 @@ export type SlideAdjustment = z.infer<typeof slideAdjustmentSchema>;
 
 export function validateDeck(input: unknown) {
   return deckSchema.safeParse(input);
+}
+
+/**
+ * Preset animasi efektif untuk satu slide.
+ * Nilai motion lama dipetakan: fade/reveal → halus, push → dinamis.
+ * Tanpa motion slide dan tanpa animation deck → "none" (K23 dikoreksi 2026-11-15: default tanpa animasi).
+ */
+export function slideAnimation(
+  deck: Pick<PresentationDeck, "animation">,
+  slide: Pick<PresentationSlide, "visual">,
+): AnimationPreset {
+  const raw = slide.visual?.motion;
+  const mapped: AnimationPreset | undefined =
+    raw === "fade" || raw === "reveal" ? "halus"
+    : raw === "push" ? "dinamis"
+    : raw === "halus" || raw === "dinamis" || raw === "ceria" || raw === "ketik" || raw === "none" ? raw
+    : undefined;
+  return mapped ?? deck.animation ?? "none";
 }
 
 export interface PresentationIssue {

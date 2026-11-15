@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { deckSchema, SLIDE_MOTIONS, type PresentationDeck, type PresentationSlide } from "@/lib/presentation/model";
+import { ANIMATION_PRESETS, deckSchema, SLIDE_MOTIONS, type PresentationDeck, type PresentationSlide } from "@/lib/presentation/model";
 import { deckDesignSchema } from "@/lib/presentation/model";
 import { STYLE_EXAMPLES } from "@/lib/presentation/design";
 
@@ -72,6 +72,8 @@ export const planInputSchema = z.object({
   minutes: z.number().int().min(1).max(180),
   density: z.enum(PLAN_DENSITIES),
   templateId: z.enum(STYLE_EXAMPLES.map((style) => style.id) as [string, ...string[]]).optional(),
+  // Preset animasi deck (K23 dikoreksi 2026-11-15: wajib ditanya; tanpa jawaban/ditolak → "none").
+  animation: z.enum(ANIMATION_PRESETS).optional(),
   // Colors, frame and fonts chosen for this topic; the server adds the seed and checks the logo file.
   design: deckDesignSchema.omit({ seed: true }).partial().optional(),
   slides: z.array(planSlideSchema).min(1).max(MAX_CHAT_SLIDES),

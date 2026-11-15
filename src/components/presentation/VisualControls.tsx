@@ -11,7 +11,6 @@ interface ArtJob { id: string; status: "queued" | "running" | "done" | "failed";
 const STYLES = { geometric: "Geometric / bidang diagonal", zine: "Zine / kolase & halftone", kinetic: "Kinetic / tipografi ekspresif", blueprint: "Blueprint / sistem & jaringan", minimal: "Minimal / fokus pesan" };
 const MOTIFS = { network: "Jaringan / koneksi", campus: "Kampus / ruang", botanical: "Botani / lingkungan", megaphone: "Megafon / komunikasi", orbit: "Orbit / sistem", none: "Tanpa ilustrasi native" };
 const BACKGROUNDS = { solid: "Warna solid", halftone: "Halftone / titik cetak", grid: "Grid teknis", spotlight: "Spotlight / bidang cahaya" };
-const MOTIONS = { none: "Tanpa animasi", fade: "Memudar", push: "Bergeser", reveal: "Judul muncul" };
 
 async function request<T>(url: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await authenticatedFetch(url, { method: body === undefined ? "GET" : "POST", headers: body === undefined ? undefined : { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), cache: "no-store", signal });
@@ -32,7 +31,7 @@ export default function VisualControls({ root, revision, deck, slide, disabled, 
   const [error, setError] = useState("");
   const [pollingFailed, setPollingFailed] = useState(false);
   const [listing, setListing] = useState(true);
-  const visual = slide.visual ?? { motif: "none" as const, background: "solid" as const, motion: "none" as const };
+  const visual = slide.visual ?? { motif: "none" as const, background: "solid" as const };
   const active = jobs.some((job) => job.status === "queued" || job.status === "running");
   const lockedDeck = deck.slides.some((item) => item.locked);
   const style = deck.artDirection?.style ?? (deck.theme === "playful" ? "zine" : deck.theme === "product" ? "kinetic" : "geometric");
@@ -70,8 +69,8 @@ export default function VisualControls({ root, revision, deck, slide, disabled, 
       {lockedDeck && <small>Buka kunci slide sebelum mengubah desain seluruh presentasi.</small>}
       <label>Elemen ilustratif<select value={visual.motif} onChange={(e) => onSlideChange({ visual: { ...visual, motif: e.target.value as keyof typeof MOTIFS } })}>{Object.entries(MOTIFS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label>Latar belakang<select value={visual.background} onChange={(e) => onSlideChange({ visual: { ...visual, background: e.target.value as keyof typeof BACKGROUNDS } })}>{Object.entries(BACKGROUNDS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-      <label>Animasi<select value={visual.motion} onChange={(e) => onSlideChange({ visual: { ...visual, motion: e.target.value as keyof typeof MOTIONS } })}>{Object.entries(MOTIONS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-      <small>PNG/PDF tidak memutar animasi. Gunakan Slide Show di PowerPoint untuk memeriksa hasil PPTX. Mode web hanya simulasi.</small>
+      <label>Animasi slide ini<select value={visual.motion ?? ""} onChange={(e) => { const v = e.target.value; onSlideChange({ visual: v ? { ...visual, motion: v as "none" | "halus" | "dinamis" | "ceria" | "ketik" } : { motif: visual.motif, background: visual.background } }); }}><option value="">Ikuti deck</option><option value="none">Tanpa animasi</option><option value="halus">Halus</option><option value="dinamis">Dinamis</option><option value="ceria">Ceria</option><option value="ketik">Ketik</option></select></label>
+      <small>&quot;Ikuti deck&quot; memakai preset animasi deck (tab Tampilan). PNG/PDF tidak memutar animasi; periksa hasil PPTX lewat Slide Show di PowerPoint. Mode web hanya simulasi.</small>
       <hr />
       <h3><ImagePlus size={16} /> Gambar dan latar belakang</h3>
       <label>Peran gambar<select value={role} onChange={(e) => { setRole(e.target.value as typeof role); if (slide.art) onSlideChange({ art: { ...slide.art, role: e.target.value as typeof role } }); }}><option value="hero">Hero / gambar utama</option><option value="background">Background</option><option value="cutout">Cutout / ilustrasi terpisah</option></select></label>
