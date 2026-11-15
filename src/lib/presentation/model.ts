@@ -8,6 +8,12 @@ export const DESIGN_LAYOUT_IDS = ["cover", "section", "agenda", "bullets", "phot
 export const ALL_LAYOUT_IDS = [...LAYOUT_IDS, ...DESIGN_LAYOUT_IDS] as const;
 /** Decorative "chrome" families that frame every slide of a designed deck. */
 export const FRAME_STYLES = ["diagonal", "blob", "wave", "geometric", "grid", "halftone", "minimal", "gradient"] as const;
+/**
+ * Gaya template ala Canva (renderer kits.ts): tiap kit punya latar, dekorasi, bingkai, kartu, dan sampul sendiri.
+ * Deck dengan `design.kit` memakai renderer ini; deck lama tanpa kit tetap memakai renderer `frame`.
+ */
+export const KIT_IDS = ["denim", "kliping", "vintage", "korporat", "seminar", "penelitian", "geometris", "catair"] as const;
+export type KitId = (typeof KIT_IDS)[number];
 /** Font pairs: system faces for older decks, catalog faces (embedded in the PPTX) for new ones. See ./fonts. */
 export { FONT_PAIRS, FONT_PAIR_IDS, type FontPairId, type PresentationFont } from "./fonts";
 export const ART_STYLES = ["geometric", "zine", "kinetic", "blueprint", "minimal"] as const;
@@ -106,6 +112,7 @@ export const deckDesignSchema = z.object({
   primary: hexColor, accent: hexColor, background: hexColor, surface: hexColor, text: hexColor,
   frame: z.enum(FRAME_STYLES),
   fonts: z.enum(FONT_PAIR_IDS),
+  kit: z.enum(KIT_IDS).optional(),
   seed: z.number().int().min(0).max(999_999),
   institution: text(80).optional(),
   logo: slideArtSchema.shape.fileId.optional(),

@@ -886,3 +886,34 @@ Microsoft PowerPoint asli (PNG per slide) untuk gaya Biru Korporat dan Merah Gel
 - Tab Tampilan: pilihan "Huruf"; prompt AI memilih pasangan font sesuai suasana topik; 10 contoh gaya memakai font baru.
   Pratinjau browser memuat font lewat `fonts.css` (dicek: Fraunces 700, Outfit 400/700 termuat).
 - Tes: `scripts/presentation-fonts.test.ts` (file font, metrik, header EOT, isi PPTX). 347 tes lulus.
+
+### 24.3 Hasil Fase 1c: 8 template ala Canva (2026-11-15)
+
+Deck baru memakai `design.kit` dan renderer baru `src/lib/presentation/kits.ts` (deck lama tanpa kit tetap memakai
+renderer lama). Tiap kit meniru satu template yang dikirim pemilik; warna/font tetap bisa diganti di tab Tampilan:
+- **Estetik:** Scrapbook Denim (denim bertepi sobek, pita kotak-kotak cat air, kancing, bintang, bingkai jahitan, judul
+  di label perangko bertekstur denim), Kliping Kertas (lembar kertas kusut sobek, koran, kertas kotak, glitter, kupu-kupu,
+  kilau, judul sampul huruf tempel di ubin bulat/kotak, kartu kertas dengan selotip), Kertas Vintage (kertas biru kusut,
+  buku catatan bergaris kotak berspiral + klip kertas + ekor balon bicara, kartu kertas tua tepi perangko, kilau emas,
+  segel foto bundar), Cat Air (noda cat air berlapis, coretan doodle, kartu tepi bergelombang, judul tulisan tangan).
+- **Rapi/formal:** Korporat Navy (foto dipotong diagonal + segitiga aksen, grid titik, blok daun, kartu putih dengan
+  lingkaran panah, judul dua warna), Seminar Minimal (pita biru muda, huruf kapital klasik, bingkai garis berujung bulatan,
+  tab di tepi, kotak judul gelap tersambung garis, catatan kaki "JUDUL | 04"), Penelitian Modern (garis kontur bergelombang,
+  garis tipis atas-bawah, kapsul gradien, kartu gradien dengan tab kapsul), Geometris Biru (persegi membulat miring di
+  sudut + garis luar, lingkaran krem, ">>>", judul tengah dua warna dengan pemisah tiga titik, kartu dengan lingkaran nomor).
+- Tekstur prosedural milik sendiri (`scripts/build-presentation-assets.ts` → `public/aset-presentasi/*.png`: denim,
+  gingham, 3 noda cat air, kertas kusut, kertas kotak, kertas tua, glitter, koran). Abu-abu lalu diwarnai **duotone** dari
+  warna deck (SVG `feColorMatrix` di pratinjau, `<a:duotone>` di PowerPoint), jadi mengikuti warna pilihan pengguna.
+- Bentuk baru (`kit-shapes.ts`): tepi sobek, zig-zag, perangko, tepi bergelombang, bintang, kilau, bunga, spiral, panah
+  coretan, gelombang, kupu-kupu, klip kertas, rotasi bentuk. Renderer/ekspor mendukung: garis putus-putus, garis terbuka,
+  gradien, judul dua warna (run per kata), garis tepi & bayangan huruf, jarak huruf, rotasi dan duotone gambar.
+- Komposisi isi bersama dengan kait kit: kartu kini setinggi isinya (tidak lagi kartu tinggi kosong), teks lebih besar,
+  label diperkecil otomatis bila kata terpanjang tidak muat; foto tanpa gambar memakai bidang gradien berbentuk bingkai.
+- Ekspor: tekstur dibaca dari disk, file media identik disatukan (PPTX 0,2-2,7 MB untuk 11 slide). Bug lama ikut
+  diperbaiki: regex bingkai foto di ekspor berisi karakter backspace sehingga foto berbingkai poligon tidak pernah terpotong
+  bentuknya di PPTX.
+- Template lama (10 gaya frame) diganti 8 template kit di "Contoh tampilan" dan daftar templateId untuk AI.
+- Dicek: render Microsoft PowerPoint (ekspor PDF) 8 kit × 11 komposisi, dan pratinjau browser (tekstur + duotone tampil).
+  Tes `scripts/presentation-kits.test.ts`; 351 tes lulus.
+- Belum (Fase 3): ilustrasi tematik (ikan, monster, 3D, benda potongan) dibuat AI per presentasi; garis tepi huruf tebal
+  dihindari karena PowerPoint menggambarnya di atas huruf.

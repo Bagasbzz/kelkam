@@ -3,11 +3,13 @@ import JSZip from "jszip";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { deckSchema, FONT_PAIRS, THEMES } from "./model";
-import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement, type SlideElement } from "./layout";
+import { SLIDE_HEIGHT, SLIDE_WIDTH, type ImageElement, type ShapeElement, type SlideElement, type TextElement } from "./layout";
 import { sceneFor } from "./design";
 import { isCatalogFont } from "./fonts";
 import { FONT_METRICS } from "./font-metrics";
 import { parseTtf, toEot } from "./ttf";
+import { builtinAssetOf } from "./assets";
+import { createHash } from "node:crypto";
 
 export interface PresentationAsset { data: Buffer; mime: "image/png" | "image/jpeg" }
 export interface PresentationExportOptions { assets?: Record<string, PresentationAsset> }
@@ -46,12 +48,14 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
   const scenes = deck.slides.map((_, index) => sceneFor(deck, index));
   const assets = new Map<string, { asset: PresentationAsset; width: number; height: number }>();
   let assetBytes = 0;
-  // Every image the scenes draw (slide art and the deck logo) must be supplied by the caller.
+  // Every image the scenes draw (slide art and the deck logo) must be supplied by the caller;
+  // built-in design textures ("aset:...") are read from the app's own public folder.
   for (const element of scenes.flatMap((scene) => scene.elements)) {
     if (element.type !== "image" || assets.has(element.fileId)) continue;
     const id = element.fileId;
-    if (!options.assets || !Object.hasOwn(options.assets, id)) throw new Error(`Aset gambar slide tidak tersedia: ${id}. Muat aset sebelum mengekspor.`);
-    const asset = options.assets[id];
+    const builtin = builtinAssetOf(id);
+    if (!builtin && (!options.assets || !Object.hasOwn(options.assets, id))) throw new Error(`Aset gambar slide tidak tersedia: ${id}. Muat aset sebelum mengekspor.`);
+    const asset: PresentationAsset = builtin ? { data: await readFile(path.join(PRESENTATION_ASSET_DIR, `${builtin}.png`)), mime: "image/png" } : options.assets![id];
     const dimensions = imageDimensions(asset);
     assetBytes += asset.data.length;
     if (assetBytes > 32 * 1024 * 1024) throw new Error("Total aset presentasi melebihi 32 MB.");
@@ -74,27 +78,31 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
       const { x, y, w, h } = element;
       const objectName = `studio-${elementIndex}`;
       if (element.type === "text") {
-        page.addText(element.lines.join("\n"), {
+        const shadow = element.shadow ? { type: "outer" as const, blur: 0, opacity: 1, color: element.shadow.color, offset: Math.hypot(element.shadow.dx, element.shadow.dy) * 72, angle: Math.round((Math.atan2(element.shadow.dy, element.shadow.dx) * 180 / Math.PI + 360) % 360) } : undefined;
+        page.addText(textRuns(element), {
           x, y, w, h, objectName, fontFace: element.fontFace, fontSize: element.fontSize,
           color: element.color, bold: element.bold, align: element.align,
           valign: "top", margin: 0, breakLine: false, paraSpaceAfter: 0,
           // Font katalog: spasi baris tepat (poin) agar sama dengan pratinjau, terlepas dari metrik tinggi fontnya.
           ...(isCatalogFont(element.fontFace) ? { lineSpacing: Math.round(element.lineHeight * element.fontSize * 10) / 10 } : { lineSpacingMultiple: element.lineHeight }),
+          ...(element.outline ? { outline: { color: element.outline.color, size: element.outline.width } } : {}),
+          ...(shadow ? { shadow } : {}),
+          ...(element.spacing ? { charSpacing: element.spacing } : {}),
           lang: "id-ID", fit: "none",
         });
       } else if (element.type === "shape") {
         page.addShape(pptx.ShapeType[element.shape === "polygon" ? "rect" : element.shape], {
           x, y, w, h, objectName, fill: { color: element.fill, transparency: Math.round((1 - (element.opacity ?? 1)) * 100) },
-          line: { color: element.lineColor ?? element.fill, width: element.lineWidth ?? 0, transparency: element.lineColor ? 0 : 100 },
+          line: { color: element.lineColor ?? element.fill, width: element.lineWidth ?? 0, transparency: element.lineColor ? 0 : 100, ...(element.dash ? { dashType: element.dash === "dot" ? "sysDot" as const : "dash" as const } : {}) },
           ...(element.shape === "roundRect" ? { rectRadius: 0.12 } : {}),
         });
       } else if (element.type === "image") {
         const { asset, width, height } = assets.get(element.fileId)!;
         const scale = Math.min(w / width, h / height);
         const geometry = element.crop === "contain" ? { x: x + (w - width * scale) / 2, y: y + (h - height * scale) / 2, w: width * scale, h: height * scale } : { x, y, w, h };
-        page.addImage({ ...geometry, objectName, data: `data:${asset.mime};base64,${asset.data.toString("base64")}`, altText: element.alt, transparency: Math.round((1 - (element.opacity ?? 1)) * 100) });
+        page.addImage({ ...geometry, objectName, data: `data:${asset.mime};base64,${asset.data.toString("base64")}`, altText: element.alt, transparency: Math.round((1 - (element.opacity ?? 1)) * 100), ...(element.rotate ? { rotate: element.rotate } : {}) });
       } else {
-        page.addShape(pptx.ShapeType.line, { x, y, w, h, objectName, flipV: element.flipV, line: { color: element.color, width: element.lineWidth, transparency: Math.round((1 - (element.opacity ?? 1)) * 100), beginArrowType: "none", endArrowType: "none" } });
+        page.addShape(pptx.ShapeType.line, { x, y, w, h, objectName, flipV: element.flipV, line: { color: element.color, width: element.lineWidth, transparency: Math.round((1 - (element.opacity ?? 1)) * 100), beginArrowType: "none", endArrowType: "none", ...(element.dash ? { dashType: element.dash === "dot" ? "sysDot" as const : "dash" as const } : {}) } });
       }
     });
     page.addNotes([slide.notes || "Tidak ada catatan pembicara.", `Sumber: ${slide.source || "Belum dicantumkan."}`].join("\n\n"));
@@ -113,8 +121,13 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
     xml = xml.replace(/<p:sp>[\s\S]*?<\/p:sp>/g, (node) => {
       const elementIndex = /name="studio-(\d+)"/.exec(node)?.[1];
       const element = elementIndex === undefined ? undefined : scenes[index].elements[Number(elementIndex)];
-      if (element?.type !== "shape" || element.shape !== "polygon") return node;
-      return node.replace(/<a:prstGeom\b[\s\S]*?<\/a:prstGeom>/, polygonGeometry(element));
+      if (element?.type !== "shape") return node;
+      let shape = node;
+      if (element.shape === "polygon") shape = shape.replace(/<a:prstGeom\b[\s\S]*?<\/a:prstGeom>/, polygonGeometry(element));
+      // Isi bentuk ada di <p:spPr> sebelum <a:ln>: garis terbuka tanpa isi, atau gradien linear.
+      if (element.open) shape = shape.replace(/(<p:spPr>[\s\S]*?)<a:solidFill>[\s\S]*?<\/a:solidFill>(?=[\s\S]*?<a:ln)/, "$1<a:noFill/>");
+      else if (element.gradient) shape = shape.replace(/(<p:spPr>[\s\S]*?)<a:solidFill>[\s\S]*?<\/a:solidFill>(?=[\s\S]*?<a:ln)/, `$1${gradientXml(element)}`);
+      return shape;
     });
     xml = xml.replace(/<p:pic>[\s\S]*?<\/p:pic>/g, (node) => {
       const elementIndex = /name="studio-(\d+)"/.exec(node)?.[1];
@@ -127,7 +140,10 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
       }
       // Framed photos are clipped by the picture geometry itself, so they stay real, replaceable pictures.
       if (element.mask === "ellipse") picture = picture.replace(/<a:prstGeom prst="rect">/, '<a:prstGeom prst="ellipse">');
-      else if (element.mask) picture = picture.replace(/<a:prstGeom[\s\S]*?<\/a:prstGeom>/, pathGeometry(element.mask));
+      else if (element.mask) picture = picture.replace(/<a:prstGeom\b[\s\S]*?<\/a:prstGeom>/, pathGeometry(element.mask));
+      // Tekstur abu-abu diwarnai PowerPoint sendiri (duotone), sama dengan filter pratinjau.
+      if (element.tint) picture = picture.replace(/<a:blip ([^>]*?)\/>/, `<a:blip $1><a:duotone><a:srgbClr val="${element.tint.dark}"/><a:srgbClr val="${element.tint.light}"/></a:duotone></a:blip>`)
+        .replace(/<a:blip ([^>]*?)>(?!<a:duotone>)/, `<a:blip $1><a:duotone><a:srgbClr val="${element.tint.dark}"/><a:srgbClr val="${element.tint.light}"/></a:duotone>`);
       return picture;
     });
     const motion = deck.slides[index].visual?.motion ?? "none";
@@ -142,6 +158,7 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
     zip.file(path, xml);
   }
   await embedFonts(zip, scenes.flatMap((scene) => scene.elements));
+  await dedupeMedia(zip);
   const result = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
   if (result.length > 48 * 1024 * 1024) throw new Error("Ukuran presentasi melampaui batas ekspor.");
   return result;
@@ -153,6 +170,7 @@ export async function exportDeckPptx(input: unknown, options: PresentationExport
  * tidak ditemukan dilewati: PowerPoint lalu memakai font pengganti, ekspor tidak gagal.
  */
 export const PRESENTATION_FONT_DIR = path.join(process.cwd(), "public", "fonts", "presentasi");
+export const PRESENTATION_ASSET_DIR = path.join(process.cwd(), "public", "aset-presentasi");
 
 async function embedFonts(zip: JSZip, elements: readonly SlideElement[]) {
   const wanted = new Map<string, { regular: boolean; bold: boolean }>();
@@ -197,12 +215,59 @@ async function embedFonts(zip: JSZip, elements: readonly SlideElement[]) {
 }
 
 function polygonGeometry(element: ShapeElement): string {
-  return pathGeometry(element.points!);
+  return pathGeometry(element.points!, !element.open);
 }
 
-function pathGeometry(points: readonly (readonly [number, number])[]): string {
+function pathGeometry(points: readonly (readonly [number, number])[], closed = true): string {
   const point = ([x, y]: readonly [number, number]) => `<a:pt x="${Math.round(x * 100000)}" y="${Math.round(y * 100000)}"/>`;
-  return `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="100000" h="100000"><a:moveTo>${point(points[0])}</a:moveTo>${points.slice(1).map((p) => `<a:lnTo>${point(p)}</a:lnTo>`).join("")}<a:close/></a:path></a:pathLst></a:custGeom>`;
+  return `<a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="100000" h="100000"${closed ? "" : ' fill="none"'}><a:moveTo>${point(points[0])}</a:moveTo>${points.slice(1).map((p) => `<a:lnTo>${point(p)}</a:lnTo>`).join("")}${closed ? "<a:close/>" : ""}</a:path></a:pathLst></a:custGeom>`;
+}
+
+function gradientXml(element: ShapeElement): string {
+  const from = Math.round((element.opacity ?? 1) * 100000), to = Math.round((element.gradient!.toOpacity ?? 1) * 100000);
+  return `<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="${element.fill}"><a:alpha val="${from}"/></a:srgbClr></a:gs><a:gs pos="100000"><a:srgbClr val="${element.gradient!.to}"><a:alpha val="${to}"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="${Math.round(((element.gradient!.angle % 360) + 360) % 360 * 60000)}" scaled="0"/></a:gradFill>`;
+}
+
+/** Teks dengan judul dua warna dikirim sebagai run per kata; baris dipisah breakLine. */
+function textRuns(element: TextElement): string | { text: string; options: { color?: string; breakLine?: boolean } }[] {
+  if (!element.accent) return element.lines.join("\n");
+  const runs: { text: string; options: { color?: string; breakLine?: boolean } }[] = [];
+  let word = 0;
+  element.lines.forEach((line, i) => {
+    const words = line.split(" ");
+    words.forEach((value, k) => {
+      const color = word++ >= element.accent!.from ? element.accent!.color : element.color;
+      runs.push({ text: k < words.length - 1 ? `${value} ` : value, options: { color, ...(k === words.length - 1 && i < element.lines.length - 1 ? { breakLine: true } : {}) } });
+    });
+  });
+  return runs;
+}
+
+/**
+ * Tekstur yang sama dipakai di banyak slide; pptxgenjs menyimpan salinan per gambar. Satukan file media
+ * yang isinya identik agar ukuran PPTX tidak membengkak.
+ */
+async function dedupeMedia(zip: JSZip) {
+  const seen = new Map<string, string>();
+  const replace = new Map<string, string>();
+  for (const name of Object.keys(zip.files).filter((file) => file.startsWith("ppt/media/") && !zip.files[file].dir).sort()) {
+    const data = await zip.file(name)!.async("nodebuffer");
+    const key = createHash("sha1").update(data).digest("hex");
+    const first = seen.get(key);
+    if (first) { replace.set(name.slice(4), first.slice(4)); zip.remove(name); } else seen.set(key, name);
+  }
+  if (!replace.size) return;
+  for (const rels of Object.keys(zip.files).filter((file) => /^ppt\/(slides|slideLayouts|slideMasters)\/_rels\/.*\.rels$/.test(file))) {
+    let xml = await zip.file(rels)!.async("string");
+    let changed = false;
+    xml = xml.replace(/Target="\.\.\/(media\/[^"]+)"/g, (match, target: string) => {
+      const next = replace.get(target);
+      if (!next) return match;
+      changed = true;
+      return `Target="../${next}"`;
+    });
+    if (changed) zip.file(rels, xml);
+  }
 }
 
 function imageCropXml(element: ImageElement, width: number, height: number): string {

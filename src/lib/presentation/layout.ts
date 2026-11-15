@@ -1,6 +1,7 @@
 import { EDIT_TARGETS, inspectSlide, slideAdjustmentSchema, THEMES, type ArtDirection, type PresentationFont, type PresentationIssue, type PresentationPalette, type PresentationSlide, type PresentationTheme, type SlideEditTarget } from "./model";
 import { PALETTES } from "./presets";
 import { FONT_METRIC_RANGES, FONT_METRICS } from "./font-metrics";
+import { imageHref } from "./assets";
 
 export const SLIDE_WIDTH = 13.333;
 export const SLIDE_HEIGHT = 7.5;
@@ -10,18 +11,36 @@ interface EditableElement { readonly editKey?: SlideEditTarget }
 export interface TextElement extends Bounds, EditableElement {
   type: "text"; text: string; lines: string[]; fontFace: PresentationFont; fontSize: number;
   color: string; bold: boolean; align: "left" | "center" | "right"; lineHeight: number;
+  /** Garis tepi huruf (pt), mis. judul putih bergaris tebal ala stiker. */
+  outline?: { color: string; width: number };
+  /** Bayangan keras tanpa blur (inci). */
+  shadow?: { color: string; dx: number; dy: number };
+  /** Judul dua warna: kata ke-`from` (0-based) dan seterusnya memakai `color`. */
+  accent?: { from: number; color: string };
+  /** Jarak antarhuruf (pt). */
+  spacing?: number;
 }
+export type Dash = "dash" | "dot";
 export interface ShapeElement extends Bounds, EditableElement {
   type: "shape"; shape: "rect" | "roundRect" | "ellipse" | "polygon";
   fill: string; opacity?: number; lineColor?: string; lineWidth?: number;
   /** Normalized, internally authored vertices, not model-generated SVG or code. */
   points?: readonly (readonly [number, number])[];
+  /** Polygon tanpa penutup (garis coretan/jahitan), tanpa isi. */
+  open?: boolean;
+  dash?: Dash;
+  /** Gradien linear dari `fill` ke `to`; sudut derajat (0 = kiri ke kanan, 90 = atas ke bawah). */
+  gradient?: { to: string; angle: number; toOpacity?: number };
 }
-export interface LineElement extends Bounds, EditableElement { type: "line"; color: string; lineWidth: number; opacity?: number; flipV?: boolean }
+export interface LineElement extends Bounds, EditableElement { type: "line"; color: string; lineWidth: number; opacity?: number; flipV?: boolean; dash?: Dash }
 export interface ImageElement extends Bounds, EditableElement {
   type: "image"; fileId: string; role: "hero" | "background" | "cutout"; alt: string; crop: "cover" | "contain"; opacity?: number;
   /** Optional frame: an ellipse or normalized internally authored polygon the photo is clipped to. */
   mask?: "ellipse" | readonly (readonly [number, number])[];
+  /** Duotone: tekstur abu-abu diwarnai (hitam -> dark, putih -> light). */
+  tint?: { dark: string; light: string };
+  /** Rotasi derajat searah jarum jam (foto/stiker miring). */
+  rotate?: number;
 }
 export type SlideElement = TextElement | ShapeElement | LineElement | ImageElement;
 export interface SlideScene { width: number; height: number; background: string; elements: SlideElement[]; issues: PresentationIssue[] }
@@ -78,12 +97,13 @@ export function fontLeading(fontFace: PresentationFont): number {
 }
 
 // Font katalog memakai lebar asli (+3% cadangan untuk perbedaan render); font sistem memakai perkiraan konservatif.
-export function textWidth(value: string, fontSize: number, fontFace: PresentationFont, bold = false): number {
+export function textWidth(value: string, fontSize: number, fontFace: PresentationFont, bold = false, spacing = 0): number {
+  const extra = spacing ? [...value].length * spacing / 72 : 0;
   const metrics = catalogMetrics(fontFace, bold);
   if (metrics) {
     let units = 0;
     for (const char of value) units += metrics.table.get(char.codePointAt(0)!) || metrics.fallback;
-    return units / 1000 * fontSize / 72 * 1.03;
+    return units / 1000 * fontSize / 72 * 1.03 + extra;
   }
   let units = 0;
   for (const char of value) {
@@ -94,17 +114,17 @@ export function textWidth(value: string, fontSize: number, fontFace: Presentatio
     else if (char.codePointAt(0)! > 0x2ff) units += 1.12;
     else units += 0.63;
   }
-  return units * fontSize / 72 * (FONT_WIDTH[fontFace] ?? 1);
+  return units * fontSize / 72 * (FONT_WIDTH[fontFace] ?? 1) + extra;
 }
 
-export function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont, bold = false): string[] {
+export function wrapText(value: string, width: number, fontSize: number, fontFace: PresentationFont, bold = false, spacing = 0): string[] {
   const lines: string[] = [];
   let line = "";
   for (const word of value.split(/\s+/u).filter(Boolean)) {
-    if (line && textWidth(`${line} ${word}`, fontSize, fontFace, bold) <= width) { line += ` ${word}`; continue; }
+    if (line && textWidth(`${line} ${word}`, fontSize, fontFace, bold, spacing) <= width) { line += ` ${word}`; continue; }
     if (line) { lines.push(line); line = ""; }
     for (const char of word) {
-      if (line && textWidth(line + char, fontSize, fontFace, bold) > width) { lines.push(line); line = ""; }
+      if (line && textWidth(line + char, fontSize, fontFace, bold, spacing) > width) { lines.push(line); line = ""; }
       line += char;
     }
   }
@@ -112,13 +132,13 @@ export function wrapText(value: string, width: number, fontSize: number, fontFac
   return lines;
 }
 
-export function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9, bold = false) {
+export function fitText(value: string, bounds: Bounds, size: number, fontFace: PresentationFont, lineHeight: number, minimum = 9, bold = false, spacing = 0) {
   const officeLeading = fontLeading(fontFace);
   let fontSize = size;
-  let lines = wrapText(value, bounds.w, fontSize, fontFace, bold);
+  let lines = wrapText(value, bounds.w, fontSize, fontFace, bold, spacing);
   while (fontSize > minimum && lines.length * fontSize / 72 * lineHeight * officeLeading > bounds.h - 0.04) {
     fontSize = Math.max(minimum, fontSize - (fontSize > 9 ? 1 : 0.25));
-    lines = wrapText(value, bounds.w, fontSize, fontFace, bold);
+    lines = wrapText(value, bounds.w, fontSize, fontFace, bold, spacing);
   }
   return { fontSize, lines };
 }
@@ -350,31 +370,85 @@ function clipHash(value: string) {
   return (hash >>> 0).toString(36);
 }
 
+const hexRgb = (hex: string) => [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+const round = (value: number) => Math.round(value * 1000) / 1000;
+
+/** Matriks warna duotone: luminans 0 -> dark, 1 -> light (ruang sRGB, sama dengan <a:duotone> PowerPoint). */
+function duotoneMatrix(dark: string, light: string): string {
+  const [d, l] = [hexRgb(dark), hexRgb(light)];
+  const rows = d.map((value, i) => { const k = l[i] - value; return `${round(k * 0.2126)} ${round(k * 0.7152)} ${round(k * 0.0722)} 0 ${round(value)}`; });
+  return `${rows.join(" ")} 0 0 0 1 0`;
+}
+
+const DASH = { dash: [4, 3], dot: [0.01, 2] } as const;
+
+function textSpans(element: TextElement, tx: number, scale: number): string {
+  let word = 0;
+  return element.lines.map((value, i) => {
+    const y = element.y * scale + (i * element.lineHeight + 1) * element.fontSize * scale / 72;
+    if (!element.accent) return `<tspan x="${tx}" y="${y}">${escapeXml(value)}</tspan>`;
+    // Judul dua warna: warna berganti per kata, mengikuti urutan kata di seluruh baris.
+    const parts = value.split(" ").map((part, k, all) => {
+      const color = word++ >= element.accent!.from ? element.accent!.color : element.color;
+      return `<tspan fill="#${color}">${escapeXml(part)}${k < all.length - 1 ? " " : ""}</tspan>`;
+    });
+    return `<tspan x="${tx}" y="${y}">${parts.join("")}</tspan>`;
+  }).join("");
+}
+
 export function renderSlideSvg(scene: SlideScene): string {
   const scale = 96;
   const elements = scene.elements.map((element, elementIndex) => {
     const { x, y, w, h } = element;
     const editAttribute = element.editKey && (EDIT_TARGETS as readonly string[]).includes(element.editKey) ? ` data-edit-key="${element.editKey}"` : "";
     if (element.type === "shape") {
-      const common = `fill="#${element.fill}" fill-opacity="${element.opacity ?? 1}" stroke="${element.lineColor ? `#${element.lineColor}` : "none"}" stroke-width="${(element.lineWidth ?? 0) * scale / 72}"`;
-      if (element.shape === "polygon") return `<polygon points="${element.points!.map(([a, b]) => `${(x + a * w) * scale},${(y + b * h) * scale}`).join(" ")}" ${common}/>`;
-      return element.shape === "ellipse"
+      const stroke = element.lineColor ? `#${element.lineColor}` : "none";
+      const strokeWidth = (element.lineWidth ?? 0) * scale / 72;
+      const dash = element.dash && element.lineColor ? ` stroke-dasharray="${DASH[element.dash].map((v) => round(v * strokeWidth)).join(" ")}" stroke-linecap="${element.dash === "dot" ? "round" : "butt"}"` : "";
+      let defs = "";
+      let fill = `#${element.fill}`;
+      if (element.gradient) {
+        const id = `grad-${clipHash(`${elementIndex}|${element.fill}|${element.gradient.to}|${element.gradient.angle}`)}`;
+        const rad = element.gradient.angle * Math.PI / 180;
+        const [dx, dy] = [Math.cos(rad) / 2, Math.sin(rad) / 2];
+        defs = `<defs><linearGradient id="${id}" x1="${round(0.5 - dx)}" y1="${round(0.5 - dy)}" x2="${round(0.5 + dx)}" y2="${round(0.5 + dy)}"><stop offset="0" stop-color="#${element.fill}"/><stop offset="1" stop-color="#${element.gradient.to}" stop-opacity="${element.gradient.toOpacity ?? 1}"/></linearGradient></defs>`;
+        fill = `url(#${id})`;
+      }
+      const common = `fill="${element.open ? "none" : fill}" fill-opacity="${element.opacity ?? 1}" stroke="${stroke}" stroke-width="${strokeWidth}"${dash}`;
+      if (element.shape === "polygon") {
+        const points = element.points!.map(([a, b]) => `${(x + a * w) * scale},${(y + b * h) * scale}`).join(" ");
+        return `${defs}<${element.open ? "polyline" : "polygon"} points="${points}" ${common}${element.open ? ' stroke-linejoin="round" stroke-linecap="round"' : ""}/>`;
+      }
+      return defs + (element.shape === "ellipse"
         ? `<ellipse cx="${(x + w / 2) * scale}" cy="${(y + h / 2) * scale}" rx="${w * scale / 2}" ry="${h * scale / 2}" ${common}/>`
-        : `<rect x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" rx="${element.shape === "roundRect" ? 0.12 * scale : 0}" ${common}/>`;
+        : `<rect x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" rx="${element.shape === "roundRect" ? 0.12 * scale : 0}" ${common}/>`);
     }
-    if (element.type === "line") return `<line x1="${x * scale}" y1="${(y + (element.flipV ? h : 0)) * scale}" x2="${(x + w) * scale}" y2="${(y + (element.flipV ? 0 : h)) * scale}" stroke="#${element.color}" stroke-opacity="${element.opacity ?? 1}" stroke-width="${element.lineWidth * scale / 72}"/>`;
+    if (element.type === "line") {
+      const width = element.lineWidth * scale / 72;
+      const dash = element.dash ? ` stroke-dasharray="${DASH[element.dash].map((v) => round(v * width)).join(" ")}" stroke-linecap="${element.dash === "dot" ? "round" : "butt"}"` : "";
+      return `<line x1="${x * scale}" y1="${(y + (element.flipV ? h : 0)) * scale}" x2="${(x + w) * scale}" y2="${(y + (element.flipV ? 0 : h)) * scale}" stroke="#${element.color}" stroke-opacity="${element.opacity ?? 1}" stroke-width="${width}"${dash}/>`;
+    }
     if (element.type === "image") {
       // Deterministic id: identical frames on one page (thumbnail and stage) share identical geometry.
       const clipId = `clip-${clipHash(`${element.fileId}|${w.toFixed(3)}|${h.toFixed(3)}|${JSON.stringify(element.mask ?? "")}|${elementIndex}`)}`;
       const mask = element.mask === "ellipse"
         ? `<clipPath id="${clipId}"><ellipse cx="${w * scale / 2}" cy="${h * scale / 2}" rx="${w * scale / 2}" ry="${h * scale / 2}"/></clipPath>`
         : element.mask ? `<clipPath id="${clipId}"><polygon points="${element.mask.map(([a, b]) => `${a * w * scale},${b * h * scale}`).join(" ")}"/></clipPath>` : "";
-      return `<svg${editAttribute} x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" overflow="hidden">${mask}<image href="/api/files/${escapeXml(encodeURIComponent(element.fileId))}" width="100%" height="100%" preserveAspectRatio="xMidYMid ${element.crop === "cover" ? "slice" : "meet"}" opacity="${element.opacity ?? 1}"${mask ? ` clip-path="url(#${clipId})"` : ""}><title>${escapeXml(element.alt)}</title></image></svg>`;
+      const filterId = element.tint ? `tint-${clipHash(`${element.tint.dark}|${element.tint.light}|${elementIndex}`)}` : "";
+      const filter = element.tint ? `<filter id="${filterId}" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="${duotoneMatrix(element.tint.dark, element.tint.light)}"/></filter>` : "";
+      const image = `<svg${editAttribute} x="${x * scale}" y="${y * scale}" width="${w * scale}" height="${h * scale}" overflow="hidden">${mask}${filter}<image href="${escapeXml(imageHref(element.fileId))}" width="100%" height="100%" preserveAspectRatio="xMidYMid ${element.crop === "cover" ? "slice" : "meet"}" opacity="${element.opacity ?? 1}"${mask ? ` clip-path="url(#${clipId})"` : ""}${filter ? ` filter="url(#${filterId})"` : ""}><title>${escapeXml(element.alt)}</title></image></svg>`;
+      return element.rotate ? `<g transform="rotate(${element.rotate} ${(x + w / 2) * scale} ${(y + h / 2) * scale})">${image}</g>` : image;
     }
     const anchor = element.align === "center" ? "middle" : element.align === "right" ? "end" : "start";
     const tx = (x + (element.align === "center" ? w / 2 : element.align === "right" ? w : 0)) * scale;
-    const spans = element.lines.map((value, i) => `<tspan x="${tx}" y="${y * scale + (i * element.lineHeight + 1) * element.fontSize * scale / 72}">${escapeXml(value)}</tspan>`).join("");
-    return `<text${editAttribute} font-family="${escapeXml(FONT_STACK[element.fontFace] ?? `'${element.fontFace}', Arial, sans-serif`)}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" fill="#${element.color}" text-anchor="${anchor}" xml:space="preserve">${spans}</text>`;
+    const spans = textSpans(element, tx, scale);
+    const family = escapeXml(FONT_STACK[element.fontFace] ?? `'${element.fontFace}', Arial, sans-serif`);
+    const base = `font-family="${family}" font-size="${element.fontSize * scale / 72}" font-weight="${element.bold ? 700 : 400}" text-anchor="${anchor}"${element.spacing ? ` letter-spacing="${round(element.spacing * scale / 72)}"` : ""} xml:space="preserve"`;
+    const shadow = element.shadow
+      ? `<text ${base} fill="#${element.shadow.color}" transform="translate(${element.shadow.dx * scale} ${element.shadow.dy * scale})"${element.outline ? ` stroke="#${element.shadow.color}" stroke-width="${element.outline.width * scale / 72}" stroke-linejoin="round"` : ""} aria-hidden="true">${textSpans({ ...element, accent: undefined }, tx, scale)}</text>`
+      : "";
+    const outline = element.outline ? ` stroke="#${element.outline.color}" stroke-width="${element.outline.width * scale / 72}" stroke-linejoin="round" paint-order="stroke"` : "";
+    return `${shadow}<text${editAttribute} ${base.replace(' xml:space="preserve"', "")} fill="#${element.color}"${outline} xml:space="preserve">${spans}</text>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${scene.width * scale}" height="${scene.height * scale}" viewBox="0 0 ${scene.width * scale} ${scene.height * scale}" role="img" aria-label="Pratinjau slide"><rect width="100%" height="100%" fill="#${scene.background}"/>${elements}</svg>`;
 }

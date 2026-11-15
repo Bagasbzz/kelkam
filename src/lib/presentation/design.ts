@@ -2,13 +2,10 @@ import { FONT_PAIRS, inspectSlide, type DeckDesign, type FrameStyle, type Presen
 import { fitText, layoutSlide, SLIDE_HEIGHT, SLIDE_WIDTH, type Bounds, type ShapeElement, type SlideElement, type SlideScene, type TextElement } from "./layout";
 import { drawBackdrop, drawMotif, glyphPoints, styleGenes, type MotifColors } from "./motifs";
 
-/** Em dash/en dash are a hallmark of AI text; slides never show them. */
-export function noDash(value: string) {
-  return value
-    .replace(/(\d)\s*[–—]\s*(\d)/g, "$1-$2")
-    .replace(/^\s*[–—]+\s*/g, "")
-    .replace(/\s*[–—]+\s*/g, ", ");
-}
+import { contrast, luminance, mix, readableOn } from "./color";
+import { noDash, splitLabel } from "./content";
+import { KIT_TEMPLATES, layoutKitSlide } from "./kits";
+export { contrast, luminance, mix, noDash, splitLabel };
 
 /**
  * Designed decks: a per-deck identity (colors, fonts, frame family, seed) drives ~12 compositions.
@@ -16,7 +13,7 @@ export function noDash(value: string) {
  */
 export function sceneFor(deck: PresentationDeck, index: number, slide: PresentationSlide = deck.slides[index]): SlideScene {
   return deck.design
-    ? layoutDesignedSlide(slide, deck.design, index)
+    ? layoutDesignedSlide(slide, deck.design, index, deck.slides.length, deck.title)
     : layoutSlide(slide, deck.theme, index, deck.slides.length, deck.artDirection, deck.palette);
 }
 
@@ -24,21 +21,6 @@ export function sceneFor(deck: PresentationDeck, index: number, slide: Presentat
 // Color: model output is never trusted for legibility.
 // ---------------------------------------------------------------------------
 
-const rgb = (hex: string) => [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
-const channel = (value: number) => value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-export function luminance(hex: string) {
-  const [r, g, b] = rgb(hex).map(channel);
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-}
-export function contrast(a: string, b: string) {
-  const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (high + 0.05) / (low + 0.05);
-}
-export function mix(a: string, b: string, amount: number) {
-  const [x, y] = [rgb(a), rgb(b)];
-  return x.map((value, i) => Math.round((value + (y[i] - value) * amount) * 255).toString(16).padStart(2, "0")).join("").toUpperCase();
-}
-const readableOn = (fill: string, preferred: string) => contrast(preferred, fill) >= 4.5 ? preferred : contrast("FFFFFF", fill) >= contrast("151515", fill) ? "FFFFFF" : "151515";
 
 export interface DesignTokens {
   primary: string; accent: string; background: string; surface: string; text: string; muted: string;
@@ -136,14 +118,12 @@ const FRAME_PHOTOS: Record<FrameStyle, readonly [PhotoFrame, PhotoFrame]> = {
 // Body convention: "Label: isi" gives card headers, numbers for stats, and info rows.
 // ---------------------------------------------------------------------------
 
-export function splitLabel(value: string): { label: string; text: string } {
-  const match = /^([^:.!?]{1,42}):\s+([\s\S]+)$/u.exec(value.trim());
-  return match ? { label: noDash(match[1].trim()), text: noDash(match[2].trim()) } : { label: "", text: noDash(value.trim()) };
-}
 
 const pad = (value: number) => String(value).padStart(2, "0");
 
-export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign, index = 0): SlideScene {
+export function layoutDesignedSlide(slide: PresentationSlide, design: DeckDesign, index = 0, total = 1, deckTitle = ""): SlideScene {
+  // Template ala Canva (kit) memakai renderer kits.ts; deck lama tanpa kit tetap memakai renderer di bawah.
+  if (design.kit) return layoutKitSlide(slide, design, index, total, deckTitle);
   const genes = styleGenes(design.seed, design.frame, random);
   // The page itself leans toward the deck color, so no two decks share the same plain background.
   const t = designTokens({ ...design, background: mix(design.background.toUpperCase(), design.primary.toUpperCase(), genes.tint) });
@@ -539,16 +519,8 @@ export function designAssetIds(deck: Pick<PresentationDeck, "design">): string[]
   return deck.design?.logo ? [deck.design.logo] : [];
 }
 
-/** Example identities shown as "Contoh tampilan"; the AI adapts them, it does not copy a template. */
-export const STYLE_EXAMPLES: readonly { id: string; label: string; description: string; design: Omit<DeckDesign, "seed" | "institution" | "logo"> }[] = [
-  { id: "biru-korporat", label: "Biru Korporat", description: "Putih, biru tegas, garis kuning diagonal, foto dalam heksagon.", design: { primary: "1E40D8", accent: "FFC928", background: "F7F9FC", surface: "E8EEFB", text: "0F1B3D", frame: "diagonal", fonts: "modern" } },
-  { id: "kolase-kuning", label: "Kolase Kuning", description: "Kertas abu muda, titik halftone kuning, label pil hitam, kolase.", design: { primary: "1B1B1B", accent: "FFC21A", background: "F3F2EE", surface: "FFFFFF", text: "151515", frame: "halftone", fonts: "ceria" } },
-  { id: "hitam-lime", label: "Hitam Lime", description: "Latar hitam, judul raksasa hijau lime, kesan berani dan modern.", design: { primary: "B6F23A", accent: "B6F23A", background: "0E0F0C", surface: "1C1E19", text: "F4F6EF", frame: "minimal", fonts: "poster" } },
-  { id: "navy-oranye", label: "Navy Oranye", description: "Putih, navy dan oranye, foto lingkaran, bentuk membulat.", design: { primary: "1C1A6E", accent: "FF9F1C", background: "FFFFFF", surface: "F1F1F8", text: "16153F", frame: "blob", fonts: "bulat" } },
-  { id: "ungu-geometris", label: "Ungu Geometris", description: "Ungu tegas dan abu gelap, segitiga di sudut, bersih.", design: { primary: "5B2EDB", accent: "2F2F37", background: "F6F5FA", surface: "ECE8FB", text: "1D1B26", frame: "geometric", fonts: "nyentrik" } },
-  { id: "merah-muda-gelombang", label: "Merah Muda Lembut", description: "Krem dan merah muda, gelombang di bawah, serif anggun.", design: { primary: "D9818C", accent: "8C3B4A", background: "FFF8F5", surface: "FBE7E4", text: "4A2430", frame: "wave", fonts: "majalah" } },
-  { id: "biru-grid", label: "Biru Grid Teknik", description: "Grid halus, navy dan biru, bintang kecil, rapi dan teknis.", design: { primary: "16416F", accent: "3E86C6", background: "F5F8FB", surface: "E3EBF3", text: "102A45", frame: "grid", fonts: "futuristik" } },
-  { id: "hijau-krem", label: "Hijau Krem", description: "Krem hangat dan hijau sage, garis tipis, minimalis akademik.", design: { primary: "4E8C76", accent: "C9A66B", background: "FBF7EE", surface: "EEF3EC", text: "24352E", frame: "minimal", fonts: "klasik" } },
-  { id: "merah-gelap", label: "Merah Gelap", description: "Hitam dengan blok gradien merah, kontras dan dramatis.", design: { primary: "C1121F", accent: "FF4D5A", background: "0B0B0D", surface: "1A1A1F", text: "F5F5F5", frame: "gradient", fonts: "blok" } },
-  { id: "cokelat-elegan", label: "Cokelat Elegan", description: "Krem dan cokelat, berlian kecil, nuansa tenang dan formal.", design: { primary: "6B4E37", accent: "C8A27A", background: "F3ECE2", surface: "E7DCCD", text: "3B2A1E", frame: "geometric", fonts: "vintage" } },
-];
+/**
+ * Template yang ditawarkan sebagai "Contoh tampilan" dan dipilih AI (setPlan.templateId): gaya ala Canva (kit).
+ * Warna dan font bawaan bisa diubah pengguna atau AI; bentuk, tekstur, dan tata letak mengikuti kit.
+ */
+export const STYLE_EXAMPLES: readonly { id: string; label: string; description: string; design: Omit<DeckDesign, "seed" | "institution" | "logo"> }[] = KIT_TEMPLATES;
